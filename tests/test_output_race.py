@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QSize, QTimer
-from PySide6.QtGui import QPainter, QPdfWriter
+from PySide6.QtGui import QColor, QPainter, QPdfWriter
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
 from jianpu_studio import app as app_module
@@ -19,6 +19,7 @@ def output_window(qtbot, tmp_path, monkeypatch):
     template = tmp_path / "template.pdf"
     writer = QPdfWriter(str(template))
     painter = QPainter(writer)
+    painter.fillRect(600, 600, 1400, 800, QColor("#20343e"))
     painter.drawText(100, 100, "Output regression")
     painter.end()
     del writer
@@ -102,13 +103,19 @@ def test_pdf_preview_keeps_working_after_source_removed_and_closes_cleanly(outpu
     work_directory = window.work
     source = window.result.pdf
     assert source.is_file()
+    size = QSize(300, 400)
+    before = window.pdf_document.render(0, size)
+    assert not before.isNull()
+    assert any(before.pixelColor(x, y).lightness() < 160
+               for x in range(0, 300, 5) for y in range(0, 400, 5))
 
     # This fails with WinError 32 if Qt still has the job's PDF open on Windows.
     source.unlink()
     assert not source.exists()
     assert window.pdf_document.pageCount() == 1
-    assert "Output regression" in window.pdf_document.getAllText(0).text()
-    assert not window.pdf_document.render(0, QSize(600, 850)).isNull()
+    # Font embedding/text extraction differs between Qt's Windows and Linux
+    # PDF writers; rendered content must remain identical on either platform.
+    assert window.pdf_document.render(0, size) == before
     assert window.close()
     assert not work_directory.exists()
     assert state.errors == []
