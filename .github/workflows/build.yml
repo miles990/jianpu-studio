@@ -61,6 +61,7 @@ jobs:
           & $iscc packaging/installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify unattended install and uninstall
+        timeout-minutes: 5
         run: |
           $installer = (Get-ChildItem dist/*-Setup.exe)[0].FullName
           $target = "$env:RUNNER_TEMP/中文資料夾/簡譜工房"
@@ -71,6 +72,7 @@ jobs:
           $p = Start-Process -FilePath "$target/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Uninstaller failed: $($p.ExitCode)" }
       - name: Verify protected-folder guidance and administrator installation
+        timeout-minutes: 5
         run: |
           $installer = (Get-ChildItem dist/*-Setup.exe)[0].FullName
           $target = "$env:ProgramFiles/JianpuStudio-PermissionTest"

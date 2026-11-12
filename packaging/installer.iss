@@ -72,6 +72,12 @@ begin
   Result := True;
   if (CurPageID = wpSelectDir) and (not IsAdminInstallMode) and ProtectedTarget then
   begin
+    if WizardSilent then
+    begin
+      Log('Protected installation path requires /ALLUSERS.');
+      Result := False;
+      Exit;
+    end;
     if MsgBox('此目錄需要系統管理員權限。要改用建議的個人安裝資料夾嗎？' + #13#10 + #13#10 +
       '若要安裝到 Program Files，請取消並重新啟動安裝程式，選擇「為所有使用者安裝」。',
       mbConfirmation, MB_YESNO) = IDYES then
