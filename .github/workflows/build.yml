@@ -101,7 +101,7 @@ jobs:
         timeout-minutes: 6
         run: |
           $old = "$env:RUNNER_TEMP/JianpuStudio-old.exe"
-          Invoke-WebRequest 'https://github.com/miles990/jianpu-studio/releases/download/v0.1.2/JianpuStudio-0.1.2-Windows-x64-Setup.exe' -OutFile $old
+          Invoke-WebRequest 'https://github.com/miles990/jianpu-studio/releases/download/v0.2.1/JianpuStudio-0.2.1-Windows-x64-Setup.exe' -OutFile $old
           $target = "$env:RUNNER_TEMP/升級測試/簡譜 工房"
           $p = Start-Process $old -ArgumentList '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Baseline installation failed" }

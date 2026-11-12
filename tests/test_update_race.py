@@ -23,6 +23,7 @@ def ready_update(qtbot, tmp_path, monkeypatch):
     window.data_dir = tmp_path
     window.recovery_path = tmp_path / "recovery.jps"
     window.autosave.stop()
+    window.print_preview_active = True
 
     def before_close(widget):
         widget.autopreview.stop()

@@ -94,6 +94,9 @@ class MainWindow(EditActions, QMainWindow):
         self.task_blocks_edit = False
         self.render_pending = False
         self.render_pending_manual = False
+        self.render_pending_pdf = False
+        self.print_preview_active = False
+        self.output_request = None
         self.render_cancelled = False
         self.pending_task = None
         self.close_requested = False
@@ -117,6 +120,7 @@ class MainWindow(EditActions, QMainWindow):
         self.build_ui()
         self.build_menus()
         self.sync()
+        self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
         self.autosave = QTimer(self)
         self.autosave.setInterval(15000)
         self.autosave.timeout.connect(self.write_recovery)
@@ -151,8 +155,14 @@ class MainWindow(EditActions, QMainWindow):
         edit = self.menuBar().addMenu("編輯")
         self.undo_action = action(edit, "復原", self.undo, QKeySequence.StandardKey.Undo)
         self.redo_action = action(edit, "重做", self.redo, QKeySequence.StandardKey.Redo)
+        measures = self.menuBar().addMenu("小節")
+        measures.aboutToShow.connect(lambda: (measures.clear(), self.add_measure_menu(measures)))
+        view = self.menuBar().addMenu("檢視")
+        for text, index in (("編輯樂譜", 0), ("原圖對照", 1)):
+            action(view, text, lambda checked=False, i=index: self.change_workspace(i))
         tools_menu = self.menuBar().addMenu("工具")
-        action(tools_menu, "更新排版", lambda: self.render_score(True), "F5")
+        action(tools_menu, "列印預覽", self.show_print_preview, "F5")
+        action(tools_menu, "作業訊息", self.show_work_log)
         action(tools_menu, "工具與環境設定", self.tool_settings)
         action(tools_menu, "開啟 Audiveris 校對工具", self.open_audiveris)
         help_menu = self.menuBar().addMenu("說明")
@@ -166,6 +176,8 @@ class MainWindow(EditActions, QMainWindow):
     def switch_mode(self):
         if self.task and self.task_blocks_edit:
             return
+        if self.print_preview_active:
+            self.change_workspace(0)
         if self.project.mode == "visual":
             try:
                 source = self.project.score.to_jianpu()
@@ -203,9 +215,10 @@ class MainWindow(EditActions, QMainWindow):
         if self.task and not self.task_blocks_edit:
             self.task.cancel.set()
         self.autopreview.stop()
-        self.render_pending = False
+        self.render_pending = self.render_pending_manual = self.render_pending_pdf = False
         self.render_cancelled = False
         self.play_after_render = False
+        self.output_request = None
         self.player.stop()
         self.project, self.path, self.dirty = project, path, dirty
         self.next_note = Note()
@@ -224,9 +237,13 @@ class MainWindow(EditActions, QMainWindow):
         self.photo_pixmap = None
         self.photo_scale = 1.0
         self.photo_label.setText("匯入照片後，可在這裡對照原圖。")
+        self.measure_notice.clear()
+        self.measure_notice.hide()
+        if self.print_preview_active:
+            self.change_workspace(0)
         self.recovery_path.unlink(missing_ok=True)
         self.sync(selection=[], current=-1)
-        if self.auto_check.isChecked():
+        if self.print_preview_active and self.auto_check.isChecked():
             self.autopreview.start()
 
     def new_project(self):
@@ -236,6 +253,7 @@ class MainWindow(EditActions, QMainWindow):
     def load_demo(self):
         if self.guard_unsaved():
             self.reset(demo_project())
+            self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
 
     def open_file(self, checked=False, path: Path | None = None):
         if not self.guard_unsaved():
@@ -248,6 +266,7 @@ class MainWindow(EditActions, QMainWindow):
         try:
             if path.suffix.lower() == ".jps":
                 self.reset(load_project(path), path)
+                self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
             else:
                 if path.stat().st_size > MAX_FILE_BYTES:
                     raise ValueError("樂譜檔超過 4 MB。")
@@ -337,6 +356,7 @@ class MainWindow(EditActions, QMainWindow):
             stale = revision is not None and revision != self.revision
             if error is not None and not stale and not self.close_requested:
                 self.play_after_render = False
+                self.output_request = None
                 self.preview_status.setText("作業已取消。" if isinstance(error, Cancelled) else "未完成；請查看訊息並修正。")
                 self.log.setPlainText(str(error) + "\n\n" + getattr(error, "details", ""))
                 self.statusBar().showMessage((str(error) or "作業未完成").splitlines()[0][:180], 10000)
@@ -355,10 +375,12 @@ class MainWindow(EditActions, QMainWindow):
                 self.start_task(*pending)
             elif self.render_pending:
                 manual = self.render_pending_manual
+                create_pdf = self.render_pending_pdf
                 self.render_pending = self.render_pending_manual = False
+                self.render_pending_pdf = False
                 if manual or self.auto_check.isChecked():
-                    QTimer.singleShot(0, lambda: self.render_score(manual))
-            elif stale and self.auto_check.isChecked() and not self.autopreview.isActive() and not self.render_cancelled:
+                    QTimer.singleShot(0, lambda: self.render_score(manual, create_pdf=create_pdf))
+            elif stale and self.print_preview_active and self.auto_check.isChecked() and not self.autopreview.isActive() and not self.render_cancelled:
                 self.autopreview.start()
         task.completed.connect(finish)
         task.start()
@@ -366,29 +388,38 @@ class MainWindow(EditActions, QMainWindow):
     def cancel_task(self):
         self.autopreview.stop()
         self.render_pending = self.render_pending_manual = False
+        self.render_pending_pdf = False
         self.pending_task = None
         self.play_after_render = False
+        self.output_request = None
         self.render_cancelled = True
         if self.task:
             self.task.cancel.set()
             self.statusBar().showMessage("正在取消…")
 
-    def render_score(self, manual=True):
+    def render_score(self, manual=True, *, create_pdf=True):
         if self.update_preparing or self.close_preparing:
+            if manual:
+                self.render_pending = self.render_pending_manual = True
+                self.render_pending_pdf = self.render_pending_pdf or create_pdf
+            return
+        if not manual and not self.print_preview_active:
             return
         self.render_cancelled = False
         self.capture_fields()
         if self.task:
             if not self.task_blocks_edit:
-                if self.task.revision != self.revision:
+                if self.task.revision != self.revision or (create_pdf and not getattr(self.task, "creates_pdf", True)):
                     self.render_pending = True
                     self.render_pending_manual = self.render_pending_manual or manual
+                    self.render_pending_pdf = self.render_pending_pdf or create_pdf
                     self.statusBar().showMessage("已排入最新版本；目前排版完成後會更新。", 4000)
             return
         try:
             source = self.project.notation()
         except ValueError as exc:
             self.play_after_render = False
+            self.output_request = None
             self.preview_status.setText(str(exc))
             if manual:
                 self.error("請先完成樂譜", exc)
@@ -396,6 +427,7 @@ class MainWindow(EditActions, QMainWindow):
         lilypond = self.current_tool("lilypond")
         if not lilypond:
             self.play_after_render = False
+            self.output_request = None
             self.preview_status.setText("尚未找到 LilyPond。請使用完整版安裝檔，或在「工具與環境設定」指定位置。")
             if manual:
                 self.tool_settings()
@@ -403,7 +435,7 @@ class MainWindow(EditActions, QMainWindow):
         revision = self.revision
         paper_size, staff_size = self.project.score.paper_size, self.project.score.staff_size
         output = self.job_dir()
-        self.preview_status.setText("正在精細排版…")
+        self.preview_status.setText("正在準備列印排版…" if create_pdf else "正在準備試聽 / MIDI…")
         def complete(result):
             if revision != self.revision:
                 shutil.rmtree(result.pdf.parent, ignore_errors=True)
@@ -412,31 +444,52 @@ class MainWindow(EditActions, QMainWindow):
             self.result = result
             self.rendered_revision = revision
             self.pdf_document.close()
-            self.pdf_document.load(str(result.pdf))
+            if create_pdf:
+                self.pdf_document.load(str(result.pdf))
             if old_result and old_result.pdf.parent != result.pdf.parent:
                 shutil.rmtree(old_result.pdf.parent, ignore_errors=True)
-            self.preview_status.setText(f"排版完成 · {self.pdf_document.pageCount()} 頁 · 可匯出 PDF / MIDI")
+            self.preview_status.setText(f"排版完成 · {self.pdf_document.pageCount()} 頁 · 可列印 / 匯出 PDF" if create_pdf else "MIDI 已準備完成。")
             self.log.setPlainText(result.log)
             if self.play_after_render:
                 self.play_after_render = False
                 self.play_midi()
+            if self.output_request:
+                action, kind = self.output_request
+                # A MIDI job may complete before a queued PDF request.
+                if kind != "pdf" or result.pdf.is_file():
+                    self.output_request = None
+                    if action == "export":
+                        self.export(kind)
+                    else:
+                        self.open_pdf()
         def job(cancel):
             try:
-                return render(source, output, lilypond, cancel, paper_size=paper_size, staff_size=staff_size)
+                return render(source, output, lilypond, cancel, paper_size=paper_size, staff_size=staff_size, create_pdf=create_pdf)
             except Exception:
                 shutil.rmtree(output, ignore_errors=True)
                 raise
-        self.start_task("正在用 LilyPond 排版；可繼續編輯…", job, complete, manual, blocks_edit=False, revision=revision)
+        self.start_task("正在準備列印 PDF；可繼續編輯…" if create_pdf else "正在準備 MIDI 試聽資料…", job, complete, manual, blocks_edit=False, revision=revision)
+        if self.task:
+            self.task.creates_pdf = create_pdf
+
+    def resume_pending_output(self):
+        if self.task or self.update_preparing or self.close_preparing:
+            return
+        if self.output_request or (self.render_pending and self.render_pending_manual):
+            create_pdf = self.render_pending_pdf or (self.output_request is not None and self.output_request[1] == "pdf")
+            self.render_pending = self.render_pending_manual = self.render_pending_pdf = False
+            self.render_score(True, create_pdf=create_pdf)
 
     def fresh_result(self):
         self.capture_fields()
         if not self.result or self.rendered_revision != self.revision:
-            self.statusBar().showMessage("請先按「更新排版」，完成後再匯出或播放。", 6000)
+            self.statusBar().showMessage("請使用「匯出 / 列印」或試聽；需要時會自動準備輸出。", 6000)
             return None
         return self.result
 
     def export(self, kind):
         try:
+            self.capture_fields()
             if kind == "jly":
                 self.capture_fields()
                 content, suffix, description = self.project.notation(), ".jly", "簡譜文字"
@@ -447,26 +500,41 @@ class MainWindow(EditActions, QMainWindow):
                 source, content = self.recognized_xml, None
                 suffix, description = source.suffix, "MusicXML 辨識結果"
             else:
-                result = self.fresh_result()
-                if not result:
+                result = self.result
+                available = result is not None and self.rendered_revision == self.revision
+                if available:
+                    file = {"pdf": result.pdf, "midi": result.midi, "ly": result.lilypond}[kind]
+                    available = file is not None and file.is_file()
+                if not available:
+                    self.output_request = ("export", kind)
+                    self.render_score(True, create_pdf=kind == "pdf")
                     return
                 source = {"pdf": result.pdf, "midi": result.midi, "ly": result.lilypond}[kind]
                 if not source:
                     raise ValueError("這份樂譜未產生 MIDI。")
                 suffix, description, content = source.suffix, kind.upper(), None
+            # Snapshot before the native dialog runs its nested event loop.
+            # A completed render may remove the previous result directory.
+            payload = content if content is not None else source.read_bytes()
+            export_revision = self.revision
             name, _ = QFileDialog.getSaveFileName(self, f"匯出 {description}", self.project.score.title + suffix, f"{description} (*{suffix})")
             if name:
                 path = Path(name) if Path(name).suffix else Path(name + suffix)
-                if content is not None:
-                    atomic_write(path, content)
-                else:
-                    shutil.copy2(source, path)
+                if self.revision != export_revision:
+                    self.statusBar().showMessage("樂譜在選擇檔名期間已改變，請重新匯出最新內容。", 8000)
+                    return
+                atomic_write(path, payload)
                 self.statusBar().showMessage(f"已匯出：{path}", 6000)
         except Exception as exc:
             self.error("無法匯出", exc)
 
     def open_pdf(self):
-        result = self.fresh_result()
+        self.capture_fields()
+        result = self.result
+        if not result or self.rendered_revision != self.revision or not result.pdf.is_file():
+            self.output_request = ("open", "pdf")
+            self.render_score(True)
+            return
         if result and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.pdf))):
             self.error("無法開啟 PDF", "請設定 Windows 的預設 PDF 閱讀器，或先匯出 PDF。")
 
@@ -481,7 +549,7 @@ class MainWindow(EditActions, QMainWindow):
         self.capture_fields()
         if not self.result or self.rendered_revision != self.revision:
             self.play_after_render = True
-            self.render_score(True)
+            self.render_score(True, create_pdf=False)
             return
         result = self.result
         if result and result.midi:
@@ -560,10 +628,11 @@ class MainWindow(EditActions, QMainWindow):
             self.reset(project, dirty=True)
             self.recognized_xml = xml
             self.photo_pixmap = QPixmap(str(prepared))
+            self.workspace_view.setCurrentIndex(1)
             self.zoom_photo(0)
             self.log.setPlainText(message + "\n\n" + log)
             self.preview_status.setText("照片已轉為簡譜。請對照原圖核對調號、音高、拍數與反覆記號。")
-            QMessageBox.information(self, "辨識完成 · 請校對", message + "\n\n辨識可能有誤，請切換右側「照片原圖」逐小節對照。可匯出 MusicXML，在 Audiveris 等工具進一步修正。")
+            QMessageBox.information(self, "辨識完成 · 請校對", message + "\n\n辨識可能有誤，請使用「原圖對照」逐小節校對。可匯出 MusicXML，在 Audiveris 等工具進一步修正。")
         self.start_task("正在辨識五線譜照片…通常需要 1–5 分鐘，可隨時取消。", job, complete)
 
     def tool_settings(self):
@@ -611,7 +680,7 @@ class MainWindow(EditActions, QMainWindow):
             self.error("無法開啟 Audiveris", exc)
 
     def show_help(self):
-        QMessageBox.information(self, "快速上手 / 快捷鍵", "新增模式：0–7 輸入音符；屬性列設定下一音符。可選擇插在選取前、後或曲尾。\n修改模式：先選音符，再調整屬性；只改動那個屬性。混合值顯示「不同」。\n\n音符區快捷鍵（相容部分 EOP 習慣）：\nSpace 切換新增 / 修改，Enter 試聽 / 停止。\nQ / W / E / R / A / S：全、二分、四分、八分、十六分、三十二分音符。\n↑ / ↓ 八度，. 附點，[ / ] 縮短 / 延長。\nShift 連選、Ctrl 加選、Ctrl+A 全選，M 選小節。\nCtrl+C / X / V 複製 / 剪下 / 貼上，Ctrl+D 重複，Delete 刪除。\nCtrl+Z 復原，Ctrl+Y 重做，Ctrl+S 儲存，F5 更新 PDF。\n\n「二胡 / 記號」可設定指法、弓法、力度、滑音，連續選取可加連弓 / 延音 / 小節反覆。\n進階語法支援三連音、倚音、弱起及多聲部；返回時保留視覺草稿。\n\n照片辨識適用清楚的印刷五線譜，請逐小節對照原圖。每 15 秒儲存本機復原暫存。MIDI 試聽目前使用 Windows 內建合成器。")
+        QMessageBox.information(self, "快速上手 / 快捷鍵", "小節：點小節號選取；＋新增小節，或用小節選單前插／後插／曲尾新增。清空保留拍數，刪除會讓後段前移。\n填寫小節：點休止符 0，用數字取代休止，保留後面小節位置。\n新增模式：0–7 輸入音符；屬性列設定下一音符。可選擇插在選取前、後或曲尾。\n修改模式：先選音符，再調整屬性；只改動那個屬性。混合值顯示「不同」。\n\n音符區快捷鍵（相容部分 EOP 習慣）：\nSpace 切換新增 / 修改，Enter 試聽 / 停止。\nQ / W / E / R / A / S：全、二分、四分、八分、十六分、三十二分音符。\n↑ / ↓ 八度，. 附點，[ / ] 縮短 / 延長。\nShift 連選、Ctrl 加選、Ctrl+A 全選，M 選小節。\nCtrl+C / X / V 複製 / 剪下 / 貼上，Ctrl+D 重複，Delete 刪除。\nInsert 前插小節、Ctrl+Insert 新增多節、Ctrl+B 曲尾加小節、Ctrl+Delete 刪除小節。\nCtrl+Z 復原，Ctrl+Y 重做，Ctrl+S 儲存，F5 列印預覽。\n平常在主譜面閱讀與編輯；可切換原圖對照。PDF 只在列印／匯出時產生，PDF 本身不能直接編輯音符。\n\n「二胡 / 記號」可設定指法、弓法、力度、滑音，連續選取可加連弓 / 延音 / 小節反覆。\n進階語法支援三連音、倚音、弱起及多聲部；返回時保留視覺草稿。\n\n照片辨識適用清楚的印刷五線譜，請逐小節對照原圖。每 15 秒儲存本機復原暫存。MIDI 試聽目前使用 Windows 內建合成器。")
 
     def check_updates(self):
         from .update_dialog import UpdateDialog
@@ -643,6 +712,7 @@ class MainWindow(EditActions, QMainWindow):
         self.autopreview.stop()
         if not self.updating and not self.guard_unsaved():
             self.close_preparing = False
+            QTimer.singleShot(0, self.resume_pending_output)
             if self.auto_check.isChecked() and self.dirty:
                 self.autopreview.start()
             event.ignore()

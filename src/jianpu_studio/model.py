@@ -270,12 +270,13 @@ class Project:
         return self.score.to_jianpu() if self.mode == "visual" else self.source
 
 
-def atomic_write(path: Path, text: str) -> None:
+def atomic_write(path: Path, text: str | bytes) -> None:
     """Replace only after flush succeeds; never truncate the user's old file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix="." + path.name, suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+        options = {} if isinstance(text, bytes) else {"encoding": "utf-8", "newline": "\n"}
+        with os.fdopen(fd, "wb" if isinstance(text, bytes) else "w", **options) as stream:
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())

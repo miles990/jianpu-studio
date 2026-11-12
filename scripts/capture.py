@@ -17,6 +17,7 @@ app = QApplication([])
 app.setApplicationName("JianpuStudioScreenshot")
 window = MainWindow(recovery=False)
 window.show()
+window.render_score(True)
 
 
 def capture():

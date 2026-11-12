@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- Default to a single readable, editable score surface with original-image comparison available from the top.
+- Generate PDF only when print preview or PDF output is requested; export PDF after preparing the latest score, and prepare MIDI playback independently without generating a PDF. F5 now opens print preview.
+- Select entire measures from their number or blank area; add insert-before/after/end and multi-measure insertion, clear, delete, and duplicate actions.
+- Distinguish clearing measures to rests from removing their duration and shifting later measures earlier.
+- Add a fill-measure mode that consumes available rests without moving later measures or overwriting existing pitched notes; report insufficient space.
+- Preserve undo/redo and selection for measure operations, and remove affected slur, tie, and repeat relationships with a visible notice.
+- Add Insert, Ctrl+Insert, Ctrl+B, and Ctrl+Delete measure shortcuts, and document the difference between editable notation and read-only LilyPond PDF output.
+- Extend the official-source UI research and refresh the Traditional Chinese user documentation for the measure workflow.
+
 ## 0.2.1
 
 - 首個整合新版小節工作區、二胡記號與程式內更新的發布版本，包含下列 0.2.0／0.1.3 變更。

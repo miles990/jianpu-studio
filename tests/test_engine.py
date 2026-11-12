@@ -68,7 +68,7 @@ def test_real_lilypond_midi_only_never_creates_pdf(tmp_path):
     assert result.pdf == output / "score.pdf"
     assert not list(output.glob("*.pdf"))
     assert result.lilypond.is_file()
-    assert (output / "render.log").read_text(encoding="utf-8") == result.log
+    assert (output / "render.log").read_bytes() == result.log.encode("utf-8")
     midi = result.midi.read_bytes()
     assert midi.startswith(b"MThd")
     header_size, format_type, tracks, division = struct.unpack(">IHHH", midi[4:14])

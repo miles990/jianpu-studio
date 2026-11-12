@@ -163,6 +163,7 @@ class UpdateDialog(QDialog):
             finally:
                 if not self.window.updating:
                     self.window.update_preparing = False
+                    QTimer.singleShot(0, self.window.resume_pending_output)
                     if was_preview_pending or self.window.dirty:
                         self.window.autopreview.start()
             self.accept()

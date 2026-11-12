@@ -4,7 +4,34 @@
 
 本次研究閱讀官方產品說明、操作手冊及維護者文件，涵蓋主要代表性產品。不是所有產品的實機比較，也不宣稱窮盡市場或證明某一設計對所有人最好。以下「採用」是本專案依使用情境做的設計判斷；實作狀態另列，避免把計畫當成已發布功能。
 
-## 競品與可採用的做法
+## 0.3.0 補充研究：小節操作與同譜面編輯
+
+研究日期：2026-11-12。這次針對使用者實際提出的兩個問題補查：如何新增、清空、刪除小節，以及能否直接在閱讀的譜面上編輯。沿用下方 EOP、JP-Word、MuseScore、Dorico 的基礎研究，補讀 Flat、Noteflight、Soundslice 的官方資料；不是全市場盤點，也未對這些產品逐一做實機操作或效能比較。
+
+### 來源與具體比較
+
+| 產品 | 小節與音符操作的官方依據 | 閱讀、編輯與列印 | 對本專案的啟示 |
+| --- | --- | --- | --- |
+| Flat | [新增／移除小節](https://help.flat.io/en/music-notation-software/addmeasure/)可在選取之前、之後插入，刪除單一或範圍小節，譜尾另有加減入口；[時值變更模式](https://help.flat.io/en/music-notation-software/change-duration-insert/)明確區分覆寫與推動後續音樂。 | [列印／匯出](https://help.flat.io/en/music-notation-software/print-export/)在編輯器與閱讀器有一致入口，列印可以另調休止符合併等選項。 | 小節工具要可見、位置明確；把「寫進空位」與「插入後推」的結果說清楚。畫面可直接編輯，不代表所有列印選項必須即時呈現在同一畫面。 |
+| Noteflight | [官方操作文章](https://notes.noteflight.com/best-practices/)說明刪除音符會換成同時值休止符，重複整小節也能增加小節；這是 2014／2018 年資料，只作為既有操作模型的證據。官方現行[使用手冊入口](https://support.noteflight.com/hc/en-us/articles/360020205792-User-Guide)可讀，但連入 guide 後要求 JavaScript，本次未核實現版批次增刪小節的按鈕與全部細節。 | [官方購買樂譜互動說明](https://support.noteflight.com/hc/en-us/articles/360035344372-Interacting-with-Purchased-Music)區分 Page View、Scroll View，閱讀設定可反映到 PDF；該頁是購買譜的閱讀流程，不能當成整個編輯器的功能清單。 | 保留拍數的「清空」符合既有記譜習慣；不從社群功能請求反推現版支援或不支援。 |
+| Soundslice | [小節操作](https://www.soundslice.com/help/en/creating/notations/95/bars/)把前插、後插、刪小節放在 Bar 區；[休止符說明](https://www.soundslice.com/help/en/creating/notations/318/rests/)區分保留原時值改成休止，以及真正刪除休止符。其編輯器容許暫時拍數不完整，並非所有產品都自動維持完整小節。 | [編輯／閱讀切換](https://www.soundslice.com/help/en/creating/basics/88/exiting-the-editor/)沿用同一譜面，閱讀時隱藏編輯工具並改變點擊意義；[列印](https://www.soundslice.com/help/en/player/basic/142/printing/)另外產生 PDF。[掃描校對](https://www.soundslice.com/help/en/creating/pdf-import/346/editing-scans/)可開關原圖對照。 | 單一可閱讀、可選音符的主譜面適合日常寫譜；正式 PDF 與照片對照按任務開啟，不必永久佔半個畫面。 |
+| MuseScore Studio | 補讀[增刪小節](https://handbook.musescore.org/en_gb/basics/adding-and-removing-measures)：可指定小節數與插入位置，從譜面右鍵或屬性區進入；[音符編輯](https://handbook.musescore.org/en_gb/basics/editing-notes-and-rests)把音符刪除成休止，另有移除範圍／小節的操作。 | 延續原研究：直接選譜面元素，再用工具修改；不必在音符卡片與另一張譜間往返。 | 「清空內容」與「刪除小節」必須使用不同名稱；一次加多小節比重複按十幾次更適合先搭曲式。 |
+| Dorico Pro 6.2 | [刪除音符](https://www.steinberg.help/r/dorico-pro/6.2/en/dorico/topics/write_mode/write_mode_arranging_tools/write_mode_deleting_items_t.html)在未開插入模式時保留休止；[刪除小節／拍](https://www.steinberg.help/r/dorico-pro/6.2/en/dorico/topics/notation_reference/notation_reference_bars/notation_reference_bars_deleting_t.html)另外處理樂曲時間範圍。 | [切換視圖](https://www.steinberg.help/r/dorico-pro/6.2/en/dorico/topics/user_interface/user_interface_view_type_changing_t.html)允許在 Write mode 切換頁面與連續譜面。 | 「同一樂譜可有多種呈現」與「必須固定並排兩份譜」是不同設計。編輯操作應可預期，不悄悄改動後段時間位置。 |
+| EOP、JP-Word、Frescobaldi | 重用下方已查核的官方來源：前兩者提供簡譜使用者熟悉的輸入／修改與所見即所得觀念；Frescobaldi 是 LilyPond 文字加 Music View 的相關對照。 | Frescobaldi 的 PDF 點擊回原始碼適合文字編輯工作流，不能直接等同一般使用者期待的「點簡譜音符就修改」。 | 延續簡譜鍵盤習慣，將可讀譜面直接連到既有音符資料；不把高品質 PDF 預覽本身當成完成視覺編輯。 |
+
+### 本專案採用的方向與邊界
+
+以下是本專案依上述證據及使用者回饋做的設計決策，不是競品一致採用的唯一方式；完成項目另以版本狀態與驗證紀錄為準。
+
+1. **預設一張可以讀、也可以點選修改的主譜面。** 曲名、調號、拍號、小節線、節奏與二胡記號應足以連續閱讀；選取、輸入提示要放在同一區域。依使用者「PDF 只在列印與 PDF 輸出時需要」的要求，主畫面只保留編輯樂譜與原圖對照；列印預覽及 PDF 匯出放在匯出／列印選單，不自動建立 PDF，也不以固定並排 PDF 作為日常閱讀方式。試聽獨立準備 MIDI。
+2. **小節是一個可直接操作的單位。** 點小節號選取整小節，顯示目前範圍，新增可指定數量及「選取前／後／曲尾」。清空保留小節時間，刪除才讓後面小節前移；複製小節則插入完整副本。不要讓使用者靠猜測刪除鍵究竟會做哪種事情。
+3. **在空白小節內填音符，不應把後面原有小節推走。** 以明確的休止符空位承載拍數；填寫消耗可用休止時值，不足時提示，與原本自由插入音符的動作分清楚。此項屬本產品選擇，不能宣稱所有競品都如此。
+4. **紙面可信度與編輯速度都要保留。** 主譜面不承諾與 LilyPond PDF 逐像素或分頁完全一致；列印前按需產生正式 PDF 預覽，直接匯出也會準備最新內容；舊排版不得冒充最新內容。多聲部與進階語法也不得假裝已轉成完整視覺編輯。
+5. **小節操作應可復原，且不遺留壞記號。** 插入、清空、刪除、複製要還原選取與內容；跨範圍的連弓、延音、反覆必須檢查。空譜、首尾小節、不滿小節、非連續選取與跨小節音符均須有明確行為。
+
+建議驗收以「先加 8 小節 → 填第 2 小節 → 第 3 小節仍在原拍點 → 清空第 2 小節 → 刪除第 2 小節 → 復原」作為連續操作範例，再比較主譜面與真正 PDF 的音樂內容。外觀截圖不能代替小節拍數、記號與 MIDI 的驗證。
+
+## 0.2.1 既有研究：競品與可採用的做法
 
 | 類別／產品 | 查核來源與觀察 | 本專案取捨 |
 | --- | --- | --- |
@@ -37,7 +64,7 @@
 9. 小圖片僅寫入 300 DPI 標籤不會增加實際譜線像素；需要根據辨識引擎量測做針對性處理。
 10. 專業二胡記號可由上游排版，但目前視覺工具不足；必須區分排版能力與使用者可直接操作的能力。
 
-## 選定的工作區
+## 0.2.1 選定的工作區
 
 - 頂部：新建、開啟、復原／重做、儲存、匯出。品牌只保留小標題。
 - 譜面上方：曲名、調號、拍號、速度；新增／修改模式、插入位置、常用音符與時值。
@@ -61,7 +88,8 @@
 
 ## 版本狀態
 
+- **0.3.0 本版範圍**：單譜面編輯預設、PDF 僅於列印／輸出時產生、獨立 MIDI 試聽、小節前後／曲尾增刪與批次操作、清空及重複、保留後段拍點的填寫模式。正式 PDF 仍唯讀，主譜面不保證與 PDF 分頁一致；實作與驗收不能據此推論完整多聲部或 EOPN 相容。
 - **0.1.2 已發布**：低解析度自適應重試、中文診斷與紀錄複製、照片預覽減負、小視窗可捲動、使用者版 README。
 - **0.2.1 更新功能**：程式內檢查、下載、SHA-256 校驗與原位置升級，保留使用者設定與樂譜。
 - **0.2.1 工作區**：以上小節工作區與常用二胡工具；已完成真實 Qt 操作、1000×630／1380×850 視窗、100%／150%／200% 縮放、二胡記號 PDF／MIDI 與 A4／Letter 排版驗證。Windows 發布需通過 CI 安裝與升級關卡。
-- **仍需後續評估**：完整 EOPN 相容、多聲部圖形編輯、三連音／弱起／倚音的完整視覺操作、直接在正式 PDF 上編輯、進階弓法變體、所有教材記號變體。上游支援不代表目前 GUI 已支援。
+- **仍需後續評估**：完整 EOPN 相容、多聲部圖形編輯、三連音／弱起／倚音的完整視覺操作、進階弓法變體、所有教材記號變體。上游支援不代表目前 GUI 已支援。

@@ -7,10 +7,11 @@ QLabel#brand { font-size: 19px; font-weight: 700; color: #172f39; }
 QLabel#muted { color: #75858a; }
 QLabel#section { font-size: 16px; font-weight: 700; }
 QLabel#notice { background: #fff5db; color: #745619; padding: 10px; border-radius: 6px; }
-QPushButton { background: #ffffff; border: 1px solid #dbe3e0; border-radius: 5px; padding: 5px 8px; }
-QPushButton:hover { background: #edf5f1; border-color: #78b3a4; }
+QPushButton, QToolButton { background: #ffffff; border: 1px solid #dbe3e0; border-radius: 5px; padding: 5px 8px; }
+QPushButton:hover, QToolButton:hover { background: #edf5f1; border-color: #78b3a4; }
+QPushButton:checked { background: #e1f3ed; border-color: #197e69; }
 QPushButton:pressed { background: #d4eae2; }
-QPushButton:disabled { color: #a1adaa; background: #edf0ee; }
+QPushButton:disabled, QToolButton:disabled { color: #a1adaa; background: #edf0ee; }
 QPushButton#primary { background: #197e69; color: #ffffff; border: 1px solid #197e69; font-weight: 700; }
 QPushButton#primary:hover { background: #126651; }
 QPushButton#pitch { min-width: 24px; min-height: 24px; font-family: 'Segoe UI'; font-size: 21px; font-weight: 600; }

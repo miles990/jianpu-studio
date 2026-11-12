@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QLabel,
     QMenu,
+    QPlainTextEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
@@ -74,9 +76,10 @@ class EditActions:
         self.dirty = True
         self.render_cancelled = False
         self.play_after_render = False
+        self.output_request = None
         self.player.stop()
         self.preview_status.setText("樂譜已修改，等待更新排版。")
-        if self.auto_check.isChecked():
+        if self.print_preview_active and self.auto_check.isChecked():
             self.autopreview.start()
 
     def undo(self):
@@ -170,9 +173,10 @@ class EditActions:
         if not hasattr(self, "degree"):
             return
         rows = self.notes.selected_rows()
-        editing = self.input_mode.currentData() == "edit"
-        self.notes.insertion_mode = "edit" if editing else self.insert_position.currentData()
-        self.insert_position.setEnabled(not editing)
+        mode = self.input_mode.currentData()
+        editing = mode == "edit"
+        self.notes.insertion_mode = mode if mode in ("edit", "fill") else self.insert_position.currentData()
+        self.insert_position.setEnabled(mode == "insert")
         values = [self.project.score.notes[r] for r in rows] if editing else [self.next_note]
         self.inspector_loading = True
         try:
@@ -191,6 +195,8 @@ class EditActions:
             button.setEnabled(bool(rows))
         if editing:
             text = f"修改所選 {len(rows)} 音符 · 只改動您調整的屬性；「不同」表示混合值" if rows else "修改模式 · 請先選取音符（Shift 連選、Ctrl 加選）"
+        elif mode == "fill":
+            text = f"填寫小節 · 下一音符 {self.next_note.beats} 拍 · 點選休止符 0 後輸入數字，保留後續小節位置"
         else:
             position = {"after": "所選之後", "before": "所選之前", "end": "曲尾"}[self.insert_position.currentData()]
             note = self.next_note
@@ -198,6 +204,13 @@ class EditActions:
             octave = {-2: "低兩八度", -1: "低八度", 0: "", 1: "高八度", 2: "高兩八度"}[note.octave]
             text = f"新增模式 · 下一個：{pitch}{'（'+octave+'）' if octave else ''} · {note.beats} 拍 · 插在{position if rows else '曲尾'}"
         self.selection_label.setText(text)
+        if hasattr(self, "measure_selection"):
+            bars = self.selected_measures()
+            names = "、".join(str(n + 1) for n in bars[:4]) + ("…" if len(bars) > 4 else "")
+            self.measure_selection.setText(f"第 {names} 小節" if bars else "點小節號選取整小節")
+            visual = self.project.mode == "visual"
+            for control in self.measure_controls:
+                control.setEnabled(visual and (control is self.add_bar_button or bool(bars)))
         self.notes.viewport().update()
 
     @staticmethod
@@ -210,7 +223,7 @@ class EditActions:
     def edit_property(self, name, value):
         if self.loading or self.inspector_loading or value is None:
             return
-        if self.input_mode.currentData() == "insert":
+        if self.input_mode.currentData() != "edit":
             self.next_note = self.replace_note(self.next_note, {name: value})
             self.update_selection()
             return
@@ -247,6 +260,8 @@ class EditActions:
     def input_pitch(self, degree):
         if self.input_mode.currentData() == "edit":
             self.edit_property("degree", degree)
+        elif self.input_mode.currentData() == "fill":
+            self.fill_rest(self.replace_note(self.next_note, {"degree": degree}))
         else:
             self.insert_notes([self.replace_note(self.next_note, {"degree": degree})])
         self.notes.setFocus()
@@ -293,7 +308,15 @@ class EditActions:
 
     def note_command(self, command):
         if command == "toggle_mode":
-            self.input_mode.setCurrentIndex(1-self.input_mode.currentIndex())
+            self.input_mode.setCurrentIndex(0 if self.input_mode.currentData() == "edit" else 1)
+        elif command == "append_bar":
+            self.insert_bars("end")
+        elif command == "insert_bar_before":
+            self.insert_bars("before")
+        elif command == "insert_bars":
+            self.insert_bars_dialog()
+        elif command == "delete_bars":
+            self.measure_action("delete")
         elif command == "play":
             self.play_midi()
         elif command == "copy":
@@ -323,7 +346,7 @@ class EditActions:
                 values = list(DURATIONS)
                 index = values.index(note.duration) + (1 if command == "shorter" else -1)
                 return replace(note, duration=values[max(0, min(len(values)-1, index))])
-            if self.input_mode.currentData() == "insert":
+            if self.input_mode.currentData() != "edit":
                 self.next_note = change(self.next_note)
                 self.update_selection()
             else:
@@ -335,12 +358,136 @@ class EditActions:
 
     def note_menu(self, position):
         menu = QMenu(self)
+        bar = self.notes.measure_at(position)
+        if bar is not None and bar not in self.selected_measures():
+            self.notes.select_bar(bar)
+        self.add_measure_menu(menu)
+        menu.addSeparator()
         for title, command in (("剪下　Ctrl+X", "cut"), ("複製　Ctrl+C", "copy"), ("貼上　Ctrl+V", "paste"), ("重複　Ctrl+D", "duplicate"), ("刪除　Delete", "delete")):
             item = menu.addAction(title, lambda c=command: self.note_command(c))
             item.setEnabled(command == "paste" or bool(self.notes.selected_rows()))
         menu.addSeparator()
         menu.addAction("二胡 / 記號…", self.notation_settings)
         menu.exec(self.notes.viewport().mapToGlobal(position))
+
+    def selected_measures(self):
+        positions = self.notes.score_model.positions
+        ticks = self.notes.score_model.bar_ticks
+        return sorted({positions[row] // ticks for row in self.notes.selected_rows() if row < len(positions)})
+
+    def measure_ready(self):
+        if self.project.mode != "visual":
+            self.statusBar().showMessage("小節工具用於可編輯譜面；進階語法請直接編輯原始碼。", 6000)
+            return False
+        return not (self.loading or (self.task and self.task_blocks_edit))
+
+    def apply_measure_edit(self, result, *, fill=False):
+        selection, current = result.selection, result.current
+        if fill and selection:
+            selection, current = (selection[0],), selection[0]
+        changed = self.mutate(lambda project: setattr(project.score, "notes", result.notes), selection=selection, current=current)
+        if not changed:
+            if result.notes != self.project.score.notes:
+                return False
+            self.notes.select_rows(selection, current)
+        if fill:
+            self.input_mode.setCurrentIndex(self.input_mode.findData("fill"))
+        self.measure_notice.setText(result.notice)
+        self.measure_notice.setVisible(bool(result.notice))
+        self.notes.scrollTo(self.notes.currentIndex())
+        self.notes.setFocus()
+        return True
+
+    def insert_bars(self, position="after", count=1):
+        if not self.measure_ready():
+            return
+        from .measures import insert_measures, measure_ranges
+        try:
+            self.capture_fields()
+            ranges = measure_ranges(self.project.score)
+            bars = self.selected_measures()
+            if position not in ("before", "after", "end"):
+                raise ValueError("請選擇小節前、後或曲尾。")
+            at_bar = len(ranges) if position == "end" or not bars else bars[0] if position == "before" else bars[-1] + 1
+            result = insert_measures(self.project.score, at_bar, count)
+            self.apply_measure_edit(result, fill=True)
+        except ValueError as exc:
+            self.error("無法新增小節", exc)
+
+    def measure_action(self, action):
+        if not self.measure_ready():
+            return
+        bars = self.selected_measures()
+        if not bars:
+            self.statusBar().showMessage("請先點小節號，或選取要處理的小節中的音符。", 6000)
+            return
+        from .measures import clear_measures, delete_measures, duplicate_measures
+        operations = {"clear": clear_measures, "delete": delete_measures, "duplicate": duplicate_measures}
+        try:
+            self.capture_fields()
+            if action not in operations:
+                raise ValueError("不支援的小節操作。")
+            self.apply_measure_edit(operations[action](self.project.score, bars), fill=action == "clear")
+        except ValueError as exc:
+            self.error("無法修改小節", exc)
+
+    def fill_rest(self, note):
+        if not self.measure_ready():
+            return
+        from .measures import replace_rest_input
+        rows = self.notes.selected_rows()
+        if not rows:
+            self.statusBar().showMessage("請先點選要填寫的休止符 0，或按「＋新增小節」。", 6000)
+            return
+        row = self.notes.currentRow() if self.notes.currentRow() in rows else rows[0]
+        try:
+            result = replace_rest_input(self.project.score, row, note)
+            if self.apply_measure_edit(result):
+                # Advance only to an immediately following rest. Never skip
+                # existing melody or append time beyond the allocated measures.
+                following = result.current + 1
+                if following < len(result.notes) and result.notes[following].degree == 0:
+                    self.notes.select_rows([following], following)
+                    self.notes.scrollTo(self.notes.currentIndex())
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 10000)
+            self.measure_notice.setText(str(exc))
+            self.measure_notice.show()
+
+    def insert_bars_dialog(self):
+        if not self.measure_ready():
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("新增小節")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        count = QSpinBox()
+        count.setRange(1, 256)
+        count.setObjectName("measureCount")
+        position = QComboBox()
+        position.setObjectName("measurePosition")
+        for text, value in (("所選小節之後", "after"), ("所選小節之前", "before"), ("曲尾", "end")):
+            position.addItem(text, value)
+        form.addRow("小節數", count)
+        form.addRow("插入位置", position)
+        layout.addLayout(form)
+        hint = QLabel("新小節先填入足拍休止符；可用「填寫小節」直接輸入旋律。沒有選取時加到曲尾。")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.dialog_buttons(dialog, layout)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.insert_bars(position.currentData(), count.value())
+
+    def add_measure_menu(self, menu):
+        ready = self.project.mode == "visual"
+        for text, fn in (("前插一小節　Insert", lambda: self.insert_bars("before")),
+                         ("後插一小節", lambda: self.insert_bars("after")),
+                         ("曲尾加一小節　Ctrl+B", lambda: self.insert_bars("end")),
+                         ("新增多個小節…　Ctrl+Insert", self.insert_bars_dialog)):
+            menu.addAction(text, fn).setEnabled(ready)
+        menu.addSeparator()
+        for text, command in (("重複所選小節", "duplicate"), ("清空小節（保留拍數）", "clear"), ("刪除小節（後段前移）　Ctrl+Delete", "delete")):
+            menu.addAction(text, lambda a=command: self.measure_action(a)).setEnabled(ready and bool(self.selected_measures()))
 
     def fill_bar(self):
         if self.project.score.notes:
@@ -375,13 +522,54 @@ class EditActions:
             self.autopreview.start()
         else:
             self.autopreview.stop()
-            self.render_pending = False
+            if not self.render_pending_manual:
+                self.render_pending = self.render_pending_pdf = False
 
     def change_workspace(self, index):
-        self.editor_container.setVisible(index != 2)
-        self.preview_panel.setVisible(index != 1)
-        if index == 3:
-            self.preview_tabs.setCurrentIndex(1)
+        self.print_preview_active = False
+        self.metadata_button.setEnabled(True)
+        self.autopreview.stop()
+        self.workspace_view.blockSignals(True)
+        self.workspace_view.setCurrentIndex(index)
+        self.workspace_view.blockSignals(False)
+        photo = self.workspace_view.currentData() == "photo"
+        self.editor_container.show()
+        self.preview_panel.setVisible(photo)
+        self.preview_tabs.setCurrentIndex(1)
+        self.preview_heading.setText("原圖對照")
+        self.auto_check.hide()
+        self.preview_button.hide()
+        self.preview_status.hide()
+        if photo:
+            self.split.setSizes([800, 550])
+
+    def show_print_preview(self):
+        self.print_preview_active = True
+        self.metadata_button.setEnabled(False)
+        self.editor_container.hide()
+        self.preview_panel.show()
+        self.preview_tabs.setCurrentIndex(0)
+        self.preview_heading.setText("列印預覽")
+        self.auto_check.show()
+        self.preview_button.show()
+        self.preview_status.show()
+        self.capture_fields()
+        if not self.result or self.rendered_revision != self.revision or not self.result.pdf.is_file():
+            self.render_score(True)
+
+    def show_work_log(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("作業訊息")
+        dialog.resize(720, 460)
+        layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit(self.log.toPlainText() or "目前沒有排版或辨識紀錄。")
+        text.setReadOnly(True)
+        layout.addWidget(text)
+        copy = QPushButton("複製完整紀錄")
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(text.toPlainText()))
+        layout.addWidget(copy)
+        self.dialog_buttons(dialog, layout)
+        dialog.exec()
 
     def copy_log(self):
         QApplication.clipboard().setText(self.log.toPlainText())

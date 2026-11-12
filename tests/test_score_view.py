@@ -1,6 +1,8 @@
 from dataclasses import replace
 
+import pytest
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QContextMenuEvent
 from PySide6.QtWidgets import QAbstractItemView
 
 from jianpu_studio.model import Note, Score
@@ -102,3 +104,131 @@ def test_paint_only_visits_visible_note_marks(qtbot, monkeypatch):
     painted.clear()
     view.viewport().grab()
     assert 0 < len(painted) < 100
+
+
+def measure_point(view, number):
+    frame = next(frame for frame, bar, _ in view.bar_rects if bar == number)
+    return frame.topLeft() + QPoint(max(1, int(4*view.scale)), max(1, int(6*view.scale))) - QPoint(
+        view.horizontalOffset(), view.verticalOffset())
+
+
+def test_score_header_wraps_plain_metadata_and_reflows_without_note_reset(qtbot):
+    view = NoteList()
+    qtbot.addWidget(view)
+    view.resize(420, 480)
+    score = Score(title="短曲名", composer="來源", notes=[Note(1)]*4)
+    view.set_score(score)
+    view.show()
+    qtbot.waitExposed(view)
+    original_header_bottom = view.header_rect.bottom()
+    score.title = "<b>長曲名與字面標記</b>"*8
+    score.composer = "LongUnbrokenComposerText"*7
+    score.key, score.tempo = "D", 120
+    assert not view.set_score(score)
+    assert view.header_rect.bottom() > original_header_bottom
+    assert view.bar_rects[0][0].top() > view.header_rect.bottom()
+    assert [block[1] for block in view.header_blocks] == [score.title, score.composer, "1 = D    4/4    ♩ = 120"]
+    for rect, *_ in view.header_blocks:
+        assert view.header_rect.contains(rect)
+    assert view.measure_at(view.header_rect.center()) is None
+    assert not view.indexAt(view.header_rect.center()).isValid()
+    view.scrollTo(view.model().index(3, 0))
+    assert view.indexAt(view.visualRect(view.model().index(3, 0)).center()).row() == 3
+
+
+def test_continuous_measures_use_compact_rows_and_expand_for_erhu_marks(qtbot):
+    view = NoteList()
+    qtbot.addWidget(view)
+    view.resize(1000, 700)
+    score = Score(notes=[Note(1)]*16, bars_per_line=4)
+    view.set_score(score)
+    plain_height = view.line_rects[0].height()
+    assert plain_height < 100
+    frames = [frame for frame, _, _ in view.bar_rects]
+    assert all(a.right()+1 == b.left() for a, b in zip(frames, frames[1:]))
+    score.notes[0] = replace(score.notes[0], finger=0, bow="downbow", slur_start=True, dynamic="mp")
+    score.notes[3] = replace(score.notes[3], slur_end=True)
+    view.set_score(score)
+    assert view.line_rects[0].height() > plain_height
+    assert view.line_links[0]
+    assert view.line_rects[0].contains(view.line_links[0][0].boundingRect().toAlignedRect())
+
+
+def test_measure_number_and_whitespace_select_full_bars_with_modifiers(qtbot):
+    view = NoteList()
+    qtbot.addWidget(view)
+    view.resize(700, 620)
+    view.set_score(Score(notes=[Note(1)]*24, bars_per_line=2))
+    view.show()
+    qtbot.waitExposed(view)
+    clicked = []
+    view.measureClicked.connect(clicked.append)
+    point = measure_point(view, 0)
+    assert not view.indexAt(point).isValid()
+    assert view.measure_at(point) == 0
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    assert view.selected_rows() == list(range(4))
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ControlModifier,
+                     measure_point(view, 2))
+    assert view.selected_rows() == list(range(4))+list(range(8, 12))
+    # Shift selection includes both complete endpoint measures, backwards too.
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier,
+                     measure_point(view, 0))
+    assert view.selected_rows() == list(range(12))
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier,
+                     measure_point(view, 4))
+    assert view.selected_rows() == list(range(8, 20))
+    assert clicked == [0, 2, 0, 4]
+
+
+def test_measure_context_finds_blank_area_and_preserves_existing_range(qtbot):
+    view = NoteList()
+    qtbot.addWidget(view)
+    view.resize(900, 500)
+    view.set_score(Score(notes=[Note(1)]*12))
+    view.show()
+    qtbot.waitExposed(view)
+    view.select_rows(range(8))
+    point = measure_point(view, 1)
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.RightButton, pos=point)
+    assert view.selected_rows() == list(range(8))
+    requests = []
+    view.measureContextRequested.connect(lambda number, global_pos: requests.append((number, global_pos)))
+    event = QContextMenuEvent(QContextMenuEvent.Reason.Mouse, point, view.viewport().mapToGlobal(point))
+    view.contextMenuEvent(event)
+    assert requests == [(1, view.viewport().mapToGlobal(point))]
+    assert event.isAccepted()
+
+
+def test_empty_score_add_measure_and_measure_shortcuts(qtbot):
+    view = NoteList()
+    qtbot.addWidget(view)
+    view.resize(500, 400)
+    view.set_score(Score())
+    view.show()
+    qtbot.waitExposed(view)
+    commands = []
+    view.command.connect(commands.append)
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.empty_button_rect.center())
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    for key, modifier in ((Qt.Key.Key_Insert, Qt.KeyboardModifier.NoModifier),
+                          (Qt.Key.Key_Insert, ctrl), (Qt.Key.Key_B, ctrl),
+                          (Qt.Key.Key_Delete, ctrl), (Qt.Key.Key_Backspace, ctrl)):
+        qtbot.keyClick(view, key, modifier)
+    assert commands == ["append_bar", "insert_bar_before", "insert_bars", "append_bar", "delete_bars", "delete_bars"]
+
+
+@pytest.mark.parametrize("zoom", [75, 150, 200])
+def test_header_and_measure_hit_testing_survive_zoom_and_scrolling(qtbot, zoom):
+    view = NoteList()
+    qtbot.addWidget(view)
+    view.resize(460, 360)
+    view.set_score(Score(notes=[Note(1)]*80))
+    view.set_zoom(zoom)
+    view.show()
+    qtbot.waitExposed(view)
+    last = view.model().index(79, 0)
+    view.scrollTo(last)
+    assert view.indexAt(view.visualRect(last).center()) == last
+    assert view.measure_at(view.visualRect(last).center()) == 19
+    assert view.measure_at(QPoint(-10, -10)) is None

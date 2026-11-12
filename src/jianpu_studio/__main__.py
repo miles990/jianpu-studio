@@ -36,6 +36,7 @@ def main() -> int:
     window = MainWindow(recovery=not self_test)
     window.show()
     if self_test:
+        QTimer.singleShot(0, lambda: window.render_score(True))
         output = Path(sys.argv[2]).resolve()
         output.mkdir(parents=True, exist_ok=True)
         timer = QTimer(window)
