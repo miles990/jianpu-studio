@@ -372,7 +372,7 @@ class MainWindow(QMainWindow):
         action(tools_menu, "開啟 Audiveris 校對工具", self.open_audiveris)
         help_menu = self.menuBar().addMenu("說明")
         action(help_menu, "操作說明", self.show_help, "F1")
-        action(help_menu, "關於", lambda: QMessageBox.about(self, "關於簡譜工房", f"簡譜工房 {__version__}\nGPL-3.0-or-later\n\n排譜：GNU LilyPond\n轉換：jianpu-ly · Silas S. Brown (Apache-2.0)\n辨識：Audiveris (AGPL-3.0)\n介面：PySide6 / Qt (LGPL-3.0)\n\nhttps://github.com/miles990/jianpu-studio"))
+        action(help_menu, "關於", lambda: QMessageBox.about(self, "關於簡譜工房", f"簡譜工房 {__version__}\nMIT\n\n排譜：GNU LilyPond\n轉換：jianpu-ly · Silas S. Brown (Apache-2.0)\n辨識：Audiveris (AGPL-3.0)\n介面：PySide6 / Qt (LGPL-3.0)\n\nhttps://github.com/miles990/jianpu-studio"))
 
     def current_tool(self, name):
         return find_tool(name, str(self.settings.value(name, "")))

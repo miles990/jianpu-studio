@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "簡譜工房 — approachable offline numbered-notation desktop editor"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "GPL-3.0-or-later"
+license = "MIT"
 authors = [{name = "Jianpu Studio contributors"}]
 dependencies = ["PySide6==6.8.3", "Pillow==11.3.0", "defusedxml==0.7.1"]
 

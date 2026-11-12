@@ -1,6 +1,6 @@
 # Third-party notices and source access
 
-Jianpu Studio is independent of the upstream projects. Their names identify the engines being used and do not imply endorsement. This application is GPL-3.0-or-later; output scores are not automatically placed under the application's license.
+Jianpu Studio is independent of the upstream projects. Their names identify the engines being used and do not imply endorsement. This application is MIT; output scores are not automatically placed under the application's license.
 
 | Component | Pinned version | License | Source |
 | --- | --- | --- | --- |

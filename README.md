@@ -59,6 +59,6 @@ python -m jianpu_studio
 
 ## 授權
 
-本程式 **GPL-3.0-or-later**。jianpu-ly 保留 Apache-2.0 原始授權與作者資訊；LilyPond 為獨立 GPL 工具，Audiveris 為獨立 AGPL 工具，Qt/PySide6 為動態連結 LGPL 元件。各工具、字型、模型及來源連結見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本程式 **MIT**。jianpu-ly 保留 Apache-2.0 原始授權與作者資訊；LilyPond 為獨立 GPL 工具，Audiveris 為獨立 AGPL 工具，Qt/PySide6 為動態連結 LGPL 元件。各工具、字型、模型及來源連結見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 This is an independent project, not an official LilyPond, jianpu-ly or Audiveris product.
