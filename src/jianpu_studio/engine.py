@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,12 @@ class ToolError(RuntimeError):
 
 class Cancelled(ToolError):
     pass
+
+
+class RecognitionError(ToolError):
+    def __init__(self, message: str, details: str):
+        super().__init__(message)
+        self.details = details
 
 
 def app_root() -> Path:
@@ -173,7 +180,7 @@ def render(source: str, output: Path, lilypond: Path,
 
 
 def recognize(image: Path, output: Path, audiveris: Path,
-              cancel: threading.Event | None = None) -> tuple[Path, str]:
+              cancel: threading.Event | None = None, *, retry_low_resolution=True) -> tuple[Path, str]:
     cancel = cancel or threading.Event()
     image, output = image.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -189,11 +196,51 @@ def recognize(image: Path, output: Path, audiveris: Path,
         (output / "tessdata").mkdir(exist_ok=True)
         shutil.copy2(model, output / "tessdata/eng.traineddata")
         env["TESSDATA_PREFIX"] = "tessdata"
-    log = run_tool([str(audiveris), "-batch", "-transcribe", "-export", "-save", "-output", ".", "--", staged.name],
-                   output, cancel, timeout=600, env=env)
+    try:
+        log = run_tool([str(audiveris), "-batch", "-transcribe", "-export", "-save", "-output", ".", "--", staged.name],
+                       output, cancel, timeout=600, env=env)
+        if re.search(r"too low interline value of\s+\d", log, re.I):
+            raise ToolError(log)
+    except Cancelled:
+        raise
+    except ToolError as exc:
+        log = str(exc)
+        atomic_write(output / "recognition.log", log)
+        low = re.search(r"too low interline value of\s+(\d+(?:\.\d+)?)\s+pixels", log, re.I)
+        if low and retry_low_resolution:
+            from PIL import Image
+            interline = float(low[1])
+            factor = min(4, max(2, math.ceil(12 / max(interline, 1))))
+            with Image.open(staged) as original:
+                w, h = original.size
+                if w * h * factor * factor > 40_000_000:
+                    raise RecognitionError("譜線間距太小，且放大後會超過影像大小上限。請裁切成單頁或使用較清晰的原圖。", log) from exc
+                scaled = original.convert("L").resize((w*factor, h*factor), Image.Resampling.LANCZOS)
+                enhanced = output / "resolution-retry.png"
+                scaled.save(enhanced, dpi=(300, 300))
+            note = f"原圖 {w} × {h} 像素，譜線間距 {interline:g} 像素。已自動放大 {factor} 倍重試；放大不會補回遺失細節，請對照原圖校對。"
+            try:
+                xml, retry_log = recognize(enhanced, output / "resolution-retry", audiveris, cancel, retry_low_resolution=False)
+            except Cancelled:
+                raise
+            except ToolError as retry_error:
+                details = log + "\n\n" + note + "\n\n" + getattr(retry_error, "details", str(retry_error))
+                raise RecognitionError(note + "\n\n自動重試仍未完成。請優先使用原始 PDF、300 DPI 掃描圖，或更近距離拍攝完整五線譜。", details) from retry_error
+            combined = note + "\n\n" + retry_log
+            atomic_write(output / "recognition.log", combined)
+            return xml, combined
+        if low:
+            message = f"譜線間距只有 {low[1]} 像素，解析度不足。請使用原始 PDF 或較清晰的掃描圖。"
+        elif "OutOfMemoryError" in log:
+            message = "辨識時記憶體不足。請裁切成單頁並關閉其他大型程式後重試。"
+        elif "couldn't load any languages" in log.lower():
+            message = "辨識字庫無法載入。請重新安裝完整版，或檢查工具設定。"
+        else:
+            message = "照片辨識未完成。請確認完整五線譜清楚、水平且沒有陰影；詳細紀錄可在「作業訊息」複製。"
+        raise RecognitionError(message, log) from exc
     candidates = sorted(output.rglob("*.mxl")) + sorted(output.rglob("*.musicxml")) + sorted(output.rglob("*.xml"))
     candidates = [p for p in candidates if p.name != "container.xml"]
     atomic_write(output / "recognition.log", log)
     if not candidates:
-        raise ToolError("未能辨識出樂譜。請使用清晰、平整、完整包含五線譜的照片。\n" + log[-10000:])
+        raise RecognitionError("未能辨識出五線譜。請使用清晰、平整、完整包含譜線的照片，或先在 Audiveris 校對。", log)
     return candidates[0], log
