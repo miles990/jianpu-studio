@@ -123,7 +123,7 @@ def validate_source(source: str) -> None:
         raise ValueError("樂譜是空白或超過 4 MB。")
     permitted = {"p", "pp", "ppp", "mp", "mf", "f", "ff", "fff", "sfz", "fermata", "bar",
                  "break", "noBreak", "pageBreak", "noPageBreak", "breathe", "accent", "staccato",
-                 "tenuto", "marcato", "trill", "prall", "mordent", "turn"}
+                 "tenuto", "marcato", "trill", "prall", "mordent", "turn", "upbow", "downbow"}
     for line in source.splitlines():
         line = line.split("%", 1)[0]
         if re.search(r"\bLPH?:|#\s*[({]|\$|[\x00-\x08]", line):
@@ -147,8 +147,10 @@ class RenderResult:
 
 
 def render(source: str, output: Path, lilypond: Path,
-           cancel: threading.Event | None = None) -> RenderResult:
+           cancel: threading.Event | None = None, *, paper_size="a4", staff_size=20) -> RenderResult:
     cancel = cancel or threading.Event()
+    if paper_size not in ("a4", "letter") or type(staff_size) is not int or not 16 <= staff_size <= 30:
+        raise ValueError("紙張須為 A4 / Letter，譜字大小須為 16–30。")
     validate_source(source)
     output.mkdir(parents=True, exist_ok=True)
     source_path = output / "score.jly"
@@ -158,7 +160,7 @@ def render(source: str, output: Path, lilypond: Path,
     if not match or int(match[1]) < 24:
         raise ToolError("請使用 LilyPond 2.24 或更新版本。安裝版已附帶 2.24.4。")
     try:
-        log = run_tool(worker_command("convert", str(source_path), str(output / "score.ly"), match[1]),
+        log = run_tool(worker_command("convert", str(source_path), str(output / "score.ly"), match[1], paper_size, str(staff_size)),
                        output, cancel, env=worker_env())
     except ToolError:
         error = output / "score.error.txt"

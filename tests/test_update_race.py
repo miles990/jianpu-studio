@@ -37,7 +37,7 @@ def ready_update(qtbot, tmp_path, monkeypatch):
     qtbot.waitUntil(lambda: bool(initial_render))
     monkeypatch.setattr(app_module.MainWindow, "render_score", original_render)
     monkeypatch.setattr(window, "current_tool", lambda _: tmp_path / "lilypond.exe")
-    monkeypatch.setattr(app_module, "render", lambda source, output, tool, cancel: wait_for_cancel(cancel))
+    monkeypatch.setattr(app_module, "render", lambda source, output, tool, cancel, **options: wait_for_cancel(cancel))
     dialog = update_dialog.UpdateDialog(window)
     qtbot.addWidget(dialog)
     dialog.info = updates.UpdateInfo("9.9.9", "", 1, "")
