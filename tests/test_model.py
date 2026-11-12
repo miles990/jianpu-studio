@@ -4,7 +4,15 @@ from fractions import Fraction
 
 import pytest
 
-from jianpu_studio.model import Note, Project, Score, demo_project, load_project, save_project
+from jianpu_studio.model import (
+    TICKS_PER_QUARTER,
+    Note,
+    Project,
+    Score,
+    demo_project,
+    load_project,
+    save_project,
+)
 
 
 def test_demo_and_unicode_roundtrip(tmp_path):
@@ -87,7 +95,7 @@ def test_snapshot_shares_only_immutable_notes():
 
 
 @pytest.mark.parametrize("changes", [
-    {"finger": True}, {"finger": 5}, {"bow": "unknown"}, {"dynamic": "fff"},
+    {"finger": True}, {"finger": 5}, {"bow": "unknown"}, {"dynamic": "ffff"},
     {"articulation": "other"}, {"slide": "sideways"}, {"slur_start": 1},
     {"degree": 0, "finger": 0}, {"degree": 0, "bow": "upbow"},
     {"degree": 0, "slide": "up"}, {"degree": 0, "tie": True},
@@ -134,7 +142,7 @@ def test_fill_after_dotted_32nd_is_exact_and_failure_does_not_mutate():
     score = Score(notes=[Note(1, duration=32, dotted=True)])
     score.fill_last_bar()
     assert score.rhythm_error() is None
-    assert sum(n.ticks for n in score.notes) == 64
+    assert sum(n.ticks for n in score.notes) == 4*TICKS_PER_QUARTER
     impossible = Score(notes=[Note(1, duration=32, dotted=True)] * 21)
     original = list(impossible.notes)
     with pytest.raises(ValueError, match="剩餘拍數"):

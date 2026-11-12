@@ -5,7 +5,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QBuffer, QIODevice, QSettings, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
@@ -109,6 +109,7 @@ class MainWindow(EditActions, QMainWindow):
         self.photo_scale = 1.0
         self.recognized_xml: Path | None = None
         self.temp = tempfile.TemporaryDirectory(prefix="jianpu-studio-")
+        self.pdf_buffer = None
         self.work = Path(self.temp.name)
         self.job_number = 0
         self.data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
@@ -148,7 +149,6 @@ class MainWindow(EditActions, QMainWindow):
         action(file_menu, "儲存", self.save, QKeySequence.StandardKey.Save)
         action(file_menu, "另存新檔…", self.save_as, QKeySequence.StandardKey.SaveAs)
         file_menu.addSeparator()
-        action(file_menu, "匯入照片…", self.import_photo)
         action(file_menu, "匯入 MusicXML…", self.import_musicxml)
         action(file_menu, "匯出 PDF…", lambda: self.export("pdf"), "Ctrl+E")
         action(file_menu, "離開", self.close, "Alt+F4")
@@ -157,14 +157,15 @@ class MainWindow(EditActions, QMainWindow):
         self.redo_action = action(edit, "重做", self.redo, QKeySequence.StandardKey.Redo)
         measures = self.menuBar().addMenu("小節")
         measures.aboutToShow.connect(lambda: (measures.clear(), self.add_measure_menu(measures)))
+        notation = self.notation_menu()
+        notation.setTitle("記號")
+        self.menuBar().addMenu(notation)
         view = self.menuBar().addMenu("檢視")
-        for text, index in (("編輯樂譜", 0), ("原圖對照", 1)):
-            action(view, text, lambda checked=False, i=index: self.change_workspace(i))
+        action(view, "編輯樂譜", lambda: self.change_workspace(0))
         tools_menu = self.menuBar().addMenu("工具")
         action(tools_menu, "列印預覽", self.show_print_preview, "F5")
         action(tools_menu, "作業訊息", self.show_work_log)
         action(tools_menu, "工具與環境設定", self.tool_settings)
-        action(tools_menu, "開啟 Audiveris 校對工具", self.open_audiveris)
         help_menu = self.menuBar().addMenu("說明")
         action(help_menu, "操作說明", self.show_help, "F1")
         action(help_menu, "檢查更新…", self.check_updates)
@@ -232,7 +233,7 @@ class MainWindow(EditActions, QMainWindow):
         self.result = None
         self.rendered_revision = -1
         self.recognized_xml = None
-        self.pdf_document.close()
+        self.clear_pdf_preview()
         self.photo_label.clear()
         self.photo_pixmap = None
         self.photo_scale = 1.0
@@ -443,9 +444,9 @@ class MainWindow(EditActions, QMainWindow):
             old_result = self.result
             self.result = result
             self.rendered_revision = revision
-            self.pdf_document.close()
+            self.clear_pdf_preview()
             if create_pdf:
-                self.pdf_document.load(str(result.pdf))
+                self.load_pdf_preview(result.pdf)
             if old_result and old_result.pdf.parent != result.pdf.parent:
                 shutil.rmtree(old_result.pdf.parent, ignore_errors=True)
             self.preview_status.setText(f"排版完成 · {self.pdf_document.pageCount()} 頁 · 可列印 / 匯出 PDF" if create_pdf else "MIDI 已準備完成。")
@@ -471,6 +472,28 @@ class MainWindow(EditActions, QMainWindow):
         self.start_task("正在準備列印 PDF；可繼續編輯…" if create_pdf else "正在準備 MIDI 試聽資料…", job, complete, manual, blocks_edit=False, revision=revision)
         if self.task:
             self.task.creates_pdf = create_pdf
+
+    def clear_pdf_preview(self):
+        self.pdf_document.close()
+        if self.pdf_buffer is not None:
+            self.pdf_buffer.close()
+            self.pdf_buffer.deleteLater()
+            self.pdf_buffer = None
+
+    def load_pdf_preview(self, path):
+        # Qt can keep a filename-backed PDF open while queued pages render.
+        # Loading an owned memory buffer lets Windows release the job directory
+        # immediately, including when a preview is replaced or the app closes.
+        payload = path.read_bytes()
+        self.clear_pdf_preview()
+        buffer = QBuffer(self.pdf_document)
+        buffer.setData(payload)
+        buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+        self.pdf_buffer = buffer
+        self.pdf_document.load(buffer)
+        if self.pdf_document.pageCount() < 1:
+            self.clear_pdf_preview()
+            raise ValueError("無法開啟產生的 PDF 預覽，請查看排版紀錄並重新排版。")
 
     def resume_pending_output(self):
         if self.task or self.update_preparing or self.close_preparing:
@@ -535,8 +558,13 @@ class MainWindow(EditActions, QMainWindow):
             self.output_request = ("open", "pdf")
             self.render_score(True)
             return
-        if result and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.pdf))):
-            self.error("無法開啟 PDF", "請設定 Windows 的預設 PDF 閱讀器，或先匯出 PDF。")
+        from .printing import prepare_print_copy
+        try:
+            copy = prepare_print_copy(result.pdf, self.data_dir / "print-cache")
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(copy))):
+                self.error("無法開啟 PDF", "請設定 Windows 的預設 PDF 閱讀器，或先匯出 PDF。")
+        except OSError as exc:
+            self.error("無法開啟 PDF", exc)
 
     def play_midi(self):
         if self.player.playing:
@@ -645,7 +673,7 @@ class MainWindow(EditActions, QMainWindow):
         layout.addWidget(label("完整版會自動找到內附工具。通常不需要更改；清空欄位可恢復自動偵測。", wrap=True))
         form = QFormLayout()
         fields = {}
-        for name, display in (("lilypond", "LilyPond 排譜引擎"), ("audiveris", "Audiveris 照片辨識")):
+        for name, display in (("lilypond", "LilyPond 排譜引擎"),):
             row = QHBoxLayout()
             field = QLineEdit(str(self.settings.value(name, "")))
             found = self.current_tool(name)
@@ -680,7 +708,7 @@ class MainWindow(EditActions, QMainWindow):
             self.error("無法開啟 Audiveris", exc)
 
     def show_help(self):
-        QMessageBox.information(self, "快速上手 / 快捷鍵", "小節：點小節號選取；＋新增小節，或用小節選單前插／後插／曲尾新增。清空保留拍數，刪除會讓後段前移。\n填寫小節：點休止符 0，用數字取代休止，保留後面小節位置。\n新增模式：0–7 輸入音符；屬性列設定下一音符。可選擇插在選取前、後或曲尾。\n修改模式：先選音符，再調整屬性；只改動那個屬性。混合值顯示「不同」。\n\n音符區快捷鍵（相容部分 EOP 習慣）：\nSpace 切換新增 / 修改，Enter 試聽 / 停止。\nQ / W / E / R / A / S：全、二分、四分、八分、十六分、三十二分音符。\n↑ / ↓ 八度，. 附點，[ / ] 縮短 / 延長。\nShift 連選、Ctrl 加選、Ctrl+A 全選，M 選小節。\nCtrl+C / X / V 複製 / 剪下 / 貼上，Ctrl+D 重複，Delete 刪除。\nInsert 前插小節、Ctrl+Insert 新增多節、Ctrl+B 曲尾加小節、Ctrl+Delete 刪除小節。\nCtrl+Z 復原，Ctrl+Y 重做，Ctrl+S 儲存，F5 列印預覽。\n平常在主譜面閱讀與編輯；可切換原圖對照。PDF 只在列印／匯出時產生，PDF 本身不能直接編輯音符。\n\n「二胡 / 記號」可設定指法、弓法、力度、滑音，連續選取可加連弓 / 延音 / 小節反覆。\n進階語法支援三連音、倚音、弱起及多聲部；返回時保留視覺草稿。\n\n照片辨識適用清楚的印刷五線譜，請逐小節對照原圖。每 15 秒儲存本機復原暫存。MIDI 試聽目前使用 Windows 內建合成器。")
+        QMessageBox.information(self, "快速上手 / 快捷鍵", "小節：點小節號選取；＋新增小節，或用小節選單前插／後插／曲尾新增。清空保留拍數，刪除會讓後段前移。\n填寫小節：點休止符 0，用數字取代休止，保留後面小節位置。\n新增模式：0–7 輸入音符；屬性列設定下一音符。可選擇插在選取前、後或曲尾。\n修改模式：先選音符，再調整屬性；只改動那個屬性。混合值顯示「不同」。\n\n音符區快捷鍵（相容部分 EOP 習慣）：\nSpace 切換新增 / 修改，Enter 試聽 / 停止。\nQ / W / E / R / A / S：全、二分、四分、八分、十六分、三十二分音符。\n↑ / ↓ 八度，. 附點，[ / ] 縮短 / 延長。\nShift 連選、Ctrl 加選、Ctrl+A 全選，M 選小節。\nCtrl+C / X / V 複製 / 剪下 / 貼上，Ctrl+D 重複，Delete 刪除。\nInsert 前插小節、Ctrl+Insert 新增多節、Ctrl+B 曲尾加小節、Ctrl+Delete 刪除小節。\nCtrl+Z 復原，Ctrl+Y 重做，Ctrl+S 儲存，F5 列印預覽。\n平常在同一張主譜面閱讀與編輯。PDF 只在列印／匯出時產生，PDF 本身不能直接編輯音符。\n\n「記號 / 二胡」可設定力度、延長、常用演奏記號、前後倚音、指法、弓法、滑音。連續選取可加連音 / 延音 / 漸強弱 / 小節反覆。\n三連音：選一個未附點音符或休止符，用「記號」選單拆成三份，總拍數不變。進階語法另支援弱起、多聲部等；返回時保留視覺草稿。\n\n每 15 秒儲存本機復原暫存。MIDI 試聽目前使用 Windows 內建合成器。")
 
     def check_updates(self):
         from .update_dialog import UpdateDialog
@@ -721,6 +749,6 @@ class MainWindow(EditActions, QMainWindow):
         self.player.stop()
         self.autopreview.stop()
         self.recovery_path.unlink(missing_ok=True)
-        self.pdf_document.close()
+        self.clear_pdf_preview()
         self.temp.cleanup()
         event.accept()

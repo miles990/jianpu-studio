@@ -1,6 +1,7 @@
 """Measure-aware editor: one model, cached geometry, paint visible music only."""
 from __future__ import annotations
 
+import re
 from bisect import bisect_right
 
 from PySide6.QtCore import (
@@ -17,7 +18,19 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractItemView, QToolTip
 
-from .model import Score
+from .model import TICKS_PER_QUARTER, Score
+
+ARTICULATION_LABELS = {
+    "staccato": "斷奏", "tenuto": "保持音", "accent": "重音", "fermata": "延長記號",
+    "trill": "顫音", "mordent": "波音", "breathe": "換氣", "turn": "迴音", "marcato": "強重音",
+    "staccatissimo": "極短斷奏", "harmonic": "泛音",
+}
+GRACE_PATTERN = re.compile(r"([#b]?)([1-7])([,']{0,2})")
+
+
+def grace_tokens(text):
+    return tuple((accidental, degree, -octave.count(",") if "," in octave else len(octave))
+                 for accidental, degree, octave in GRACE_PATTERN.findall(text)) if text else ()
 
 
 class ScoreModel(QAbstractListModel):
@@ -27,6 +40,8 @@ class ScoreModel(QAbstractListModel):
         self.positions = []
         self.bars = []
         self.links = []
+        self.tuplets = []
+        self.hairpins = []
         self.total_ticks = 0
         self._notes = ()
         self._meter = self.score.meter
@@ -52,8 +67,19 @@ class ScoreModel(QAbstractListModel):
             if note.slide:
                 marks.append("上滑音" if note.slide == "up" else "下滑音")
             if note.articulation:
-                marks.append({"staccato": "斷奏", "tenuto": "保持音", "accent": "重音", "fermata": "延長記號",
-                              "trill": "顫音", "mordent": "波音"}[note.articulation])
+                marks.append(ARTICULATION_LABELS.get(note.articulation, note.articulation))
+            if note.accidental == "n":
+                marks.append("還原記號")
+            if note.tuplet:
+                marks.append("三連音")
+            if note.hairpin:
+                marks.append("漸強起點" if note.hairpin == "crescendo" else "漸弱起點")
+            if note.hairpin_end:
+                marks.append("漸強弱終點")
+            if note.grace_before:
+                marks.append("前倚音 " + note.grace_before)
+            if note.grace_after:
+                marks.append("後倚音 " + note.grace_after)
             marks.extend(label for field, label in (("slur_start", "連弓起點"), ("slur_end", "連弓終點"),
                                                    ("tie", "延音線"), ("repeat_start", "反覆起點"),
                                                    ("repeat_end", "反覆終點")) if getattr(note, field))
@@ -65,7 +91,7 @@ class ScoreModel(QAbstractListModel):
 
     @property
     def bar_ticks(self):
-        return int(self.score.bar_length * 16)
+        return int(self.score.bar_length * TICKS_PER_QUARTER)
 
     def set_score(self, score):
         # The editor mutates the same Score instance. Keep an immutable snapshot
@@ -77,8 +103,8 @@ class ScoreModel(QAbstractListModel):
             return False
         self.beginResetModel()
         self._notes, self._meter = notes, score.meter
-        self.positions, self.bars, self.links = [], [], []
-        position, slur_start = 0, None
+        self.positions, self.bars, self.links, self.tuplets, self.hairpins = [], [], [], [], []
+        position, slur_start, tuplet_start, hairpin_start = 0, None, None, None
         bar_ticks = self.bar_ticks
         for i, note in enumerate(notes):
             bar = position // bar_ticks
@@ -94,8 +120,24 @@ class ScoreModel(QAbstractListModel):
                 slur_start = i
             if note.tie and i + 1 < len(notes):
                 self.links.append((i, i + 1, True))
+            if note.tuplet_start:
+                tuplet_start = i
+            if note.tuplet_end and tuplet_start is not None:
+                self.tuplets.append((tuplet_start, i, 3))
+                tuplet_start = None
+            if note.hairpin_end and hairpin_start is not None:
+                start, direction = hairpin_start
+                self.hairpins.append((start, i, direction))
+                hairpin_start = None
+            if note.hairpin:
+                hairpin_start = i, note.hairpin
         if slur_start is not None:
             self.links.append((slur_start, len(notes) - 1, False))
+        if tuplet_start is not None:
+            self.tuplets.append((tuplet_start, len(notes)-1, 3))
+        if hairpin_start is not None:
+            start, direction = hairpin_start
+            self.hairpins.append((start, len(notes)-1, direction))
         self.total_ticks = position
         self.endResetModel()
         return True
@@ -123,6 +165,8 @@ class NoteList(QAbstractItemView):
         self.line_rects = []
         self.line_bottoms = []
         self.line_links = []
+        self.line_tuplets = []
+        self.line_hairpins = []
         self.line_baselines = []
         self.line_dynamic_offsets = []
         self.header_rect = QRect()
@@ -130,6 +174,7 @@ class NoteList(QAbstractItemView):
         self.empty_bar_rect = QRect()
         self.empty_button_rect = QRect()
         self.note_lines = []
+        self.note_graces = []
         self.content_width = 0
         self.content_height = 0
         self._layout_options = None
@@ -178,11 +223,14 @@ class NoteList(QAbstractItemView):
         available = max(1, self.viewport().width() - margin * 2)
         rows, line, used = [], [], 0
         notes = self.score_model._notes
+        self.note_graces = [(grace_tokens(n.grace_before), grace_tokens(n.grace_after)) for n in notes]
         per_line = self.score_model.score.bars_per_line
         for bar, indices in self.score_model.bars:
-            weights = [max(62 if (notes[i].finger >= 0 or notes[i].bow or notes[i].articulation) else 40,
-                           notes[i].ticks * 2.5) * s for i in indices]
-            width = max(144*s, sum(weights) + 32*s)
+            weights = [(max(62 if (notes[i].finger >= 0 or notes[i].bow or notes[i].articulation) else 40,
+                            notes[i].ticks * 40/TICKS_PER_QUARTER)
+                        + sum(14*len(group)+16 for group in self.note_graces[i] if group)) * s for i in indices]
+            grace_repeat_inset = 8*s if notes[indices[0]].grace_before and notes[indices[0]].repeat_start else 0
+            width = max(144*s, sum(weights) + 32*s+grace_repeat_inset)
             if line and ((per_line and len(line) >= per_line) or
                          (not per_line and used + width > available)):
                 rows.append(line)
@@ -195,33 +243,44 @@ class NoteList(QAbstractItemView):
         self.note_lines = [0] * len(notes)
         self.bar_rects, self.bar_bottoms = [], []
         self.line_rects, self.line_bottoms, self.line_links = [], [], [[] for _ in rows]
+        self.line_tuplets, self.line_hairpins = [[] for _ in rows], [[] for _ in rows]
         self.line_baselines, self.line_dynamic_offsets = [], []
         self.empty_bar_rect, self.empty_button_rect = QRect(), QRect()
-        y = self._layout_header(margin, available) + int(14*s)
+        y = self._layout_header(margin, available) + int(6*s)
         self.content_width = self.viewport().width()
         for line_number, line in enumerate(rows):
             for _, indices, _, _ in line:
                 for i in indices:
                     self.note_lines[i] = line_number
         has_slur, has_tie = [False]*len(rows), [False]*len(rows)
+        has_tuplet, has_hairpin = [False]*len(rows), [False]*len(rows)
         for start, end, tie in self.score_model.links:
             for line_number in range(self.note_lines[start], self.note_lines[end]+1):
                 (has_tie if tie else has_slur)[line_number] = True
-        tie_offsets = []
+        for spans, occupied in ((self.score_model.tuplets, has_tuplet), (self.score_model.hairpins, has_hairpin)):
+            for start, end, _ in spans:
+                for line_number in range(self.note_lines[start], self.note_lines[end]+1):
+                    occupied[line_number] = True
+        tie_offsets, hairpin_offsets = [], []
         for line_number, line in enumerate(rows):
             line_notes = [notes[i] for _, indices, _, _ in line for i in indices]
             upper_marks = any(n.finger >= 0 or n.bow or n.articulation for n in line_notes)
             upper = (86 if upper_marks else 62) if has_slur[line_number] else (72 if upper_marks else 44)
+            upper += 28 if has_tuplet[line_number] else 0
             below = max([22] + [25+4*{8: 1, 16: 2, 32: 3}.get(n.duration, 0)+6*(abs(n.octave)-1)
                                 for n in line_notes if n.octave < 0])
             tie_offset = below+13
             dynamic_offset = below+(33 if has_tie[line_number] else 10)
             lower = (dynamic_offset+24 if any(n.dynamic for n in line_notes)
                      else tie_offset+4 if has_tie[line_number] else below)
+            hairpin_offset = lower+14
+            if has_hairpin[line_number]:
+                lower = hairpin_offset+7
             height = max(1, int((upper+lower+12)*s))
             self.line_baselines.append(y+upper*s)
             self.line_dynamic_offsets.append(dynamic_offset*s)
             tie_offsets.append(tie_offset*s)
+            hairpin_offsets.append(hairpin_offset*s)
             extra = max(0, (available - sum(b[3] for b in line)) / len(line))
             x = margin
             for bar, indices, weights, base in line:
@@ -229,8 +288,9 @@ class NoteList(QAbstractItemView):
                 frame = QRect(int(x), y, width, height)
                 self.bar_rects.append((frame, bar, indices))
                 self.bar_bottoms.append(frame.bottom())
-                left = x + 16*s
-                usable = width - 32*s
+                grace_repeat_inset = 8*s if notes[indices[0]].grace_before and notes[indices[0]].repeat_start else 0
+                left = x + 16*s+grace_repeat_inset
+                usable = width - 32*s-grace_repeat_inset
                 total = sum(weights)
                 for i, weight in zip(indices, weights):
                     cell = usable * weight / total
@@ -256,12 +316,50 @@ class NoteList(QAbstractItemView):
                 x2 = self.note_center(end) - 7*s if line_number == last else frame.right() - 10*s
                 if x2 <= x1:
                     x2 = x1 + 12*s
-                baseline = self.line_baselines[line_number]+tie_offsets[line_number] if tie else frame.top()+18*s
+                baseline = (self.line_baselines[line_number]+tie_offsets[line_number] if tie
+                            else frame.top()+(46 if has_tuplet[line_number] else 18)*s)
                 path = QPainterPath(QPointF(x1, baseline))
                 lift = (10 if tie else 15)*s
                 path.cubicTo(x1 + (x2-x1)*0.25, baseline-lift,
                              x1 + (x2-x1)*0.75, baseline-lift, x2, baseline)
                 self.line_links[line_number].append(path)
+        for start, end, number in self.score_model.tuplets:
+            first, last = self.note_lines[start], self.note_lines[end]
+            for line_number in range(first, last+1):
+                frame = self.line_rects[line_number]
+                x1 = self.note_center(start)-12*s if line_number == first else frame.left()+10*s
+                x2 = self.note_center(end)+12*s if line_number == last else frame.right()-10*s
+                x2 = max(x1+24*s, x2)
+                y, center = frame.top()+24*s, (x1+x2)/2
+                path = QPainterPath(QPointF(x1, y+5*s))
+                path.lineTo(x1, y)
+                path.lineTo(center-8*s, y)
+                path.moveTo(center+8*s, y)
+                path.lineTo(x2, y)
+                path.lineTo(x2, y+5*s)
+                text_rect = QRect(int(center-8*s), int(y-10*s), max(1, int(16*s)), max(1, int(20*s)))
+                self.line_tuplets[line_number].append((path, text_rect, str(number)))
+        for start, end, direction in self.score_model.hairpins:
+            first, last = self.note_lines[start], self.note_lines[end]
+            segments = []
+            for line_number in range(first, last+1):
+                frame = self.line_rects[line_number]
+                x1 = self.note_center(start)+3*s if line_number == first else frame.left()+10*s
+                x2 = self.note_center(end)-3*s if line_number == last else frame.right()-10*s
+                segments.append((line_number, x1, max(x1+12*s, x2)))
+            total = sum(x2-x1 for _, x1, x2 in segments)
+            progress = 0
+            for line_number, x1, x2 in segments:
+                first_open, last_open = progress/total, (progress+x2-x1)/total
+                if direction == "diminuendo":
+                    first_open, last_open = 1-first_open, 1-last_open
+                y = self.line_baselines[line_number]+hairpin_offsets[line_number]
+                path = QPainterPath()
+                for side in (-1, 1):
+                    path.moveTo(x1, y+side*6*s*first_open)
+                    path.lineTo(x2, y+side*6*s*last_open)
+                self.line_hairpins[line_number].append(path)
+                progress += x2-x1
         self.updateGeometries()
         self.viewport().update()
 
@@ -269,7 +367,8 @@ class NoteList(QAbstractItemView):
         """Cache plain-text wrapping so header changes also reflow the music."""
         score, s = self.score_model.score, self.scale
         self.header_blocks = []
-        y = margin
+        top = max(8, int(16*s))
+        y = top
         for text, size, weight, alignment in (
                 (score.title or "未命名樂曲", 19, QFont.Weight.DemiBold, Qt.AlignmentFlag.AlignHCenter),
                 (score.composer, 10, QFont.Weight.Normal, Qt.AlignmentFlag.AlignRight),
@@ -283,14 +382,24 @@ class NoteList(QAbstractItemView):
                          QFontMetrics(font).boundingRect(QRect(0, 0, width, 100000), flags, text).height())
             rect = QRect(margin, y, width, height)
             self.header_blocks.append((rect, text, font, flags))
-            y += height+max(3, int(6*s))
-        self.header_rect = QRect(margin, margin, width, y-margin)
+            y += height+max(3, int(4*s))
+        self.header_rect = QRect(margin, top, width, y-top)
         return y
 
     def note_center(self, row):
         note, rect = self.score_model._notes[row], self.rects[row]
-        beats = max(1, int(note.beats)) if note.duration <= 2 else 1
-        return rect.left() + rect.width() / (2 * beats)
+        before = self.note_graces[row][0]
+        prefix = (14*len(before)+16)*self.scale if before else 0
+        return rect.left() + prefix + self.note_main_width(row)/(2*self.long_beats(note))
+
+    @staticmethod
+    def long_beats(note):
+        # Draw nominal quarter-note dashes, independent of tuplet performance time.
+        return (4//note.duration)*(3 if note.dotted else 2)//2 if note.duration <= 2 else 1
+
+    def note_main_width(self, row):
+        ornament_width = sum((14*len(group)+16)*self.scale for group in self.note_graces[row] if group)
+        return max(1, self.rects[row].width()-ornament_width)
 
     def updateGeometries(self):
         if not hasattr(self, "content_height"):
@@ -638,9 +747,7 @@ class NoteList(QAbstractItemView):
                 p.drawLine(QPointF(x, mark_y+5*s), QPointF(x+5*s, mark_y-6*s))
         if note.articulation:
             x = cx + (21*s if note.finger >= 0 or note.bow else 0)
-            mark = {"staccato": "•", "tenuto": "—", "accent": ">", "fermata": "𝄐", "trill": "tr", "mordent": "𝆝"}[note.articulation]
-            p.setFont(QFont("DejaVu Sans", max(7, int(11*s))))
-            p.drawText(QRect(int(x-12*s), int(mark_y-13*s), int(24*s), int(22*s)), Qt.AlignmentFlag.AlignCenter, mark)
+            self._draw_articulation(p, note.articulation, x, mark_y, color)
         if note.slide:
             x, y = cx - 23*s, cy - 18*s
             direction = -1 if note.slide == "up" else 1
@@ -654,6 +761,105 @@ class NoteList(QAbstractItemView):
             p.setFont(font)
             offset = 47*s if dynamic_offset is None else dynamic_offset
             p.drawText(QRect(int(cx-22*s), int(cy+offset), int(44*s), int(22*s)), Qt.AlignmentFlag.AlignCenter, note.dynamic)
+
+    def _draw_articulation(self, painter, mark, x, y, color):
+        """Use paths for common symbols so Windows font coverage cannot hide them."""
+        s = self.scale
+        painter.save()
+        painter.translate(x, y)
+        painter.scale(s, s)
+        painter.setPen(QPen(color, 1.4))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        path = QPainterPath()
+        if mark == "fermata":
+            path.moveTo(-8, 1)
+            path.cubicTo(-8, -10, 8, -10, 8, 1)
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(0, -1), 1.6, 1.6)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+        elif mark == "staccato":
+            painter.setBrush(color)
+            painter.drawEllipse(QPointF(0, -2), 2, 2)
+        elif mark == "tenuto":
+            path.moveTo(-7, -2)
+            path.lineTo(7, -2)
+        elif mark == "accent":
+            path.moveTo(-7, -7)
+            path.lineTo(7, -2)
+            path.lineTo(-7, 3)
+        elif mark == "marcato":
+            path.moveTo(-6, 3)
+            path.lineTo(0, -8)
+            path.lineTo(6, 3)
+        elif mark == "staccatissimo":
+            path.moveTo(-3, -8)
+            path.lineTo(3, -8)
+            path.lineTo(0, 3)
+            path.closeSubpath()
+            painter.setBrush(color)
+        elif mark == "harmonic":
+            path.moveTo(0, -9)
+            path.lineTo(5, -2)
+            path.lineTo(0, 5)
+            path.lineTo(-5, -2)
+            path.closeSubpath()
+        elif mark == "mordent":
+            path.moveTo(-10, 1)
+            for px, py in ((-6, -5), (-2, 1), (2, -5), (6, 1), (10, -5)):
+                path.lineTo(px, py)
+            path.moveTo(0, -9)
+            path.lineTo(0, 6)
+        elif mark == "turn":
+            path.moveTo(-10, -1)
+            path.cubicTo(-10, -9, -3, -9, 0, -1)
+            path.cubicTo(3, 7, 10, 7, 10, -1)
+            path.cubicTo(10, -5, 5, -5, 5, -1)
+            path.moveTo(-10, -1)
+            path.cubicTo(-10, 3, -5, 3, -5, -1)
+        elif mark in ("trill", "breathe"):
+            font = QFont("DejaVu Serif", 12 if mark == "trill" else 17)
+            font.setItalic(mark == "trill")
+            painter.setFont(font)
+            painter.drawText(QRect(-13, -14, 26, 25), Qt.AlignmentFlag.AlignCenter,
+                             "tr" if mark == "trill" else ",")
+        painter.drawPath(path)
+        painter.restore()
+
+    def _draw_graces(self, painter, row, cy, color):
+        s, rect = self.scale, self.rects[row]
+        before, after = self.note_graces[row]
+        painter.setPen(QPen(color, max(1, s)))
+        painter.setBrush(color)
+        for group, start in ((before, rect.left()),
+                             (after, rect.right()-(14*len(after)+16)*s+12*s)):
+            if not group:
+                continue
+            centers = []
+            for number, (accidental, degree, octave) in enumerate(group):
+                x, y = start+(7+14*number)*s, cy-7*s
+                centers.append(x)
+                painter.setFont(QFont("DejaVu Sans", max(6, int(9*s))))
+                painter.drawText(QRect(int(x-5*s), int(y-10*s), max(1, int(10*s)), max(1, int(20*s))),
+                                 Qt.AlignmentFlag.AlignCenter, degree)
+                if accidental:
+                    painter.setFont(QFont("DejaVu Sans", max(5, int(6*s))))
+                    painter.drawText(QPointF(x-10*s, y+2*s), "♯" if accidental == "#" else "♭")
+                for dot in range(abs(octave)):
+                    dot_y = y-(11+4*dot)*s if octave > 0 else y+(13+4*dot)*s
+                    painter.drawEllipse(QPointF(x, dot_y), max(.7, s), max(.7, s))
+            painter.drawLine(QPointF(centers[0]-4*s, cy+3*s), QPointF(centers[-1]+4*s, cy+3*s))
+
+    def _draw_system_marks(self, painter, line):
+        painter.setPen(QPen(QColor("#344c59"), max(1, 1.3*self.scale)))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for path in self.line_links[line]:
+            painter.drawPath(path)
+        for path in self.line_hairpins[line]:
+            painter.drawPath(path)
+        painter.setFont(QFont("DejaVu Serif", max(7, int(11*self.scale))))
+        for path, rect, number in self.line_tuplets[line]:
+            painter.drawPath(path)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, number)
 
     def paintEvent(self, event):
         p = QPainter(self.viewport())
@@ -715,14 +921,14 @@ class NoteList(QAbstractItemView):
                     p.drawRoundedRect(rect.adjusted(1, 0, -2, -1), 4*s, 4*s)
                 color = QColor("#10644f" if selected else "#162f40")
                 p.setPen(QPen(color, max(1, s)))
-                long_beats = max(1, int(note.beats)) if note.duration <= 2 else 1
+                long_beats = self.long_beats(note)
                 cx = self.note_center(i)
                 p.setFont(QFont("DejaVu Sans", max(7, int(22*s)), QFont.Weight.DemiBold))
                 number_rect = QRect(int(cx-14*s), int(cy-22*s), int(28*s), int(40*s))
                 p.drawText(number_rect, Qt.AlignmentFlag.AlignCenter, str(note.degree))
                 p.setFont(QFont("DejaVu Sans", max(6, int(13*s))))
                 if note.accidental:
-                    p.drawText(QPointF(cx-24*s, cy+5*s), "♯" if note.accidental == "#" else "♭")
+                    p.drawText(QPointF(cx-24*s, cy+5*s), {"#": "♯", "b": "♭", "n": "♮"}[note.accidental])
                 if note.dotted and note.duration > 2:
                     p.setBrush(color)
                     p.drawEllipse(QPointF(cx+14*s, cy), 1.7*s, 1.7*s)
@@ -735,9 +941,10 @@ class NoteList(QAbstractItemView):
                     y = cy - (23+6*octave)*s if note.octave > 0 else cy + (25+4*beams+6*octave)*s
                     p.drawEllipse(QPointF(cx, y), 1.5*s, 1.5*s)
                 for beat in range(1, long_beats):
-                    x = cx + rect.width()*beat/long_beats
+                    x = cx + self.note_main_width(i)*beat/long_beats
                     p.drawLine(QPointF(x-7*s, cy), QPointF(x+7*s, cy))
                 self._draw_marks(p, note, cx, cy, color, self.line_dynamic_offsets[line_number])
+                self._draw_graces(p, i, cy, color)
         # Draw connections after all measure backgrounds so spans survive a
         # bar boundary. Cache one path per system, including wrapped spans.
         p.setPen(QPen(QColor("#344c59"), max(1, 1.3*s)))
@@ -746,8 +953,7 @@ class NoteList(QAbstractItemView):
         for line in range(first, len(self.line_rects)):
             if self.line_rects[line].top() > self.verticalOffset() + self.viewport().height():
                 break
-            for path in self.line_links[line]:
-                p.drawPath(path)
+            self._draw_system_marks(p, line)
         selection = self.selectionModel().selection()
         if self.insertion_mode != "edit" and not selection.isEmpty():
             if self.insertion_mode == "fill":

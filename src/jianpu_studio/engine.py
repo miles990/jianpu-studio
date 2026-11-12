@@ -123,7 +123,8 @@ def validate_source(source: str) -> None:
         raise ValueError("樂譜是空白或超過 4 MB。")
     permitted = {"p", "pp", "ppp", "mp", "mf", "f", "ff", "fff", "sfz", "fermata", "bar",
                  "break", "noBreak", "pageBreak", "noPageBreak", "breathe", "accent", "staccato",
-                 "tenuto", "marcato", "trill", "prall", "mordent", "turn", "upbow", "downbow"}
+                 "tenuto", "marcato", "staccatissimo", "flageolet", "trill", "prall", "mordent", "turn",
+                 "upbow", "downbow"}
     for line in source.splitlines():
         line = line.split("%", 1)[0]
         if re.search(r"\bLPH?:|#\s*[({]|\$|[\x00-\x08]", line):

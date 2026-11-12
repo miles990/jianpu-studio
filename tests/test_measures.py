@@ -11,7 +11,7 @@ from jianpu_studio.measures import (
     measure_ranges,
     replace_rest_input,
 )
-from jianpu_studio.model import METERS, Note, Score
+from jianpu_studio.model import METERS, TICKS_PER_QUARTER, Note, Score
 
 
 def applied(score, result):
@@ -41,7 +41,7 @@ def test_insert_clear_and_duplicate_have_exact_meter_and_renderable_source(meter
     duplicated = duplicate_measures(applied(score, cleared), [1, 2])
     final = applied(score, duplicated)
     assert len(measure_ranges(final)) == 5
-    assert sum(note.ticks for note in final.notes) == int(score.bar_length * 16) * 5
+    assert sum(note.ticks for note in final.notes) == int(score.bar_length * TICKS_PER_QUARTER) * 5
     assert final.rhythm_error() is None
     assert final.to_jianpu()
     assert empty.notes == []
@@ -91,7 +91,7 @@ def test_delete_all_measures_yields_empty_score_without_phantom_bar():
 def test_unfinished_tail_only_completes_when_operation_needs_boundary():
     score = Score(notes=[Note(1, duration=1), Note(2, duration=8, dotted=True)])
     before = insert_measures(score, 1)
-    assert sum(n.ticks for n in before.notes) == 64*2 + 12
+    assert sum(n.ticks for n in before.notes) == 8*TICKS_PER_QUARTER + Note(duration=8, dotted=True).ticks
     assert before.notes[-1] is score.notes[-1]
     after = insert_measures(score, 2)
     assert len(measure_ranges(applied(score, after))) == 3
@@ -101,10 +101,10 @@ def test_unfinished_tail_only_completes_when_operation_needs_boundary():
     assert applied(score, duplicated).rhythm_error() is None
     assert len(measure_ranges(applied(score, duplicated))) == 3
     cleared = clear_measures(score, [1])
-    assert sum(n.ticks for n in cleared.notes) == 128
+    assert sum(n.ticks for n in cleared.notes) == 8*TICKS_PER_QUARTER
     deleted = delete_measures(score, [0])
     assert deleted.notes == [score.notes[1]]
-    assert sum(n.ticks for n in score.notes) == 76
+    assert sum(n.ticks for n in score.notes) == 4*TICKS_PER_QUARTER + Note(duration=8, dotted=True).ticks
 
 
 def test_unrepresentable_one_tick_tail_rejected_without_mutation():
@@ -205,7 +205,7 @@ def test_rest_input_splits_rest_and_preserves_later_notes_and_bar_positions():
     result = replace_rest_input(score, 0, Note(3, duration=8, finger=2))
     final = applied(score, result)
     assert final.notes[0] == Note(3, duration=8, finger=2, dynamic="p")
-    assert sum(n.ticks for n in final.notes[:-1]) == 64
+    assert sum(n.ticks for n in final.notes[:-1]) == 4*TICKS_PER_QUARTER
     assert final.notes[-1] is score.notes[-1]
     assert result.selection == (0,) and result.current == 0
     assert final.rhythm_error() is None

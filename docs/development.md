@@ -2,18 +2,26 @@
 
 Python 3.12 + PySide6 native widgets. The application is offline; there is no web server, account, telemetry, API key, or cloud OCR.
 
-```
-Visual Score (.jps) → deterministic jianpu text
+```text
+Visual Score (.jps) → score_view (immediate editable display)
+        └──────────→ deterministic jianpu text
 Source editor (.jly) ────────────────────────→ isolated jianpu-ly worker
                                                ↓ .ly
-Photo → Pillow → Audiveris → MusicXML ───────→ LilyPond → PDF + MIDI
-                              ↓                  ↓
-                 conservative visual import   Qt PDF preview
+                                            LilyPond
+                                               ├→ MIDI (playback / export)
+                                               └→ PDF + MIDI (print / PDF export)
+MusicXML / MXL → conservative visual import or preserved source
 ```
 
-`model.py` uses integer ticks and rational durations and a versioned JSON schema. `musicxml.py` validates bounded ZIP/XML inputs with defusedxml; visual import accepts only representable monophonic measures and falls back to upstream conversion for complex music. Both converters preserve the editable source in the project. Upstream jianpu-ly is vendored unchanged at `b3c2bbb7de423b7c9956204898e6ac1a7ca50c62`.
+`model.py` uses 48 integer ticks per quarter note, rational durations, and a versioned JSON schema. This represents undotted 3:2 triplets and dotted 32nd notes without rounding. Triplet splitting preserves the original duration; complete three-note groups are validated before structural edits. `musicxml.py` validates bounded ZIP/XML inputs with defusedxml; visual import accepts only representable monophonic measures and falls back to upstream conversion for complex music. Both converters preserve the editable source in the project. Upstream jianpu-ly is vendored unchanged at `b3c2bbb7de423b7c9956204898e6ac1a7ca50c62`.
 
-`engine.py` executes tools without a shell, in separate per-job directories, with cancellation and timeouts (render 120 seconds; OMR 600 seconds). Conversion runs in a fresh worker process to isolate upstream globals. The frozen executable supports the same `--worker` contract. Rendering runs without locking editing. A single task queue coalesces previews; revision checks discard stale results and prevent exporting an outdated preview. Imports temporarily lock the editor. `score_view.py` paints visible measures, while immutable notes let undo snapshots share unchanged note data.
+`engine.py` executes tools without a shell, in separate per-job directories, with cancellation and timeouts (render 120 seconds; OMR 600 seconds). Conversion runs in a fresh worker process to isolate upstream globals. The frozen executable supports the same `--worker` contract. Normal score editing does not request a PDF. Playback and MIDI export use `render(create_pdf=False)` with LilyPond `-dno-print-pages`; PDF output is requested only for print preview, PDF export, or opening the print file. Rendering runs without locking editing. A single task queue coalesces output requests; revision checks discard stale results and prevent exporting an outdated preview. Imports temporarily lock the editor. `score_view.py` paints visible measures, while immutable notes let undo snapshots share unchanged note data.
+
+Qt PDF reads an owned `QBuffer` containing the PDF bytes rather than holding the output filename open. The application closes the document and buffer before replacing a preview, so Windows can remove old job directories without a lingering PDF file lock. The buffer must remain alive while the document uses it.
+
+External PDF readers receive a separate print copy from `printing.py`, under the user's application-data cache. Copies are named by content hash and reused without overwriting open files. Best-effort cleanup removes only managed copies older than seven days; locked copies are left alone. Closing the editor or replacing a render never removes the PDF an external reader is using.
+
+The photo-recognition pipeline (Pillow → Audiveris → MusicXML) remains in the backend and bundle tests. Version 0.3.0 removes its user-interface entry points, original-image comparison, and recognized-result export; ordinary MusicXML import remains available.
 
 The app restricts raw LilyPond/Scheme extensions. This is defense in depth, **not an operating system sandbox**. Treat imported files as untrusted and keep the bundled engines updated. Do not turn the renderer into a public service without real OS isolation and resource limits.
 
@@ -51,7 +59,7 @@ The one-folder bundle permits replacing Qt/PySide dynamic libraries. App updates
 
 ## Release
 
-After reviewing CI, tag the matching version (for example `v0.2.0`) and push the tag. The workflow rebuilds and tests the exact tagged code, then publishes the installer, portable archive and SHA-256 manifest. Main-branch runs execute regression checks without rebuilding installer archives. Keep version numbers in `pyproject.toml`, `__init__.py`, and `installer.iss` aligned; artifact names derive from that version. For upstream updates, update the lock file, licenses/source references, regression tests and fixture validation together.
+After reviewing CI, tag the matching version (for example `v0.3.0`) and push the tag. The workflow rebuilds and tests the exact tagged code, then publishes the installer, portable archive and SHA-256 manifest. Main-branch runs execute regression checks without rebuilding installer archives. Keep version numbers in `pyproject.toml`, `__init__.py`, and `installer.iss` aligned; artifact names derive from that version. For upstream updates, update the lock file, licenses/source references, regression tests and fixture validation together.
 
 ## 開發與發佈流程（trunk-based）
 

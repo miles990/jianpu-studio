@@ -224,7 +224,7 @@ def test_measure_number_selection_survives_zoom_and_wrapping(measure_window, qtb
 
 
 @pytest.mark.parametrize("size", [(1000, 630), (1380, 850)])
-def test_score_photo_and_explicit_print_preview_are_reachable(measure_window, size):
+def test_score_and_explicit_print_preview_are_reachable(measure_window, size):
     window = measure_window
     load_score(window, [Note(1)] * 12)
     window.notes.select_rows([4, 5, 6, 7], current=5)
@@ -232,6 +232,8 @@ def test_score_photo_and_explicit_print_preview_are_reachable(measure_window, si
     window.resize(*size)
     QApplication.processEvents()
     assert window.workspace_view.currentData() == "score"
+    assert window.workspace_view.count() == 1
+    assert not window.workspace_view.isVisible()
     view = window.notes
     visible_note = False
     for row in range(view.model().rowCount()):
@@ -241,27 +243,26 @@ def test_score_photo_and_explicit_print_preview_are_reachable(measure_window, si
             visible_note = True
             break
     assert visible_note, "the initial editor must expose music, without first scrolling past its toolbars"
-    for mode in ("score", "photo", "score"):
-        window.workspace_view.setCurrentIndex(window.workspace_view.findData(mode))
+    window.change_workspace(0)
+    QApplication.processEvents()
+    assert (window.width(), window.height()) == size
+    assert window.editor_container.isVisible()
+    assert window.notes.isVisible()
+    assert not window.photo_scroll.isVisible()
+    assert not window.pdf_view.isVisible()
+    assert window.project == before
+    assert window.notes.selected_rows() == [4, 5, 6, 7]
+    assert window.notes.currentRow() == 5
+    controls = [window.save_button, window.notes, window.input_mode,
+                window.duration, window.staff, *window.measure_controls]
+    for control in controls:
+        for scroll in window.findChildren(QScrollArea):
+            if scroll.widget() and scroll.widget().isAncestorOf(control):
+                scroll.ensureWidgetVisible(control)
         QApplication.processEvents()
-        assert (window.width(), window.height()) == size
-        assert window.editor_container.isVisible()
-        assert window.notes.isVisible()
-        assert window.photo_scroll.isVisible() is (mode == "photo")
-        assert not window.pdf_view.isVisible()
-        assert window.project == before
-        assert window.notes.selected_rows() == [4, 5, 6, 7]
-        assert window.notes.currentRow() == 5
-        controls = [window.workspace_view, window.save_button, window.notes, window.input_mode,
-                    window.duration, window.staff, *window.measure_controls]
-        for control in controls:
-            for scroll in window.findChildren(QScrollArea):
-                if scroll.widget() and scroll.widget().isAncestorOf(control):
-                    scroll.ensureWidgetVisible(control)
-            QApplication.processEvents()
-            target = window.childAt(control.mapTo(window, control.rect().center()))
-            assert control.isVisible()
-            assert target is control or control.isAncestorOf(target)
+        target = window.childAt(control.mapTo(window, control.rect().center()))
+        assert control.isVisible()
+        assert target is control or control.isAncestorOf(target)
     window.show_print_preview()
     QApplication.processEvents()
     assert window.pdf_view.isVisible()

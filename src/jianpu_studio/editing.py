@@ -21,12 +21,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .model import DURATIONS, MAX_FILE_BYTES, Note
+from . import __version__
+from .model import DURATIONS, MAX_FILE_BYTES, TICKS_PER_QUARTER, Note
+from .notation_actions import NotationActions
 
 NOTE_MIME = "application/x-jianpu-studio-notes"
 
 
-class EditActions:
+class EditActions(NotationActions):
     def eventFilter(self, watched, event):
         if watched is getattr(self, "source", None) and event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
             for key, action in ((QKeySequence.StandardKey.Undo, self.undo), (QKeySequence.StandardKey.Redo, self.redo)):
@@ -57,8 +59,13 @@ class EditActions:
         try:
             operation(project)
             project.score.validate()
+            self.validate_tuplet_edit(project.score)
+            if self.project.score.notation_error() is None:
+                if error := project.score.notation_error():
+                    raise ValueError(error)
         except (ValueError, TypeError) as exc:
             self.error("無法套用這項修改", exc)
+            self.sync(selection=before[1], current=before[2])
             return False
         if project == self.project:
             return False
@@ -124,12 +131,12 @@ class EditActions:
             self.notes.set_score(score)
             self.notes.select_rows(selection, current)
             error = score.rhythm_error() or score.notation_error()
-            bars = max(1, (sum(n.ticks for n in score.notes) + int(score.bar_length*16)-1) // int(score.bar_length*16))
+            bars = max(1, (sum(n.ticks for n in score.notes) + int(score.bar_length*TICKS_PER_QUARTER)-1) // int(score.bar_length*TICKS_PER_QUARTER))
             self.bar_jump.setMaximum(bars)
             self.rhythm_label.setText(error or f"{len(score.notes)} 個音符 · {bars} 小節 · 拍數完整")
             self.problem_button.setVisible(bool(error))
             title = score.title or "未命名樂曲"
-            self.setWindowTitle(f"{'● ' if self.dirty else ''}{title} — 簡譜工房")
+            self.setWindowTitle(f"{'● ' if self.dirty else ''}{title} — 簡譜工房 {__version__}")
             for control in (self.undo_action, self.undo_button):
                 control.setEnabled(bool(self.history))
             for control in (self.redo_action, self.redo_button):
@@ -200,7 +207,7 @@ class EditActions:
         else:
             position = {"after": "所選之後", "before": "所選之前", "end": "曲尾"}[self.insert_position.currentData()]
             note = self.next_note
-            pitch = ("休止 0" if note.degree == 0 else {"": "", "#": "♯", "b": "♭"}[note.accidental] + str(note.degree))
+            pitch = ("休止 0" if note.degree == 0 else {"": "", "#": "♯", "b": "♭", "n": "♮"}[note.accidental] + str(note.degree))
             octave = {-2: "低兩八度", -1: "低八度", 0: "", 1: "高八度", 2: "高兩八度"}[note.octave]
             text = f"新增模式 · 下一個：{pitch}{'（'+octave+'）' if octave else ''} · {note.beats} 拍 · 插在{position if rows else '曲尾'}"
         self.selection_label.setText(text)
@@ -217,7 +224,7 @@ class EditActions:
     def replace_note(note, changes):
         changes = dict(changes)
         if changes.get("degree", note.degree) == 0:
-            changes.update(octave=0, accidental="", finger=-1, bow="", slide="", slur_start=False, slur_end=False, tie=False)
+            changes.update(octave=0, accidental="", finger=-1, bow="", slide="", slur_start=False, slur_end=False, tie=False, grace_before="", grace_after="")
         return replace(note, **changes)
 
     def edit_property(self, name, value):
@@ -268,7 +275,7 @@ class EditActions:
 
     def delete_note(self):
         rows = self.notes.selected_rows()
-        if not rows:
+        if not rows or not self.require_complete_tuplets(rows):
             return
         next_row = min(rows[0], len(self.project.score.notes)-len(rows)-1)
         def delete(project):
@@ -277,6 +284,8 @@ class EditActions:
         self.mutate(delete, selection=[next_row] if next_row >= 0 else [], current=next_row)
 
     def copy_notes(self):
+        if not self.require_complete_tuplets(self.notes.selected_rows()):
+            return False
         notes = [self.project.score.notes[r] for r in self.notes.selected_rows()]
         if not notes:
             return False
@@ -329,6 +338,8 @@ class EditActions:
         elif command == "delete":
             self.delete_note()
         elif command == "duplicate":
+            if not self.require_complete_tuplets(self.notes.selected_rows()):
+                return
             self.insert_notes([self.project.score.notes[r] for r in self.notes.selected_rows()])
         elif command == "clear":
             self.notes.select_rows([])
@@ -367,7 +378,9 @@ class EditActions:
             item = menu.addAction(title, lambda c=command: self.note_command(c))
             item.setEnabled(command == "paste" or bool(self.notes.selected_rows()))
         menu.addSeparator()
-        menu.addAction("二胡 / 記號…", self.notation_settings)
+        marks = self.notation_menu()
+        marks.setTitle("基本記號 / 二胡")
+        menu.addMenu(marks)
         menu.exec(self.notes.viewport().mapToGlobal(position))
 
     def selected_measures(self):
@@ -530,18 +543,15 @@ class EditActions:
         self.metadata_button.setEnabled(True)
         self.autopreview.stop()
         self.workspace_view.blockSignals(True)
-        self.workspace_view.setCurrentIndex(index)
+        self.workspace_view.setCurrentIndex(0)
         self.workspace_view.blockSignals(False)
-        photo = self.workspace_view.currentData() == "photo"
         self.editor_container.show()
-        self.preview_panel.setVisible(photo)
-        self.preview_tabs.setCurrentIndex(1)
-        self.preview_heading.setText("原圖對照")
+        self.preview_panel.hide()
+        self.preview_tabs.setCurrentIndex(0)
+        self.preview_heading.setText("列印預覽")
         self.auto_check.hide()
         self.preview_button.hide()
         self.preview_status.hide()
-        if photo:
-            self.split.setSizes([800, 550])
 
     def show_print_preview(self):
         self.print_preview_active = True
@@ -562,7 +572,7 @@ class EditActions:
         dialog.setWindowTitle("作業訊息")
         dialog.resize(720, 460)
         layout = QVBoxLayout(dialog)
-        text = QPlainTextEdit(self.log.toPlainText() or "目前沒有排版或辨識紀錄。")
+        text = QPlainTextEdit(self.log.toPlainText() or "目前沒有排版紀錄。")
         text.setReadOnly(True)
         layout.addWidget(text)
         copy = QPushButton("複製完整紀錄")
@@ -619,76 +629,6 @@ class EditActions:
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
-
-    def notation_settings(self):
-        rows = self.notes.selected_rows()
-        editing = self.input_mode.currentData() == "edit"
-        if editing and not rows:
-            self.statusBar().showMessage("請先選取要標記的音符。", 5000)
-            return
-        dialog = QDialog(self)
-        dialog.setWindowTitle("二胡 / 演奏記號")
-        layout = QVBoxLayout(dialog)
-        hint = QLabel(f"套用到所選 {len(rows)} 個音符；保持原樣會保留各音符差異。" if editing else "設定下一個新增音符的記號。範圍連線請切到修改模式後選取音符。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        form, controls = QFormLayout(), {}
-        options = {
-            "finger": ("指法", [("無", -1), ("空弦 0", 0)] + [(f"{i} 指", i) for i in range(1, 5)]),
-            "bow": ("弓法", [("無", ""), ("推弓 ∨", "upbow"), ("拉弓 Π", "downbow")]),
-            "dynamic": ("力度", [("無", "")] + [(s, s) for s in ("pp", "p", "mp", "mf", "f", "ff", "sfz")]),
-            "articulation": ("演奏法", [("無", ""), ("跳音", "staccato"), ("保持音", "tenuto"), ("重音", "accent"), ("延長", "fermata"), ("顫音", "trill"), ("波音", "mordent")]),
-            "slide": ("滑音", [("無", ""), ("上滑音", "up"), ("下滑音", "down")]),
-        }
-        for name, (title, choices) in options.items():
-            control = QComboBox()
-            control.addItem("保持原樣", None)
-            for text, value in choices:
-                control.addItem(text, value)
-            if not editing:
-                control.setCurrentIndex(control.findData(getattr(self.next_note, name)))
-            form.addRow(title, control)
-            controls[name] = control
-        range_controls = {}
-        if editing:
-            for name, title in (("slur", "連弓線"), ("tie", "延音線"), ("repeat", "反覆段落")):
-                control = QComboBox()
-                for text, value in (("保持原樣", "keep"), ("加入所選範圍", "add"), ("移除所選記號", "remove")):
-                    control.addItem(text, value)
-                form.addRow(title, control)
-                range_controls[name] = control
-        layout.addLayout(form)
-        self.dialog_buttons(dialog, layout)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        changes = {name: control.currentData() for name, control in controls.items() if control.currentData() is not None}
-        if not editing:
-            self.next_note = self.replace_note(self.next_note, changes)
-            self.update_selection()
-            return
-        ranges = {name: control.currentData() for name, control in range_controls.items()}
-        def update(project):
-            for row in rows:
-                project.score.notes[row] = self.replace_note(project.score.notes[row], changes)
-            for name, action in ranges.items():
-                if action == "keep":
-                    continue
-                if action == "add" and (rows != list(range(rows[0], rows[-1]+1)) or (name != "repeat" and len(rows) < 2)):
-                    raise ValueError("連弓與延音需選取至少兩個連續音符；反覆需選取連續的完整小節。")
-                for row in rows:
-                    marks = {"slur_start": False, "slur_end": False} if name == "slur" else {"tie": False} if name == "tie" else {"repeat_start": False, "repeat_end": False}
-                    if action == "add":
-                        if name == "slur":
-                            marks = {"slur_start": row == rows[0], "slur_end": row == rows[-1]}
-                        elif name == "tie":
-                            marks = {"tie": row != rows[-1]}
-                        else:
-                            marks = {"repeat_start": row == rows[0], "repeat_end": row == rows[-1]}
-                    project.score.notes[row] = replace(project.score.notes[row], **marks)
-            if any(action == "add" for action in ranges.values()):
-                if error := project.score.notation_error():
-                    raise ValueError(error)
-        self.mutate(update)
 
     def source_snippets(self):
         menu = QMenu(self)

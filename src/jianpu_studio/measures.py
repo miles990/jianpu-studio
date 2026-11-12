@@ -9,10 +9,12 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Iterable
 
-from .model import DURATIONS, Note, Score
+from .model import DURATIONS, TICKS_PER_QUARTER, Note, Score
 
 MAX_NOTES = 10000
-_CONNECTIONS = ("slur_start", "slur_end", "tie", "repeat_start", "repeat_end")
+_CONNECTION_DEFAULTS = {"slur_start": False, "slur_end": False, "tie": False,
+                        "repeat_start": False, "repeat_end": False, "hairpin": "", "hairpin_end": False}
+_CONNECTIONS = tuple(_CONNECTION_DEFAULTS)
 # A source identity is (copy generation, original note row). New rests/notes
 # have no source identity, even if their pitch happens to match a removed note.
 Origin = tuple[int, int] | None
@@ -30,7 +32,7 @@ class MeasureEdit:
 def measure_ranges(score: Score) -> list[tuple[int, int]]:
     """Return note ranges, permitting only an unfinished *last* measure."""
     score.validate()
-    bar_ticks = int(score.bar_length * 16)
+    bar_ticks = int(score.bar_length * TICKS_PER_QUARTER)
     ranges, start, position = [], 0, 0
     for row, note in enumerate(score.notes):
         if position % bar_ticks + note.ticks > bar_ticks:
@@ -83,7 +85,7 @@ def _bar_selection(indices: Iterable[int], count: int) -> list[int]:
 
 def _spans(notes: list[Note]):
     """Pair validated original marks; a continued slur can end and begin here."""
-    slur = repeat = None
+    slur = repeat = hairpin = None
     for row, note in enumerate(notes):
         if note.slur_end:
             yield slur, row, "slur_start", "slur_end"
@@ -97,6 +99,11 @@ def _spans(notes: list[Note]):
         if note.repeat_end:
             yield repeat, row, "repeat_start", "repeat_end"
             repeat = None
+        if note.hairpin_end:
+            yield hairpin, row, "hairpin", "hairpin_end"
+            hairpin = None
+        if note.hairpin:
+            hairpin = row
 
 
 def _finish(score: Score, entries: list[Entry], selection=(), current=None) -> MeasureEdit:
@@ -111,7 +118,7 @@ def _finish(score: Score, entries: list[Entry], selection=(), current=None) -> M
         consecutive = (origin is not None and previous is not None
                        and origin == (previous[0], previous[1]+1))
         run_starts.append(run_starts[-1] if consecutive else row)
-    notes = [replace(note, **dict.fromkeys(_CONNECTIONS, False))
+    notes = [replace(note, **_CONNECTION_DEFAULTS)
              if any(getattr(note, field) for field in _CONNECTIONS) else note for note, _ in entries]
     preserved = 0
     for start, end, start_field, end_field in _spans(score.notes):
@@ -121,7 +128,7 @@ def _finish(score: Score, entries: list[Entry], selection=(), current=None) -> M
             # deleted tie from accidentally joining a new, equal-pitch neighbor.
             if first is None or last is None or run_starts[last] > first or last-first != end-start:
                 continue
-            notes[first] = replace(notes[first], **{start_field: True})
+            notes[first] = replace(notes[first], **{start_field: getattr(score.notes[start], start_field)})
             preserved += 1
             if end_field:
                 notes[last] = replace(notes[last], **{end_field: True})
@@ -133,12 +140,12 @@ def _finish(score: Score, entries: list[Entry], selection=(), current=None) -> M
         raise ValueError("這項小節修改無法安全保留原有記號：" + error)
     selection = tuple(selection)
     current = selection[0] if current is None and selection else -1 if current is None else current
-    notice = f"已移除 {dropped} 個受影響的連線或反覆記號，可用復原還原。" if dropped else ""
+    notice = f"已移除 {dropped} 個受影響的連線、漸強弱或反覆記號，可用復原還原。" if dropped else ""
     return MeasureEdit(notes, selection, current, notice)
 
 
 def _complete_tail(score: Score, entries: list[Entry]) -> None:
-    missing = (-sum(note.ticks for note in score.notes)) % int(score.bar_length * 16)
+    missing = (-sum(note.ticks for note in score.notes)) % int(score.bar_length * TICKS_PER_QUARTER)
     entries.extend((rest, None) for rest in _rests(missing))
 
 
@@ -153,7 +160,7 @@ def insert_measures(score: Score, at_bar: int, count: int = 1) -> MeasureEdit:
         raise ValueError("新增小節的位置不存在。")
     if type(count) is not int or count < 1:
         raise ValueError("新增小節數須為正整數。")
-    rests = _rests(int(score.bar_length * 16))
+    rests = _rests(int(score.bar_length * TICKS_PER_QUARTER))
     if len(entries) + count*len(rests) > MAX_NOTES:
         raise ValueError("音符太多（上限 10,000）；請減少新增的小節數。")
     if at_bar == len(ranges):
@@ -184,7 +191,7 @@ def clear_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
     """Keep selected measure positions and replace their contents with rests."""
     ranges, entries = _context(score)
     selected = set(_bar_selection(bar_indices, len(ranges)))
-    rests = _rests(int(score.bar_length * 16))
+    rests = _rests(int(score.bar_length * TICKS_PER_QUARTER))
     result, selection = [], []
     for bar, (start, end) in enumerate(ranges):
         if bar in selected:
@@ -231,6 +238,13 @@ def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
         raise ValueError("填入音符只會覆寫休止符；請選取休止符或切換到修改音符。")
     if any(getattr(note, field) for field in _CONNECTIONS):
         raise ValueError("請先填入音符，再選取範圍加入連線或反覆記號。")
+    previous = score.notes[row]
+    if previous.tuplet:
+        if note.duration != previous.duration or note.dotted:
+            raise ValueError("填入三連音休止符時須保持原時值；請選取完整三連音群組調整時值。")
+        note = replace(note, tuplet=previous.tuplet, tuplet_start=previous.tuplet_start, tuplet_end=previous.tuplet_end)
+    elif note.tuplet:
+        raise ValueError("請先填入音符，再選取完整的三個音符設定三連音。")
     _, bar_end = next((start, end) for start, end in ranges if start <= row < end)
     consumed, end, remainder = 0, row, None
     while end < bar_end and score.notes[end].degree == 0:
@@ -244,16 +258,15 @@ def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
                 remainder = _rests(consumed-note.ticks)
                 break
             except ValueError:
-                # A one-tick remainder may become representable after another
+                # A too-short remainder may become representable after another
                 # rest, e.g. replacing a dotted 32nd plus 32nd with a 32nd.
                 continue
     if remainder is None:
         if consumed >= note.ticks:
             raise ValueError("剩餘拍數無法用目前支援的休止符表示；請調整附點或時值。")
         raise ValueError("這個音符超過同小節內可用的連續休止拍數；不會覆蓋已有音符或推移後續小節。")
-    previous = score.notes[row]
     note = replace(note, dynamic=note.dynamic or previous.dynamic, articulation=note.articulation or previous.articulation)
-    unchanged = end == row+1 and not remainder and note == replace(previous, **dict.fromkeys(_CONNECTIONS, False))
+    unchanged = end == row+1 and not remainder and note == replace(previous, **_CONNECTION_DEFAULTS)
     # Entering the same rest is a no-op, including its existing bar repeat.
     # Connection flags are not input attributes and must not make it an edit.
     if unchanged:

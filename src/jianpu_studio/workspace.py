@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .model import DURATIONS, KEYS, METERS
 from .score_view import NoteList
 
@@ -35,21 +36,34 @@ def build_workspace(self, label, button):
     root.setContentsMargins(12, 8, 12, 8)
     root.setSpacing(8)
     header = QHBoxLayout()
+    header.setSpacing(4)
     header.addWidget(label("簡譜工房", "brand"))
-    header.addSpacing(12)
-    for text, fn in (("新建", self.new_project), ("開啟", self.open_file), ("照片辨識", self.import_photo)):
+    header.addSpacing(6)
+    for text, fn in (("新建", self.new_project), ("開啟", self.open_file)):
         header.addWidget(button(text, fn))
     self.undo_button = button("↶ 復原", self.undo)
     self.redo_button = button("↷ 重做", self.redo)
     header.addWidget(self.undo_button)
     header.addWidget(self.redo_button)
+    self.workspace_view = QComboBox(self)
+    self.workspace_view.addItem("編輯樂譜", "score")
+    self.workspace_view.hide()
+    self.metadata_button = button("樂曲設定", lambda checked: self.score_settings.setVisible(checked))
+    self.metadata_button.setCheckable(True)
+    self.metadata_button.setToolTip("顯示曲名、來源、調號、拍號與速度；直接在下方譜面閱讀與編輯。")
+    header.addWidget(self.metadata_button)
+    self.mode_button = button("進階語法", self.switch_mode)
+    header.addWidget(self.mode_button)
     header.addStretch()
+    self.play_button = button("▶ 試聽", self.play_midi)
+    self.play_button.setToolTip("Enter 試聽 / 停止（音符區內）")
+    header.addWidget(self.play_button)
     self.save_button = button("儲存", self.save)
     header.addWidget(self.save_button)
     self.export_button = QPushButton("匯出 / 列印")
     self.export_button.setObjectName("primary")
     menu = QMenu(self)
-    for text, kind in (("PDF 樂譜…", "pdf"), ("MIDI 音樂…", "midi"), ("簡譜文字 .jly…", "jly"), ("LilyPond…", "ly"), ("辨識結果 MusicXML…", "musicxml")):
+    for text, kind in (("PDF 樂譜…", "pdf"), ("MIDI 音樂…", "midi"), ("簡譜文字 .jly…", "jly"), ("LilyPond…", "ly")):
         menu.addAction(text, lambda k=kind: self.export(k))
     menu.addSeparator()
     menu.addAction("列印預覽…", self.show_print_preview)
@@ -57,24 +71,6 @@ def build_workspace(self, label, button):
     self.export_button.setMenu(menu)
     header.addWidget(self.export_button)
     root.addLayout(header)
-
-    views = QHBoxLayout()
-    views.addWidget(label("畫面"))
-    self.workspace_view = QComboBox()
-    for text, value in (("編輯樂譜", "score"), ("原圖對照", "photo")):
-        self.workspace_view.addItem(text, value)
-    views.addWidget(self.workspace_view)
-    self.metadata_button = button("樂曲設定", lambda checked: self.score_settings.setVisible(checked))
-    self.metadata_button.setCheckable(True)
-    views.addWidget(self.metadata_button)
-    self.mode_button = button("進階語法", self.switch_mode)
-    views.addWidget(self.mode_button)
-    views.addWidget(label("直接在同一張譜閱讀與編輯；列印與 PDF 請用「匯出 / 列印」。", "muted", True), 1)
-    self.play_button = button("▶ 試聽", self.play_midi)
-    self.play_button.setToolTip("Enter 試聽 / 停止（音符區內）")
-    views.addWidget(self.play_button)
-    views.addWidget(button("快捷鍵", self.show_help))
-    root.addLayout(views)
 
     self.split = QSplitter(Qt.Orientation.Horizontal)
     self.split.setChildrenCollapsible(False)
@@ -151,6 +147,8 @@ def build_workspace(self, label, button):
     row.addWidget(self.score_zoom)
     vis.addLayout(row)
     row = QHBoxLayout()
+    row.setSpacing(4)
+    measure_row = row
     self.add_bar_button = QToolButton()
     self.add_bar_button.setText("＋新增小節")
     self.add_bar_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
@@ -168,22 +166,27 @@ def build_workspace(self, label, button):
         control.setToolTip(hint)
         row.addWidget(control)
         self.measure_controls.append(control)
-    row.addStretch()
+    row.addSpacing(8)
     vis.addLayout(row)
     self.measure_selection = label("點小節號選取整小節", "muted", True)
     self.measure_notice = label("", "notice", True)
     self.measure_notice.hide()
     vis.addWidget(self.measure_notice)
     row = QHBoxLayout()
+    row.setSpacing(4)
+    input_row = row
     self.pitch_buttons = []
     for degree in (1, 2, 3, 4, 5, 6, 7, 0):
         b = button(str(degree), lambda _, d=degree: self.input_pitch(d), "pitch")
+        b.setFixedWidth(38)
+        b.setStyleSheet("padding: 4px 3px; min-width: 24px; font-size: 20px;")
         b.setToolTip(f"數字鍵 {degree} · {'休止符' if degree == 0 else '音符'}")
         self.pitch_buttons.append(b)
         row.addWidget(b)
     vis.addLayout(row)
 
     self.notes = NoteList()
+    self.notes.setMinimumHeight(302)
     self.notes.pitch.connect(self.input_pitch)
     self.notes.delete.connect(self.delete_note)
     self.notes.currentRowChanged.connect(self.select_note)
@@ -193,7 +196,7 @@ def build_workspace(self, label, button):
     self.notes.customContextMenuRequested.connect(self.note_menu)
     self.score_zoom.currentIndexChanged.connect(lambda: self.notes.set_zoom(self.score_zoom.currentData()))
     self.selection_label = label("", "selection", True)
-    row = QHBoxLayout()
+    row = input_row
     self.degree = QComboBox()
     for value in range(8):
         self.degree.addItem("休止 0" if value == 0 else f"音高 {value}", value)
@@ -207,7 +210,7 @@ def build_workspace(self, label, button):
         self.octave.addItem(text, value)
     self.octave.setCurrentIndex(2)
     self.accidental = QComboBox()
-    for text, value in (("無升降", ""), ("升 ♯", "#"), ("降 ♭", "b")):
+    for text, value in (("無升降", ""), ("升 ♯", "#"), ("降 ♭", "b"), ("還原 ♮", "n")):
         self.accidental.addItem(text, value)
     self.dotted = QCheckBox("附點")
     for field, widget in (("degree", self.degree), ("duration", self.duration), ("octave", self.octave), ("accidental", self.accidental)):
@@ -218,8 +221,7 @@ def build_workspace(self, label, button):
         row.addWidget(widget)
     self.dotted.checkStateChanged.connect(lambda state: self.edit_property("dotted", state == Qt.CheckState.Checked) if state != Qt.CheckState.PartiallyChecked else None)
     row.addWidget(self.dotted)
-    vis.addLayout(row)
-    row = QHBoxLayout()
+    row = measure_row
     self.selection_buttons = []
     for text, command in (("剪下", "cut"), ("複製", "copy"), ("貼上", "paste"), ("重複", "duplicate"), ("刪除", "delete")):
         b = button(text, lambda _, c=command: self.note_command(c))
@@ -227,12 +229,19 @@ def build_workspace(self, label, button):
         if command != "paste":
             self.selection_buttons.append(b)
     row.addStretch()
-    row.addWidget(button("二胡 / 記號", self.notation_settings))
-    vis.addLayout(row)
+    self.notation_button = QToolButton()
+    self.notation_button.setText("記號 / 二胡")
+    self.notation_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+    self.notation_button.setToolTip("主按鈕開啟所有記號；箭頭可快速加入三連音、連線、延長、漸強弱。")
+    self.notation_button.clicked.connect(self.notation_settings)
+    self.notation_button.setMenu(self.notation_menu())
+    row.addWidget(self.notation_button)
+    row.addWidget(button("快捷鍵", self.show_help))
     vis.addWidget(self.notes, 1)
     row = QHBoxLayout()
+    rhythm_row = row
     self.rhythm_label = label("", "muted", True)
-    row.addWidget(self.rhythm_label, 1)
+    row.addWidget(self.rhythm_label)
     self.problem_button = button("定位問題", self.goto_problem)
     row.addWidget(self.problem_button)
     row.addWidget(button("補齊休止符", self.fill_bar))
@@ -242,10 +251,9 @@ def build_workspace(self, label, button):
     self.lyrics.editingFinished.connect(self.capture_fields)
     self.staff = QCheckBox("五線譜對照")
     self.staff.toggled.connect(self.capture_fields)
-    row = QHBoxLayout()
+    row = rhythm_row
     row.addWidget(self.lyrics, 1)
     row.addWidget(self.staff)
-    vis.addLayout(row)
     self.editor_stack.addWidget(visual)
     advanced = QWidget()
     advanced_layout = QVBoxLayout(advanced)
@@ -324,6 +332,7 @@ def build_workspace(self, label, button):
     self.photo_scroll.setWidget(self.photo_label)
     photo_layout.addWidget(self.photo_scroll, 1)
     self.preview_tabs.addTab(photo_page, "原圖校對")
+    self.preview_tabs.setTabVisible(1, False)
     log_page = QWidget()
     log_layout = QVBoxLayout(log_page)
     self.log = QPlainTextEdit()
@@ -351,5 +360,10 @@ def build_workspace(self, label, button):
     self.cancel_button = button("取消作業", self.cancel_task)
     self.cancel_button.hide()
     self.statusBar().addPermanentWidget(self.cancel_button)
+    self.version_label = label(f"版本 {__version__}", "muted")
+    self.version_label.setObjectName("current_version")
+    self.version_label.setAccessibleName(f"目前版本 {__version__}")
+    self.version_label.setToolTip("說明 → 檢查更新，可安裝新的正式版本。")
+    self.statusBar().addPermanentWidget(self.version_label)
     self.statusBar().showMessage("就緒 · 離線編輯")
     self.change_workspace(0)

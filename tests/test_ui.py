@@ -280,7 +280,7 @@ def test_workspace_controls_reachable_at_supported_sizes(window, size):
     QApplication.processEvents()
     assert (window.width(), window.height()) == size
     for control in (window.notes, window.pitch_buttons[0], window.duration,
-                    window.staff, window.workspace_view, window.save_button):
+                    window.staff, window.notation_button, window.version_label, window.save_button):
         for scroll in window.findChildren(QScrollArea):
             if scroll.widget() and scroll.widget().isAncestorOf(control):
                 scroll.ensureWidgetVisible(control)

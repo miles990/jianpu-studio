@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSize, QTimer
 from PySide6.QtGui import QPainter, QPdfWriter
 from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
@@ -89,6 +89,28 @@ def test_disabling_auto_keeps_manual_pdf_export_queued(output_window, qtbot, tmp
     assert destination.read_bytes() == state.pdf_bytes
     assert dialogs == [True]
     assert window.output_request is None
+    assert state.errors == []
+
+
+def test_pdf_preview_keeps_working_after_source_removed_and_closes_cleanly(output_window, qtbot):
+    state = output_window
+    window = state.window
+    window.show_print_preview()
+    qtbot.waitUntil(lambda: len(state.jobs) == 1)
+    state.jobs[0].release.set()
+    qtbot.waitUntil(lambda: window.task is None and window.pdf_document.pageCount() == 1)
+    work_directory = window.work
+    source = window.result.pdf
+    assert source.is_file()
+
+    # This fails with WinError 32 if Qt still has the job's PDF open on Windows.
+    source.unlink()
+    assert not source.exists()
+    assert window.pdf_document.pageCount() == 1
+    assert "Output regression" in window.pdf_document.getAllText(0).text()
+    assert not window.pdf_document.render(0, QSize(600, 850)).isNull()
+    assert window.close()
+    assert not work_directory.exists()
     assert state.errors == []
 
 
