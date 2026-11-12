@@ -14,7 +14,12 @@ def patch_launcher(executable: Path):
         write_manifest_to_executable,
     )
 
-    document = xml.dom.minidom.parseString(read_manifest_from_executable(str(executable)))
+    resource = read_manifest_from_executable(str(executable))
+    # PyInstaller's fallback for a non-neutral resource language returns
+    # (language_id, bytes), while LANG_NEUTRAL returns bytes directly.
+    if isinstance(resource, tuple):
+        resource = resource[1]
+    document = xml.dom.minidom.parseString(resource.rstrip(b"\0"))
     assembly_ns = "urn:schemas-microsoft-com:asm.v3"
     setting_ns = "http://schemas.microsoft.com/SMI/2019/WindowsSettings"
     applications = document.getElementsByTagNameNS(assembly_ns, "application")
