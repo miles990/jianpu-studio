@@ -63,3 +63,11 @@ After reviewing CI, tag `v0.1.1` and push the tag. The workflow rebuilds and tes
 - UI 改動驗證真實操作、不同視窗尺寸與截圖；效能主張附環境、測量方法與原始結果，不用單一時限測試取代量測。
 
 這些流程參考 [DORA 的 trunk-based development](https://dora.dev/capabilities/trunk-based-development/)、[小批次交付](https://dora.dev/capabilities/working-in-small-batches/) 與 [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)，並依本專案的 Windows 安裝、離線引擎與一般使用者需求調整。
+
+## AI 協作方式
+
+`AGENTS.md` 保留短而穩定的專案規則；README 描述使用者契約，研究、驗證與架構各有獨立文件。每個並行任務指定輸入、輸出、檔案範圍及驗收，整合者統一處理 Git 與版本發布。高風險處（例如更新與背景工作）增加獨立審查；審查發現必須回到可重現測試或具體修正。
+
+完成回報需附實際測試、畫面或產物證據；未完成能力留在明確的版本範圍中。優先消除反覆卡住的環境或流程問題，而不是靠更長的提示重複嘗試。
+
+參考：[OpenAI Harness engineering](https://openai.com/index/harness-engineering/)、[Codex 工作流迭代](https://developers.openai.com/cookbook/examples/codex/iterating-development-workflows-with-codex)。本專案保留使用者要求的 trunk-based 與自主交付，不額外引入逐步人工核准。
