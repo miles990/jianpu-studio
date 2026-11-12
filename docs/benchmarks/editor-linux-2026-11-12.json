@@ -1,0 +1,54 @@
+{
+  "timestamp_utc": "2026-11-12T05:33:15.453062+00:00",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "machine": "x86_64",
+  "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+  "pyside": "6.8.3",
+  "qt": "6.8.3",
+  "commit": "1fbac848766160f06f53599941c222be4f18d51d",
+  "working_tree_dirty": true,
+  "qt_platform": "offscreen",
+  "qt_scale_factor": "1",
+  "window_size": [
+    1380,
+    850
+  ],
+  "method": "[Note(1)] * count; select middle note; change pitch inspector; time edit plus QApplication.processEvents; render_score stubbed; setup excluded; no wall-time assertions",
+  "measurements": [
+    {
+      "note_count": 1000,
+      "repetitions": 5,
+      "milliseconds": [
+        9.160435,
+        7.200224,
+        8.751392,
+        7.886183,
+        7.276475
+      ],
+      "median_ms": 7.886183,
+      "min_ms": 7.200224,
+      "max_ms": 9.160435,
+      "history_snapshots": 5,
+      "history_and_current_note_list_bytes": 48336,
+      "history_and_current_unique_notes": 6
+    },
+    {
+      "note_count": 10000,
+      "repetitions": 5,
+      "milliseconds": [
+        67.172888,
+        56.657452,
+        54.90298,
+        53.456425,
+        70.878944
+      ],
+      "median_ms": 56.657452,
+      "min_ms": 53.456425,
+      "max_ms": 70.878944,
+      "history_snapshots": 5,
+      "history_and_current_note_list_bytes": 480336,
+      "history_and_current_unique_notes": 6
+    }
+  ],
+  "memory_note": "Note-list bytes use sys.getsizeof and include list references only; they exclude Note objects, project metadata, and native Qt allocations."
+}

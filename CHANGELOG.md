@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+- Replace the card-based editor with a measure-based score view, compact workspace controls, score zoom, bar navigation, and focused editing, preview, and photo-review views.
+- Add explicit insert/edit modes, before/after/end insertion, multi-selection, measure selection, copy/cut/paste/duplicate, and selection-aware undo/redo.
+- Apply property edits directly while preserving other mixed values; add EOP-style numeric entry, Space mode switching, Q/W/E/R/A/S durations, and Enter playback.
+- Add visual erhu fingering, bowing, slides, dynamics, articulations, slurs, same-pitch ties, and complete-measure repeats with notation checks.
+- Add A4/Letter paper settings, score sizes 16–30, and automatic or 1–8 measures per line.
+- Keep editing available during PDF rendering, render changed scores before playback, and add photo zoom and a separate diagnostics tab.
+- Add advanced-source snippets for pickups, tuplets, grace notes, slurs, repeats, line breaks, and additional parts; these remain source-editing workflows.
+- Refresh the Traditional Chinese README and user guide; generate readable offline HTML with semantic lists, tables, and code blocks without third-party runtime dependencies.
+
 ## 0.1.3
 
 - Add in-app stable-release checks, cancellable downloads, size/SHA-256 verification, and updates to the existing Windows installation scope and directory.

@@ -28,6 +28,7 @@ jobs:
       - run: python scripts/fetch_runtime.py --platform linux
       - run: ruff check src tests scripts
       - run: python scripts/check_version.py
+      - run: python scripts/render_docs.py --check
       - run: pytest -q --junitxml=work/tests.xml
         env:
           QT_QPA_PLATFORM: offscreen
