@@ -50,3 +50,16 @@ The one-folder bundle permits replacing Qt/PySide dynamic libraries. App updates
 ## Release
 
 After reviewing CI, tag `v0.1.1` and push the tag. The workflow rebuilds and tests the exact tagged code, then publishes the installer, portable archive and SHA-256 manifest. Main-branch builds are downloadable as Actions artifacts. Keep version numbers in `pyproject.toml`, `__init__.py`, `installer.iss`, and the workflow artifact names aligned. For upstream updates, update the lock file, licenses/source references, regression tests and fixture validation together.
+
+## 開發與發佈流程（trunk-based）
+
+主線為 `main`，採小批次、可驗證變更；不維護長期功能分支。並行工作先分配檔案所有權，依賴介面先協調，完成的小目標各自測試後由整合者提交、推送。
+
+- `main`／PR：Linux 與 Windows 測試並行；同一分支有新提交時取消過期檢查。文件提交仍可檢查一致性，但不重複壓縮安裝包。
+- 版本 tag／手動完整建置：執行凍結後 GUI、真實 LilyPond、一般與低解析度 OMR、中文路徑、安裝及移除，再產生 ZIP、Setup 與 SHA-256。
+- 版本一致性先檢查：Python、pyproject、Inno Setup 與 tag 必須一致。正式 tag 不移動、不覆寫已發布的版本。
+- Release 只發布該次完整驗證的同一組成品，不另行重建未測的安裝檔。主線測試與 Windows 打包都必須成功。
+- 每個版本先定可驗收範圍；阻礙該範圍的錯誤在當版修正，其餘能力列入後續版本，README 不標示為已完成。
+- UI 改動驗證真實操作、不同視窗尺寸與截圖；效能主張附環境、測量方法與原始結果，不用單一時限測試取代量測。
+
+這些流程參考 [DORA 的 trunk-based development](https://dora.dev/capabilities/trunk-based-development/)、[小批次交付](https://dora.dev/capabilities/working-in-small-batches/) 與 [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)，並依本專案的 Windows 安裝、離線引擎與一般使用者需求調整。
