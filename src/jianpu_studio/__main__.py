@@ -45,6 +45,13 @@ def main() -> int:
                     app.exit(2)
                     return
                 (output / "ui-test.txt").write_text("Frozen GUI rendered demo PDF successfully.\n", encoding="utf-8")
+                import json
+
+                from .updates import installed_target
+                target = installed_target(app_root())
+                (output / "update-target.json").write_text(json.dumps(
+                    {"directory": str(target.directory), "scope": target.scope} if target else None,
+                    ensure_ascii=False), encoding="utf-8")
                 window.dirty = False
                 window.close()
                 app.exit(0)

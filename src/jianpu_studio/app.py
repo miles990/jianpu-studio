@@ -101,6 +101,9 @@ class MainWindow(QMainWindow):
         self.project = demo_project()
         self.path: Path | None = None
         self.dirty = False
+        self.updating = False
+        self.update_preparing = False
+        self.close_preparing = False
         self.loading = False
         self.history: list[dict] = []
         self.future: list[dict] = []
@@ -159,6 +162,7 @@ class MainWindow(QMainWindow):
         nav.addWidget(button("範例：小星星", self.load_demo))
         nav.addWidget(button("工具與環境設定", self.tool_settings))
         nav.addWidget(button("操作說明", self.show_help))
+        nav.addWidget(button("檢查更新", self.check_updates))
         nav.addSpacing(10)
         nav.addWidget(label(f"v{__version__}  ·  離線創作"))
         root.addWidget(sidebar)
@@ -381,6 +385,7 @@ class MainWindow(QMainWindow):
         action(tools_menu, "工具與環境設定", self.tool_settings)
         action(tools_menu, "開啟 Audiveris 校對工具", self.open_audiveris)
         help_menu = self.menuBar().addMenu("說明")
+        action(help_menu, "檢查更新…", self.check_updates)
         action(help_menu, "操作說明", self.show_help, "F1")
         action(help_menu, "關於", lambda: QMessageBox.about(self, "關於簡譜工房", f"簡譜工房 {__version__}\nMIT\n\n排譜：GNU LilyPond\n轉換：jianpu-ly · Silas S. Brown (Apache-2.0)\n辨識：Audiveris (AGPL-3.0)\n介面：PySide6 / Qt (LGPL-3.0)\n\nhttps://github.com/miles990/jianpu-studio"))
 
@@ -705,7 +710,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("正在取消…")
 
     def render_score(self, manual=True):
-        if self.task:
+        if self.task or self.update_preparing or self.close_preparing:
             return
         self.capture_fields()
         try:
@@ -912,6 +917,10 @@ class MainWindow(QMainWindow):
     def show_help(self):
         QMessageBox.information(self, "快速上手", "1. 新建或開啟「小星星」範例。\n2. 點 1–7 加入音符，0 加入休止符。點音符後可設定時值、八度、升降與附點，再按「套用」。\n3. 右側會自動排版；拍數不足時按「補齊休止符」。\n4. Ctrl+S 儲存 .jps；匯出 PDF 可列印，按「試聽 / 停止」可用 Windows 內建 MIDI 合成器播放。\n5. 照片轉簡譜適用清楚的印刷五線譜；先旋轉／裁白邊，再辨識、對照原圖校對。\n\n快捷鍵：Ctrl+Z 復原、Ctrl+Y 重做、F5 排版、Ctrl+E 匯出 PDF。音符區可用 0–7 輸入、Delete 刪除。\n\n每 15 秒建立本機復原暫存。不會上傳樂譜或照片。\n進階原始碼支援多聲部與更多記號；照片辨識不支援手寫或數字簡譜影像。")
 
+    def check_updates(self):
+        from .update_dialog import UpdateDialog
+        UpdateDialog(self).exec()
+
     def error(self, title, error):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
@@ -937,7 +946,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("正在取消作業，完成後請再次關閉視窗。")
             event.ignore()
             return
-        if not self.guard_unsaved():
+        self.close_preparing = True
+        preview_pending = self.autopreview.isActive()
+        self.autopreview.stop()
+        if not self.updating and not self.guard_unsaved():
+            self.close_preparing = False
+            if preview_pending or self.dirty:
+                self.autopreview.start()
             event.ignore()
             return
         self.autosave.stop()

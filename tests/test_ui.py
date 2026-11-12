@@ -67,3 +67,26 @@ def test_small_window_keeps_editing_controls_scrollable(qtbot, monkeypatch):
     assert scroll.verticalScrollBar().value() > 0
     window.dirty = False
     window.close()
+
+
+def test_cancel_close_does_not_start_render_inside_save_prompt(qtbot, monkeypatch):
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QMessageBox
+    window = MainWindow(recovery=False)
+    qtbot.addWidget(window)
+    window.dirty = True
+    window.autopreview.start()
+    started = []
+    monkeypatch.setattr(window, "current_tool", lambda _: Path("fake-lilypond"))
+    monkeypatch.setattr(window, "start_task", lambda *args: started.append(args))
+    def cancel(*args, **kwargs):
+        assert window.close_preparing
+        window.render_score(False)
+        return QMessageBox.StandardButton.Cancel
+    monkeypatch.setattr(QMessageBox, "question", cancel)
+    assert not window.close()
+    assert not started
+    assert not window.close_preparing and window.autopreview.isActive()
+    window.dirty = False
+    window.close()

@@ -95,6 +95,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $p = Start-Process -FilePath "$target/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "All-users uninstaller failed: $($p.ExitCode)" }
+      - name: Verify upgrade preserves projects, settings, path and restart
+        if: env.BUILD_RELEASE == 'true'
+        timeout-minutes: 6
+        run: |
+          $old = "$env:RUNNER_TEMP/JianpuStudio-old.exe"
+          Invoke-WebRequest 'https://github.com/miles990/jianpu-studio/releases/download/v0.1.2/JianpuStudio-0.1.2-Windows-x64-Setup.exe' -OutFile $old
+          $target = "$env:RUNNER_TEMP/升級測試/簡譜 工房"
+          $p = Start-Process $old -ArgumentList '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Baseline installation failed" }
+          Copy-Item examples/twinkle.jps "$target/我的樂譜.jps"
+          $before = (Get-FileHash "$target/我的樂譜.jps").Hash
+          $settings = 'HKCU:\Software\JianpuStudio\JianpuStudio'
+          New-Item $settings -Force | Out-Null
+          New-ItemProperty $settings -Name UpgradeSentinel -Value 'keep-me' -Force | Out-Null
+          $installer = (Get-ChildItem dist/*-Setup.exe)[0].FullName
+          $p = Start-Process $installer -ArgumentList '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/JIANPURESTART=1', "/DIR=`"$target`"" -PassThru
+          $p.WaitForExit()
+          if ($p.ExitCode -ne 0) { throw "Upgrade failed: $($p.ExitCode)" }
+          $restarted = $null
+          for ($i=0; $i -lt 30; $i++) {
+            $restarted = Get-Process JianpuStudio -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$target/JianpuStudio.exe" -or $_.Path -eq "$($target.Replace('/', '\'))\JianpuStudio.exe" }
+            if ($restarted) { break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $restarted) { throw 'Updated application did not restart' }
+          $restarted | Stop-Process -Force
+          if ((Get-FileHash "$target/我的樂譜.jps").Hash -ne $before) { throw 'User project changed during upgrade' }
+          if ((Get-ItemProperty $settings).UpgradeSentinel -ne 'keep-me') { throw 'Settings lost during upgrade' }
+          & "$target/JianpuStudio.exe" --self-test "$env:RUNNER_TEMP/update-self-test"
+          if ($LASTEXITCODE -ne 0) { throw 'Updated GUI smoke failed' }
+          $detected = Get-Content "$env:RUNNER_TEMP/update-self-test/update-target.json" | ConvertFrom-Json
+          if ($detected.scope -ne 'CURRENTUSER') { throw 'Updater failed to detect original installation scope' }
+          if ([IO.Path]::GetFullPath($detected.directory) -ne [IO.Path]::GetFullPath($target)) { throw 'Updater failed to preserve custom path' }
+          $p = Start-Process "$target/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw 'Updated uninstaller failed' }
+          Remove-ItemProperty $settings -Name UpgradeSentinel
       - name: Portable archive and checksums
         if: env.BUILD_RELEASE == 'true'
         run: |
