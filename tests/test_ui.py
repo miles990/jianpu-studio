@@ -52,3 +52,18 @@ def test_source_edit_invalidates_preview(qtbot, tmp_path, monkeypatch):
     assert window.fresh_result() is None
     window.dirty = False
     window.close()
+
+
+def test_small_window_keeps_editing_controls_scrollable(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QScrollArea
+    monkeypatch.setattr(MainWindow, "render_score", lambda *a: None)
+    window = MainWindow(recovery=False)
+    qtbot.addWidget(window)
+    window.resize(1000, 630)
+    window.show()
+    qtbot.waitUntil(lambda: not window.sidebar.isVisible())
+    scroll = next(s for s in window.findChildren(QScrollArea) if s.widget() is window.editor)
+    scroll.ensureWidgetVisible(window.staff)
+    assert scroll.verticalScrollBar().value() > 0
+    window.dirty = False
+    window.close()

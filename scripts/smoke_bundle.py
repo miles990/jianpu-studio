@@ -51,4 +51,14 @@ with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
         subprocess.run([str(exe), "--worker", "convert", str(work / "recognized.jly"), str(work / "recognized.ly"), "24"], check=True, timeout=90)
         subprocess.run([str(lily), "--pdf", "-o", str(work / "recognized-score"), str(work / "recognized.ly")], check=True, timeout=120)
         assert (work / "recognized-score.pdf").read_bytes().startswith(b"%PDF")
+        # Reproduce the reported five-pixel staff spacing with a real low-DPI
+        # fixture. Verify the bundled engine retries and yields renderable music.
+        subprocess.run([str(lily), "--png", "-dresolution=72", "-o", str(work / "small-photo"),
+                        str(root / "examples/recognition-test.ly")], check=True, timeout=120)
+        low_xml, low_log = recognize(work / "small-photo.png", work / "small-recognized", audiveris)
+        assert "自動放大" in low_log, low_log
+        subprocess.run([str(exe), "--worker", "import", str(low_xml), str(work / "small.jly")], check=True, timeout=90)
+        subprocess.run([str(exe), "--worker", "convert", str(work / "small.jly"), str(work / "small.ly"), "24"], check=True, timeout=90)
+        subprocess.run([str(lily), "--pdf", "-o", str(work / "small-score"), str(work / "small.ly")], check=True, timeout=120)
+        assert (work / "small-score.pdf").read_bytes().startswith(b"%PDF")
 print("Frozen bundle smoke test passed")

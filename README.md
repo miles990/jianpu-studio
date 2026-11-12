@@ -1,64 +1,75 @@
-# 簡譜工房 · Jianpu Studio
+# 簡譜工房 Jianpu Studio
 
-**在 Windows 上用滑鼠寫簡譜、預覽排版，將五線譜照片轉成可校對的簡譜。**
+**Windows 上的繁體中文簡譜編輯器。用滑鼠或數字鍵寫譜，預覽、試聽，再印出來。**
 
-繁體中文桌面程式，整合 [GNU LilyPond](https://github.com/lilypond/lilypond)、[jianpu-ly](https://github.com/ssb22/jianpu-ly) 與 [Audiveris](https://github.com/Audiveris/audiveris)。不需要學命令列。
-
-![簡譜工房實際介面](docs/screenshots/editor.png)
+適合二胡等單旋律樂譜的基本製作。整合 LilyPond、jianpu-ly 與 Audiveris，安裝後可離線使用。
 
 ## 下載與安裝
 
-前往 **[Releases 下載](https://github.com/miles990/jianpu-studio/releases/latest)**，選擇 `JianpuStudio-0.1.1-Windows-x64-Setup.exe`。
+**[下載 Windows 安裝程式](https://github.com/miles990/jianpu-studio/releases/latest)** → 選擇 `JianpuStudio-0.1.2-Windows-x64-Setup.exe`。
 
-1. 雙擊安裝檔，依精靈按「下一步 → 安裝」。
-2. 從桌面開啟「簡譜工房」。
-3. 先打開內建「小星星」，試著修改音符，再匯出 PDF。
+1. 開啟安裝檔，選「為所有使用者安裝」，同意 Windows 管理員授權。
+2. 選擇安裝資料夾，例如 `D:\音樂工具\簡譜工房`，按「安裝」。
+3. 從桌面開啟「簡譜工房」，先用內建「小星星」試試看。
 
-**一個安裝檔包含所有必要環境**：Python、Qt、LilyPond、Audiveris、Java、英文 OCR 字庫與繁體中文字型。不用設定 PATH、不用逐一安裝工具，安裝後編輯、排譜、辨識皆可離線使用。可自由選擇磁碟與安裝資料夾，支援中文、空白及可存取的網路路徑。建議選「為所有使用者安裝」並同意管理員授權；不需要管理員權限時，也可選「僅為我安裝」。
+**所有環境一次裝好**，不用另外安裝 Python、Java、排譜或辨識工具。支援中文及含空白的安裝路徑。只安裝到自己的資料夾時，也可選「僅為我安裝」。
 
-支援 Windows 10（1903 或更新）/11 **x64**。建議 8 GB RAM、2 GB 可用空間；複雜照片辨識建議 16 GB RAM。也提供 `Portable.zip`：解壓縮整個資料夾後開啟 `JianpuStudio.exe`，不要只搬走 exe。首次公開版尚未購置程式碼簽章，Windows 可能顯示未知發行者；請核對本 repo 的 Release 來源及 `SHA256SUMS.txt`。不要關閉防毒保護。
+適用 **Windows 10 1903 以上／Windows 11，64 位元 x64**。建議 8 GB RAM、2 GB 可用空間；照片辨識建議 16 GB RAM。下載頁也有免安裝 ZIP，請完整解壓縮後開啟 `JianpuStudio.exe`。
 
-## 可以做什麼
+目前安裝檔尚無程式碼簽章，Windows 可能顯示未知發行者。請從本專案 Release 下載，並可用 `SHA256SUMS.txt` 核對檔案。
 
-- **點選編輯**：0–7 音符／休止符、升降記號、上下兩個八度、全音符到三十二分音符、附點、插入／複製／刪除／移動。
-- **基本樂曲設定**：曲名、作曲者、調號、拍號、速度、中文字歌詞、五線譜對照。
-- **拍數檢查**：指出跨小節／未滿小節，提供一鍵補休止符。
-- **真正的樂譜排版**：LilyPond PDF，多頁預覽、縮放、透過系統 PDF 閱讀器列印。
-- **匯出與試聽**：PDF、MIDI、`.jly` 簡譜文字、`.ly`；Windows 內建 MIDI 合成器試聽／停止。
-- **保存工作**：`.jps` 專案、復原／重做、原子寫入、每 15 秒本機復原暫存。
-- **進階簡譜**：直接編輯 jianpu-ly 語法，處理多聲部、反覆、連線等記號。
-- **照片轉簡譜**：裁白邊／旋轉／對比 → Audiveris → MusicXML → 簡譜，旁邊保留原圖供校對。
-- **MusicXML 匯入**：`.musicxml`、`.xml`、`.mxl`；簡單單聲部轉為視覺音符，複雜樂譜保留在進階模式。
+## 已安裝舊版，要怎麼更新？
 
-## 照片辨識的適用範圍
+先儲存樂譜並關閉程式，再執行新版安裝檔，選擇與舊版相同的安裝模式和資料夾。**不用先解除安裝**；自己的 `.jps` 樂譜與使用者設定會保留。
 
-目前辨識的是**清晰的印刷五線譜照片或掃描圖**，不是數字簡譜影像，也不支援手寫譜。陰影、歪斜、模糊、裁到譜線、複雜多聲部等會降低準確率。每次辨識完成都需要核對調號、音高、拍數、連結線、反覆與歌詞。
+0.1.2 尚未提供程式內自動更新；更新功能會在後續版本加入。
 
-Audiveris／jianpu-ly 的 MusicXML 匯入仍有各自限制；不能保證任意照片能完整還原。照片與樂譜不會上傳。英文 OCR 字庫供標題及文字輔助，**中文歌詞 OCR 不在此版本支援範圍內**。
+## 開始寫譜
 
-視覺編輯目前是單聲部，不提供直接在正式 PDF 上拖曳音符。多聲部、跨小節延音、弱起、三連音等請使用進階簡譜。照片原圖與中間辨識檔只在本次工作階段保留；需要保留時請儲存原圖並匯出 MusicXML，`.jps` 會保留可再編輯的簡譜內容。
+![簡譜工房操作畫面](docs/screenshots/editor.png)
 
-詳見 [使用手冊](docs/user-guide.md)、[架構與測試](docs/development.md)、[第三方授權](THIRD_PARTY_NOTICES.md)。
+1. 按「新建樂譜」，填曲名、調號、拍號與速度。
+2. 點 `1–7` 加入音符，`0` 加入休止符；點選音符區後也能用數字鍵輸入。
+3. 點選音符，調整時值、八度、升降或附點，再按「套用到選取音符」。
+4. 用「複製、刪除、移前、移後」整理音符；不足一小節時可「補齊休止符」。
+5. 按 `Ctrl+S` 儲存 `.jps`，下次可繼續修改。
 
-## 開發執行
+目前加入的音符會插在選取音符後面。`Ctrl+Z` 復原、`Ctrl+Y` 重做、`Delete` 刪除選取音符。
 
-```powershell
-git clone https://github.com/miles990/jianpu-studio.git
-cd jianpu-studio
-py -3.12 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-python scripts/fetch_runtime.py --platform windows
-$env:JIANPU_LILYPOND = "$pwd/vendor-runtime/lilypond/bin/lilypond.exe"
-$env:JIANPU_AUDIVERIS = "$pwd/vendor-runtime/audiveris/Audiveris.exe"
-$env:TESSDATA_PREFIX = "$pwd/vendor-runtime/tessdata"
-python -m jianpu_studio
-```
+用過 EOP 的使用者可以直接使用數字鍵 0–7；目前版本的其他快捷鍵與檔案格式並未完全相容，不能直接開啟 EOPN。
 
-使用者應下載安裝檔；以上步驟僅供開發者。CI 在 Linux 與 Windows 跑測試，並用打包後的 exe 實測 PDF／MIDI、照片辨識、安裝與移除。
+## 預覽、試聽與列印
 
-## 授權
+- 右側顯示實際 PDF 排版，可縮放與閱讀多頁樂譜。
+- 按「更新排版」或 `F5` 更新，完成後可試聽、匯出 PDF 或 MIDI。
+- 「開啟／列印」會用 Windows 的 PDF 閱讀器開啟。
+- 視窗較小時，左側導覽會收起；編輯區可捲動，主要功能也能從上方選單使用。
 
-本程式 **MIT**。jianpu-ly 保留 Apache-2.0 原始授權與作者資訊；LilyPond 為獨立 GPL 工具，Audiveris 為獨立 AGPL 工具，Qt/PySide6 為動態連結 LGPL 元件。各工具、字型、模型及來源連結見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+## 照片轉簡譜
 
-This is an independent project, not an official LilyPond, jianpu-ly or Audiveris product.
+1. 按「照片轉簡譜」，選擇**印刷五線譜**照片。
+2. 調整角度、白邊與對比，保留完整五線譜，再開始辨識。
+3. 若引擎判定譜線間距太小，程式會自動計算放大倍率，重試一次。
+4. 對照「照片原圖」檢查音高、調號與節奏，再儲存專案。
+
+放大能協助引擎處理小圖，**無法補回遺失的細節**。原始高畫質圖片或 300 DPI 掃描通常更適合辨識。混有和弦圖、數字簡譜與歌詞的圖片可能需要更多人工校對。
+
+辨識失敗會顯示中文原因；在「排版／辨識訊息」按「複製完整紀錄」，可附到 [問題回報](https://github.com/miles990/jianpu-studio/issues)。
+
+## 目前支援到哪裡？
+
+| 項目 | 目前支援 |
+| --- | --- |
+| 滑鼠編輯 | 單旋律音符、休止、時值、八度、升降、附點、歌詞 |
+| 檔案 | `.jps` 專案、MusicXML 匯入、PDF／MIDI／簡譜文字匯出 |
+| 照片 | 印刷五線譜轉簡譜；不支援手寫譜或數字簡譜圖片，中文歌詞需手動輸入 |
+| 特殊記號 | 連線、反覆、倚音、三連音、多聲部等可用進階 jianpu-ly 語法；部分原始 LilyPond 功能受限 |
+| 二胡 | 可製作基本單旋律簡譜；指法、弓法等圖形化工具尚未在 0.1.2 發布 |
+
+進階原始碼不能自動轉回視覺音符；切換前請閱讀程式提示。複雜 MusicXML 可能進入進階模式。重要樂譜請保留備份，辨識結果請人工校對。
+
+更多操作見 [完整手冊](docs/user-guide.md)。開發、測試與技術細節見 [開發文件](docs/development.md)。
+
+## 開源與授權
+
+本程式為 MIT 授權，為獨立專案。[LilyPond](https://github.com/lilypond/lilypond)、[jianpu-ly](https://github.com/ssb22/jianpu-ly)、[Audiveris](https://github.com/Audiveris/audiveris) 等元件保留各自授權，詳見 [第三方授權與來源](THIRD_PARTY_NOTICES.md)。

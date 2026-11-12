@@ -13,6 +13,7 @@ from PySide6.QtGui import QAction, QDesktopServices, QFont, QKeySequence, QPixma
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -93,7 +94,7 @@ class Task(QThread):
 class MainWindow(QMainWindow):
     def __init__(self, recovery: bool = True):
         super().__init__()
-        self.setMinimumSize(1080, 740)
+        self.setMinimumSize(940, 600)
         self.resize(1480, 940)
         self.setStyleSheet(STYLE)
         self.settings = QSettings("JianpuStudio", "JianpuStudio")
@@ -137,6 +138,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         sidebar = QWidget()
+        self.sidebar = sidebar
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(180)
         nav = QVBoxLayout(sidebar)
@@ -285,7 +287,11 @@ class MainWindow(QMainWindow):
         advanced_layout.addWidget(button("開啟完整語法文件", lambda: QDesktopServices.openUrl(QUrl("https://github.com/ssb22/jianpu-ly#jianpu-ly"))))
         self.editor_stack.addWidget(advanced)
         edit_layout.addWidget(self.editor_stack, 1)
-        split.addWidget(self.editor)
+        editor_scroll = QScrollArea()
+        editor_scroll.setWidgetResizable(True)
+        editor_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        editor_scroll.setWidget(self.editor)
+        split.addWidget(editor_scroll)
         preview = QWidget()
         preview_layout = QVBoxLayout(preview)
         preview_layout.setContentsMargins(16, 0, 0, 0)
@@ -328,7 +334,11 @@ class MainWindow(QMainWindow):
         self.preview_tabs.addTab(photo_scroll, "照片原圖")
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.preview_tabs.addTab(self.log, "排版 / 辨識訊息")
+        log_page = QWidget()
+        log_layout = QVBoxLayout(log_page)
+        log_layout.addWidget(self.log)
+        log_layout.addWidget(button("複製完整紀錄", lambda: QApplication.clipboard().setText(self.log.toPlainText())))
+        self.preview_tabs.addTab(log_page, "排版 / 辨識訊息")
         preview_layout.addWidget(self.preview_tabs, 1)
         preview_layout.addWidget(label("排版引擎  LilyPond × jianpu-ly   ·   照片辨識  Audiveris", "muted"))
         split.addWidget(preview)
@@ -679,7 +689,7 @@ class MainWindow(QMainWindow):
             self.cancel_button.hide()
             if error is not None:
                 self.preview_status.setText("作業已取消。" if isinstance(error, Cancelled) else "未完成；請查看訊息並修正。")
-                self.log.setPlainText(str(error))
+                self.log.setPlainText(str(error) + "\n\n" + getattr(error, "details", ""))
                 self.statusBar().showMessage(str(error).splitlines()[0][:180], 10000)
                 if show_error and not isinstance(error, Cancelled):
                     self.error("作業未完成", error)
@@ -908,10 +918,18 @@ class MainWindow(QMainWindow):
         box.setWindowTitle(title)
         box.setTextFormat(Qt.TextFormat.PlainText)
         message = str(error)
+        details = getattr(error, "details", message)
         box.setText(message[:400])
-        if len(message) > 400:
-            box.setDetailedText(message)
+        if details != message or len(message) > 400:
+            box.setDetailedText(details)
+            copy_button = box.addButton("複製完整紀錄", QMessageBox.ButtonRole.ActionRole)
+            copy_button.clicked.connect(lambda: QApplication.clipboard().setText(message + "\n\n" + details))
         box.exec()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "sidebar"):
+            self.sidebar.setVisible(self.width() >= 1300)
 
     def closeEvent(self, event):
         if self.task:

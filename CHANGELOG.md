@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+- Retry low-resolution staff images once using Audiveris' measured interline spacing, with bounded scaling and no changes to the original image.
+- Show actionable Chinese recognition errors and retain full diagnostics with a copy button.
+- Coalesce photo-preview adjustments and render a reduced preview while retaining full resolution for recognition.
+- Make editing controls scrollable on small displays and hide the navigation sidebar when the window is narrow.
+- Add six regression tests for adaptive recognition, cancellation, retry limits, and image-size bounds.
+
 ## 0.1.1
 
 - Add per-user / all-users installation choices with correct elevation and installation directories.
