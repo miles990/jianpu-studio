@@ -1,8 +1,10 @@
+import struct
 import sys
 import threading
 
 import pytest
 
+from jianpu_studio import engine
 from jianpu_studio.engine import Cancelled, ToolError, find_tool, render, run_tool, validate_source
 from jianpu_studio.model import Note, Score, demo_project
 
@@ -57,6 +59,47 @@ def test_real_lilypond_pdf_and_midi(tmp_path):
 
 
 @pytest.mark.integration
+def test_real_lilypond_midi_only_never_creates_pdf(tmp_path):
+    tool = find_tool("lilypond")
+    if not tool:
+        pytest.skip("JIANPU_LILYPOND not configured")
+    output = (tmp_path / "試聽 中文路徑").resolve()
+    result = render(demo_project().notation(), output, tool.resolve(), create_pdf=False)
+    assert result.pdf == output / "score.pdf"
+    assert not list(output.glob("*.pdf"))
+    assert result.lilypond.is_file()
+    assert (output / "render.log").read_text(encoding="utf-8") == result.log
+    midi = result.midi.read_bytes()
+    assert midi.startswith(b"MThd")
+    header_size, format_type, tracks, division = struct.unpack(">IHHH", midi[4:14])
+    assert header_size == 6 and format_type in (0, 1) and tracks > 0 and division > 0
+    offset = 14
+    for _ in range(tracks):
+        assert midi[offset:offset+4] == b"MTrk"
+        size = struct.unpack(">I", midi[offset+4:offset+8])[0]
+        track = midi[offset+8:offset+8+size]
+        assert len(track) == size and track.endswith(b"\xff\x2f\x00")
+        offset += 8 + size
+    assert offset == len(midi)
+
+
+@pytest.mark.parametrize("unexpected_pdf", [False, True])
+def test_midi_only_requires_midi_and_rejects_pdf(tmp_path, monkeypatch, unexpected_pdf):
+    def fake_tool(args, cwd, *unused, **options):
+        if "--version" in args:
+            return "GNU LilyPond 2.24.4"
+        if "-dno-print-pages" in args and unexpected_pdf:
+            (cwd / "score.pdf").write_bytes(b"unexpected PDF")
+            (cwd / "score.midi").write_bytes(b"MThd")
+        return ""
+
+    monkeypatch.setattr(engine, "run_tool", fake_tool)
+    message = "不應含有 PDF" if unexpected_pdf else "未產生 MIDI"
+    with pytest.raises(ToolError, match=message):
+        render(demo_project().notation(), tmp_path, tmp_path / "lilypond", create_pdf=False)
+
+
+@pytest.mark.integration
 def test_bad_score_reports_converter_error(tmp_path):
     tool = find_tool("lilypond")
     if not tool:
@@ -103,7 +146,10 @@ def test_erhu_marks_and_letter_layout_reach_real_pdf(tmp_path, qapp):
     assert "warning:" not in result.log.lower()
 
 
-@pytest.mark.parametrize("options", [{"paper_size": 'a4\") #(system "bad")'}, {"staff_size": True}, {"staff_size": 31}])
-def test_layout_options_are_validated_before_process_start(tmp_path, options):
+@pytest.mark.parametrize("options", [
+    {"paper_size": 'a4\") #(system "bad")'}, {"staff_size": True}, {"staff_size": 31},
+    {"create_pdf": None}, {"create_pdf": 0}, {"create_pdf": 1}, {"create_pdf": "false"},
+])
+def test_render_options_are_validated_before_process_start(tmp_path, options):
     with pytest.raises(ValueError):
         render(demo_project().notation(), tmp_path, tmp_path / "unused", **options)

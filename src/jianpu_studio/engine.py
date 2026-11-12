@@ -147,8 +147,11 @@ class RenderResult:
 
 
 def render(source: str, output: Path, lilypond: Path,
-           cancel: threading.Event | None = None, *, paper_size="a4", staff_size=20) -> RenderResult:
+           cancel: threading.Event | None = None, *, paper_size="a4", staff_size=20,
+           create_pdf: bool = True) -> RenderResult:
     cancel = cancel or threading.Event()
+    if type(create_pdf) is not bool:
+        raise ValueError("是否產生 PDF 須為布林值。")
     if paper_size not in ("a4", "letter") or type(staff_size) is not int or not 16 <= staff_size <= 30:
         raise ValueError("紙張須為 A4 / Letter，譜字大小須為 16–30。")
     validate_source(source)
@@ -167,16 +170,21 @@ def render(source: str, output: Path, lilypond: Path,
         if error.is_file():
             raise ToolError(error.read_text(encoding="utf-8")) from None
         raise
-    log += run_tool([str(lilypond), "-dno-point-and-click", "--pdf", "-o", str(output / "score"),
+    output_option = "--pdf" if create_pdf else "-dno-print-pages"
+    log += run_tool([str(lilypond), "-dno-point-and-click", output_option, "-o", str(output / "score"),
                      str(output / "score.ly")], output, cancel, timeout=120)
     pdf = output / "score.pdf"
-    if not pdf.is_file():
+    if create_pdf and not pdf.is_file():
         raise ToolError("排譜引擎未產生 PDF。\n" + log[-12000:])
+    if not create_pdf and pdf.exists():
+        raise ToolError("僅產生 MIDI 的作業不應含有 PDF。\n" + log[-12000:])
     # LilyPond numbers additional movements/parts. Prefer the main MIDI;
     # lexicographic sorting would incorrectly put score-1 before score.
     midi = next((p for p in (output / "score.midi", output / "score.mid") if p.is_file()), None)
     if midi is None:
         midi = next(iter(sorted(output.glob("*.midi"))), None) or next(iter(sorted(output.glob("*.mid"))), None)
+    if not create_pdf and midi is None:
+        raise ToolError("排譜引擎未產生 MIDI。\n" + log[-12000:])
     atomic_write(output / "render.log", log)
     return RenderResult(pdf, midi, output / "score.ly", log)
 
