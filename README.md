@@ -8,15 +8,15 @@
 
 ## 下載與安裝
 
-前往 **[Releases 下載](https://github.com/miles990/jianpu-studio/releases/latest)**，選擇 `JianpuStudio-0.1.0-Windows-x64-Setup.exe`。
+前往 **[Releases 下載](https://github.com/miles990/jianpu-studio/releases/latest)**，選擇 `JianpuStudio-0.1.1-Windows-x64-Setup.exe`。
 
 1. 雙擊安裝檔，依精靈按「下一步 → 安裝」。
 2. 從桌面開啟「簡譜工房」。
 3. 先打開內建「小星星」，試著修改音符，再匯出 PDF。
 
-**一個安裝檔包含所有必要環境**：Python、Qt、LilyPond、Audiveris、Java、英文 OCR 字庫與繁體中文字型。不用設定 PATH、不用逐一安裝工具，安裝後編輯、排譜、辨識皆可離線使用。安裝在目前使用者資料夾，不要求管理員權限。
+**一個安裝檔包含所有必要環境**：Python、Qt、LilyPond、Audiveris、Java、英文 OCR 字庫與繁體中文字型。不用設定 PATH、不用逐一安裝工具，安裝後編輯、排譜、辨識皆可離線使用。預設安裝在目前使用者資料夾，不要求管理員權限；若選擇為所有使用者安裝，會要求管理員授權並使用 Program Files。
 
-支援 Windows 10/11 **x64**。建議 8 GB RAM、2 GB 可用空間；複雜照片辨識建議 16 GB RAM。也提供 `Portable.zip`：解壓縮整個資料夾後開啟 `JianpuStudio.exe`，不要只搬走 exe。首次公開版尚未購置程式碼簽章，Windows 可能顯示未知發行者；請核對本 repo 的 Release 來源及 `SHA256SUMS.txt`。不要關閉防毒保護。
+支援 Windows 10（1903 或更新）/11 **x64**。建議 8 GB RAM、2 GB 可用空間；複雜照片辨識建議 16 GB RAM。也提供 `Portable.zip`：解壓縮整個資料夾後開啟 `JianpuStudio.exe`，不要只搬走 exe。首次公開版尚未購置程式碼簽章，Windows 可能顯示未知發行者；請核對本 repo 的 Release 來源及 `SHA256SUMS.txt`。不要關閉防毒保護。
 
 ## 可以做什麼
 

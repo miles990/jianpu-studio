@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.1.1"
 #endif
 
 [Setup]
@@ -9,13 +9,15 @@ AppVersion={#AppVersion}
 AppPublisher=Jianpu Studio contributors
 AppPublisherURL=https://github.com/miles990/jianpu-studio
 AppSupportURL=https://github.com/miles990/jianpu-studio/issues
-DefaultDirName={localappdata}\Programs\JianpuStudio
+DefaultDirName={autopf}\JianpuStudio
 DefaultGroupName=簡譜工房
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+DisableDirPage=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0
+MinVersion=10.0.18362
 OutputDir=..\dist
 OutputBaseFilename=JianpuStudio-{#AppVersion}-Windows-x64-Setup
 Compression=lzma2
@@ -45,10 +47,42 @@ Name: "{autodesktop}\簡譜工房"; Filename: "{app}\JianpuStudio.exe"; Tasks: d
 Name: "{group}\使用說明"; Filename: "{app}\docs\user-guide.html"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Classes\.jps\OpenWithProgids"; ValueType: string; ValueName: "JianpuStudio.Project"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Classes\JianpuStudio.Project"; ValueType: string; ValueName: ""; ValueData: "簡譜工房專案"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\JianpuStudio.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\JianpuStudio.exe,0"
-Root: HKCU; Subkey: "Software\Classes\JianpuStudio.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\JianpuStudio.exe"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\.jps\OpenWithProgids"; ValueType: string; ValueName: "JianpuStudio.Project"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\JianpuStudio.Project"; ValueType: string; ValueName: ""; ValueData: "簡譜工房專案"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\JianpuStudio.Project\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\JianpuStudio.exe,0"
+Root: HKA; Subkey: "Software\Classes\JianpuStudio.Project\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\JianpuStudio.exe"" ""%1"""
 
 [Run]
 Filename: "{app}\JianpuStudio.exe"; Description: "開啟簡譜工房"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function ProtectedTarget: Boolean;
+var
+  Target: String;
+begin
+  Target := Lowercase(AddBackslash(ExpandFileName(WizardDirValue)));
+  Result := (Pos(Lowercase(AddBackslash(ExpandConstant('{commonpf}'))), Target) = 1) or
+            (Pos(Lowercase(AddBackslash(ExpandConstant('{commonpf32}'))), Target) = 1) or
+            (Pos(Lowercase(AddBackslash(ExpandConstant('{win}'))), Target) = 1);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpSelectDir) and (not IsAdminInstallMode) and ProtectedTarget then
+  begin
+    if MsgBox('此目錄需要系統管理員權限。要改用建議的個人安裝資料夾嗎？' + #13#10 + #13#10 +
+      '若要安裝到 Program Files，請取消並重新啟動安裝程式，選擇「為所有使用者安裝」。',
+      mbConfirmation, MB_YESNO) = IDYES then
+      WizardForm.DirEdit.Text := ExpandConstant('{userpf}\JianpuStudio')
+    else
+      Result := False;
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if (not IsAdminInstallMode) and ProtectedTarget then
+    Result := '此目錄需要系統管理員權限。請使用個人安裝資料夾，或重新選擇「為所有使用者安裝」。';
+end;

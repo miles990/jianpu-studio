@@ -1,6 +1,9 @@
-簡譜工房 0.1.0 — Windows 首版
+簡譜工房 0.1.1 — 安裝與中文路徑修正版
 
-下載 **JianpuStudio-0.1.0-Windows-x64-Setup.exe**，按安裝精靈完成即可。內附 Python、Qt、LilyPond、Audiveris、Java、英文 OCR 模型與繁體中文字型；不用另外裝環境。也提供免安裝 ZIP。
+修復安裝到 Program Files 時的權限流程，提供個人／所有使用者兩種安裝模式。修復照片辨識在中文安裝路徑無法載入 Java 的問題。建議 0.1.0 使用者更新；Windows 10 需 1903 或更新版本。
+
+
+下載 **JianpuStudio-0.1.1-Windows-x64-Setup.exe**，按安裝精靈完成即可。內附 Python、Qt、LilyPond、Audiveris、Java、英文 OCR 模型與繁體中文字型；不用另外裝環境。也提供免安裝 ZIP。
 
 - 繁體中文音符編輯、拍數檢查、復原重做、專案存檔與意外中斷復原。
 - LilyPond PDF 預覽／匯出、MIDI 匯出與 Windows 內建試聽。

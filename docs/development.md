@@ -45,8 +45,8 @@ python scripts/smoke_bundle.py dist/JianpuStudio --omr
 
 `runtime-lock.json` pins URLs and SHA-256 values. The build extracts Audiveris' MSI without installing it; its Java runtime, native libraries, classifier resources, and licenses are copied together. All necessary components are included in the final installer. Tesseract needs the **legacy-capable `tessdata` 4.1.0 model**, not the LSTM-only `tessdata_fast` model. A Traditional Chinese Noto font is placed in LilyPond's private font directory; no system font installation is needed.
 
-The one-folder bundle permits replacing Qt/PySide dynamic libraries. App updates never intentionally remove user-created scores. No code-signing credential is configured. Before a stable release, configure Authenticode signing and expand manual Windows acceptance testing. Version 0.1.0 is an initial release.
+The one-folder bundle permits replacing Qt/PySide dynamic libraries. App updates never intentionally remove user-created scores. No code-signing credential is configured. Before a stable release, configure Authenticode signing and expand manual Windows acceptance testing. Version 0.1.1 is an initial release.
 
 ## Release
 
-After reviewing CI, tag `v0.1.0` and push the tag. The workflow rebuilds and tests the exact tagged code, then publishes the installer, portable archive and SHA-256 manifest. Main-branch builds are downloadable as Actions artifacts. Keep version numbers in `pyproject.toml`, `__init__.py`, `installer.iss`, and the workflow artifact names aligned. For upstream updates, update the lock file, licenses/source references, regression tests and fixture validation together.
+After reviewing CI, tag `v0.1.1` and push the tag. The workflow rebuilds and tests the exact tagged code, then publishes the installer, portable archive and SHA-256 manifest. Main-branch builds are downloadable as Actions artifacts. Keep version numbers in `pyproject.toml`, `__init__.py`, `installer.iss`, and the workflow artifact names aligned. For upstream updates, update the lock file, licenses/source references, regression tests and fixture validation together.

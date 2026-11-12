@@ -63,16 +63,28 @@ jobs:
       - name: Verify unattended install and uninstall
         run: |
           $installer = (Get-ChildItem dist/*-Setup.exe)[0].FullName
-          $target = "$env:RUNNER_TEMP/Installed Jianpu"
-          $p = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
+          $target = "$env:RUNNER_TEMP/中文資料夾/簡譜工房"
+          $p = Start-Process -FilePath $installer -ArgumentList '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Installer failed: $($p.ExitCode)" }
-          python scripts/smoke_bundle.py "$target"
+          python scripts/smoke_bundle.py "$target" --omr
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $p = Start-Process -FilePath "$target/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Uninstaller failed: $($p.ExitCode)" }
+      - name: Verify protected-folder guidance and administrator installation
+        run: |
+          $installer = (Get-ChildItem dist/*-Setup.exe)[0].FullName
+          $target = "$env:ProgramFiles/JianpuStudio-PermissionTest"
+          $p = Start-Process -FilePath $installer -ArgumentList '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
+          if ($p.ExitCode -eq 0 -or (Test-Path $target)) { throw "Per-user install must reject Program Files before copying" }
+          $p = Start-Process -FilePath $installer -ArgumentList '/ALLUSERS', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$target`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "All-users installer failed: $($p.ExitCode)" }
+          python scripts/smoke_bundle.py "$target"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = Start-Process -FilePath "$target/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "All-users uninstaller failed: $($p.ExitCode)" }
       - name: Portable archive and checksums
         run: |
-          7z a -tzip dist/JianpuStudio-0.1.0-Windows-x64-Portable.zip ./dist/JianpuStudio/*
+          7z a -tzip dist/JianpuStudio-0.1.1-Windows-x64-Portable.zip ./dist/JianpuStudio/*
           Get-ChildItem dist/*-Setup.exe, dist/*-Portable.zip | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding ascii dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
