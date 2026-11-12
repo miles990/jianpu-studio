@@ -68,6 +68,8 @@ def stage(platform: str, with_omr: bool = True):
         if len(candidates) != 1:
             raise RuntimeError(f"Expected one Audiveris launcher, found {candidates}")
         shutil.copytree(candidates[0].parent, destination / "audiveris", dirs_exist_ok=True)
+        from patch_windows_launcher import patch_launcher
+        patch_launcher(destination / "audiveris/Audiveris.exe")
         shutil.copy2(download("audiveris-license"), licenses / "Audiveris-AGPL-3.0.txt")
         tessdata = destination / "tessdata"
         tessdata.mkdir(exist_ok=True)

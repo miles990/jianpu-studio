@@ -58,7 +58,6 @@ from .musicxml import read_xml, visual_import
 from .photo import PhotoDialog
 from .playback import MidiPlayer
 from .widgets import STYLE, NoteList
-from .windows_paths import compatible_launcher
 
 
 def label(text: str, name: str = "", wrap: bool = False) -> QLabel:
@@ -890,34 +889,15 @@ class MainWindow(QMainWindow):
             self.autopreview.start()
 
     def open_audiveris(self):
-        import os
         import subprocess
         tool = self.current_tool("audiveris")
         if not tool:
             self.tool_settings()
             return
-        context = compatible_launcher(tool)
-        entered = False
         try:
-            launcher = context.__enter__()
-            entered = True
-            env = dict(os.environ)
-            models = launcher.parent.parent / "tessdata"
-            if (models / "eng.traineddata").is_file():
-                env["TESSDATA_PREFIX"] = str(models)
-            process = subprocess.Popen([str(launcher)], cwd=launcher.parent, env=env)
-        except (OSError, RuntimeError) as exc:
-            if entered:
-                context.__exit__(None, None, None)
+            subprocess.Popen([str(tool)], cwd=tool.parent)
+        except OSError as exc:
             self.error("無法開啟 Audiveris", exc)
-            return
-        def reap():
-            try:
-                process.wait()
-            finally:
-                context.__exit__(None, None, None)
-        # Keep the temporary path until the separately opened editor closes.
-        threading.Thread(target=reap, name="audiveris-editor", daemon=False).start()
 
     def show_help(self):
         QMessageBox.information(self, "快速上手", "1. 新建或開啟「小星星」範例。\n2. 點 1–7 加入音符，0 加入休止符。點音符後可設定時值、八度、升降與附點，再按「套用」。\n3. 右側會自動排版；拍數不足時按「補齊休止符」。\n4. Ctrl+S 儲存 .jps；匯出 PDF 可列印，按「試聽 / 停止」可用 Windows 內建 MIDI 合成器播放。\n5. 照片轉簡譜適用清楚的印刷五線譜；先旋轉／裁白邊，再辨識、對照原圖校對。\n\n快捷鍵：Ctrl+Z 復原、Ctrl+Y 重做、F5 排版、Ctrl+E 匯出 PDF。音符區可用 0–7 輸入、Delete 刪除。\n\n每 15 秒建立本機復原暫存。不會上傳樂譜或照片。\n進階原始碼支援多聲部與更多記號；照片辨識不支援手寫或數字簡譜影像。")
