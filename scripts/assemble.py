@@ -1,0 +1,32 @@
+"""Attach independently executable engines and their notices to the app."""
+import hashlib
+import shutil
+from importlib.metadata import distribution
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+dist = root / "dist/JianpuStudio"
+shutil.copytree(root / "vendor-runtime", dist / "runtime", dirs_exist_ok=True)
+for name in ("docs", "examples"):
+    shutil.copytree(root / name, dist / name, dirs_exist_ok=True)
+for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
+    shutil.copy2(root / name, dist / name)
+licenses = dist / "licenses"
+licenses.mkdir(exist_ok=True)
+shutil.copy2(root / "src/jianpu_studio/vendor/LICENSE-jianpu-ly", licenses)
+for package in ("PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "Pillow", "defusedxml"):
+    d = distribution(package)
+    for file in d.files or []:
+        if "license" in str(file).lower() or "copying" in str(file).lower():
+            source = Path(d.locate_file(file))
+            if source.is_file():
+                target = licenses / package / str(file).replace("..", "_")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+lines = []
+for path in sorted(dist.rglob("*")):
+    if path.is_file():
+        with path.open("rb") as stream:
+            lines.append(f"{hashlib.file_digest(stream, 'sha256').hexdigest()}  {path.relative_to(dist).as_posix()}")
+(dist / "MANIFEST.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(f"Assembled {len(lines)} files")

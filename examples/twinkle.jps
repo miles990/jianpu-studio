@@ -1,0 +1,311 @@
+{
+  "format": "jianpu-studio",
+  "version": 1,
+  "score": {
+    "title": "小星星",
+    "composer": "法國傳統旋律",
+    "key": "C",
+    "meter": "4/4",
+    "tempo": 96,
+    "lyrics": "",
+    "with_staff": false,
+    "notes": [
+      {
+        "degree": 1,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 1,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 6,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 6,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 2,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 2,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 2,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 1,
+        "octave": 0,
+        "duration": 2,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 2,
+        "octave": 0,
+        "duration": 2,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 2,
+        "octave": 0,
+        "duration": 2,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 1,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 1,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 6,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 6,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 5,
+        "octave": 0,
+        "duration": 2,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 4,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 3,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 2,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 2,
+        "octave": 0,
+        "duration": 4,
+        "dotted": false,
+        "accidental": ""
+      },
+      {
+        "degree": 1,
+        "octave": 0,
+        "duration": 2,
+        "dotted": false,
+        "accidental": ""
+      }
+    ]
+  },
+  "mode": "visual",
+  "source": ""
+}
