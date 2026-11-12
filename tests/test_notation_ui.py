@@ -338,7 +338,7 @@ def test_source_mode_cannot_change_hidden_visual_notation(notation_window):
     window = notation_window
     load_notes(window, [Note(1)] * 4)
     window.notes.select_rows([0])
-    window.switch_mode()
+    window.project.mode = "source"  # Defensive backend guard; no source editor is exposed.
     before, history_count = window.project.snapshot(), len(window.history)
     window.triplet_action()
     window.quick_notation({"articulation": "fermata"})

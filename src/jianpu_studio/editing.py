@@ -5,8 +5,7 @@ import json
 import re
 from dataclasses import asdict, replace
 
-from PySide6.QtCore import QEvent, QMimeData, Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -22,32 +21,13 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
-from .model import DURATIONS, MAX_FILE_BYTES, TICKS_PER_QUARTER, Note
+from .model import DURATIONS, TICKS_PER_QUARTER, Note
 from .notation_actions import NotationActions
 
 NOTE_MIME = "application/x-jianpu-studio-notes"
 
 
 class EditActions(NotationActions):
-    def eventFilter(self, watched, event):
-        if watched is getattr(self, "source", None) and event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
-            for key, action in ((QKeySequence.StandardKey.Undo, self.undo), (QKeySequence.StandardKey.Redo, self.redo)):
-                if event.matches(key):
-                    if event.type() == QEvent.Type.KeyPress:
-                        action()
-                    event.accept()
-                    return True
-        return super().eventFilter(watched, event)
-
-    def source_menu(self, position):
-        menu = QMenu(self)
-        menu.addAction(self.undo_action)
-        menu.addAction(self.redo_action)
-        menu.addSeparator()
-        for title, action in (("剪下", self.source.cut), ("複製", self.source.copy), ("貼上", self.source.paste), ("全選", self.source.selectAll)):
-            menu.addAction(title, action)
-        menu.exec(self.source.mapToGlobal(position))
-
     def snapshot(self):
         return self.project.snapshot(), tuple(self.notes.selected_rows()), self.notes.currentRow()
 
@@ -58,6 +38,8 @@ class EditActions(NotationActions):
         project = self.project.snapshot()
         try:
             operation(project)
+            if project.mode != "visual":
+                raise ValueError("本版只提供視覺編輯，未變更目前樂譜。")
             project.score.validate()
             self.validate_tuplet_edit(project.score)
             if self.project.score.notation_error() is None:
@@ -119,15 +101,7 @@ class EditActions(NotationActions):
             self.meter_field.setCurrentText(score.meter)
             self.tempo_field.setValue(score.tempo)
             self.staff.setChecked(score.with_staff)
-            if self.source.toPlainText() != self.project.source:
-                cursor = self.source.textCursor()
-                position = cursor.position()
-                self.source.setPlainText(self.project.source)
-                cursor = self.source.textCursor()
-                cursor.setPosition(min(position, len(self.project.source)))
-                self.source.setTextCursor(cursor)
-            self.editor_stack.setCurrentIndex(0 if self.project.mode == "visual" else 1)
-            self.mode_button.setText("進階語法" if self.project.mode == "visual" else "返回視覺草稿")
+            self.editor_stack.setCurrentIndex(0)
             self.notes.set_score(score)
             self.notes.select_rows(selection, current)
             error = score.rhythm_error() or score.notation_error()
@@ -158,16 +132,6 @@ class EditActions(NotationActions):
                 setattr(project.score, name, value)
         self.mutate(update)
 
-    def source_changed(self):
-        if self.loading:
-            return
-        source = self.source.toPlainText()
-        if len(source.encode("utf-8")) > MAX_FILE_BYTES:
-            self.error("原始碼太大", "原始碼上限為 4 MB。")
-            self.sync()
-            return
-        self.mutate(lambda p: setattr(p, "source", source))
-
     def select_note(self, *_):
         self.update_selection()
 
@@ -189,12 +153,13 @@ class EditActions(NotationActions):
         try:
             for name in ("degree", "duration", "octave", "accidental"):
                 widget = getattr(self, name)
+                widget.setPlaceholderText("未選取" if editing and not rows else "不同")
                 distinct = {getattr(note, name) for note in values}
                 widget.setCurrentIndex(widget.findData(next(iter(distinct))) if len(distinct) == 1 else -1)
                 widget.setEnabled(not editing or bool(rows))
             dotted = {note.dotted for note in values}
-            self.dotted.setTristate(len(dotted) != 1)
-            self.dotted.setCheckState(Qt.CheckState.PartiallyChecked if len(dotted) != 1 else Qt.CheckState.Checked if True in dotted else Qt.CheckState.Unchecked)
+            self.dotted.setTristate(len(dotted) > 1)
+            self.dotted.setCheckState(Qt.CheckState.PartiallyChecked if len(dotted) > 1 else Qt.CheckState.Checked if True in dotted else Qt.CheckState.Unchecked)
             self.dotted.setEnabled(not editing or bool(rows))
         finally:
             self.inspector_loading = False
@@ -298,7 +263,7 @@ class EditActions(NotationActions):
     def paste_notes(self):
         mime = QApplication.clipboard().mimeData()
         if not mime or not mime.hasFormat(NOTE_MIME):
-            self.statusBar().showMessage("請先複製本程式的音符；簡譜文字可貼入進階語法。", 5000)
+            self.statusBar().showMessage("請先在譜面選取並複製音符，再貼到指定位置。", 5000)
             return
         try:
             payload = bytes(mime.data(NOTE_MIME))
@@ -390,7 +355,7 @@ class EditActions(NotationActions):
 
     def measure_ready(self):
         if self.project.mode != "visual":
-            self.statusBar().showMessage("小節工具用於可編輯譜面；進階語法請直接編輯原始碼。", 6000)
+            self.statusBar().showMessage("目前內容不能使用小節工具，請先開啟可編輯的樂譜專案。", 6000)
             return False
         return not (self.loading or (self.task and self.task_blocks_edit))
 
@@ -540,7 +505,6 @@ class EditActions(NotationActions):
 
     def change_workspace(self, index):
         self.print_preview_active = False
-        self.metadata_button.setEnabled(True)
         self.autopreview.stop()
         self.workspace_view.blockSignals(True)
         self.workspace_view.setCurrentIndex(0)
@@ -555,7 +519,6 @@ class EditActions(NotationActions):
 
     def show_print_preview(self):
         self.print_preview_active = True
-        self.metadata_button.setEnabled(False)
         self.editor_container.hide()
         self.preview_panel.show()
         self.preview_tabs.setCurrentIndex(0)
@@ -629,16 +592,3 @@ class EditActions(NotationActions):
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
-
-    def source_snippets(self):
-        menu = QMenu(self)
-        snippets = (("三連音（3 個八分音符）", "3[ q1 q2 q3 ] "),
-                    ("前倚音", "g[23] c1 "), ("後倚音", "c1 [23]g "),
-                    ("弱起拍號（取代原拍號）", "4/4,4 "),
-                    ("反覆段落", "R{ c1 c2 c3 c4 } "),
-                    ("連弓線", "c1 ( c2 c3 c4 ) "),
-                    ("換行", "\\break\n"), ("另一聲部（需補齊同長度）", "\nNextPart\n1=C 4/4\nc1 c2 c3 c4\n"))
-        for title, snippet in snippets:
-            menu.addAction(title, lambda s=snippet: self.source.insertPlainText(s))
-        self.statusBar().showMessage("進階語法會插入游標處；弱起拍號須取代原拍號，請自行核對小節拍數。", 8000)
-        menu.exec(self.source.mapToGlobal(self.source.rect().topLeft()))

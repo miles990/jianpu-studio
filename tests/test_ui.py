@@ -172,25 +172,27 @@ def test_fill_save_and_recovery_roundtrip(window, qtbot, tmp_path):
     assert load_project(window.recovery_path) == window.project
 
 
-def test_source_edit_invalidates_preview_and_preserves_both_drafts(window, monkeypatch):
+def test_metadata_edit_invalidates_preview_and_undo_preserves_music(window, qtbot):
     original = [Note(1), Note(2), Note(3), Note(4)]
     set_notes(window, original)
-    window.switch_mode()
+    before = window.project.snapshot()
     revision = window.revision
     window.result = SimpleNamespace()
     window.rendered_revision = revision
-    window.source.insertPlainText("% retained source edit\n")
-    source = window.project.source
+    qtbot.mouseClick(window.title_field, Qt.MouseButton.LeftButton)
+    window.title_field.selectAll()
+    qtbot.keyClicks(window.title_field, "Changed title")
+    qtbot.keyClick(window.title_field, Qt.Key.Key_Tab)
     assert window.revision > revision
     assert window.fresh_result() is None
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Yes)
-    window.switch_mode()
+    assert window.project.score.title == "Changed title"
     assert window.project.mode == "visual"
     assert window.project.score.notes == original
-    assert window.project.source == source
-    window.switch_mode()
-    assert window.project.mode == "source"
-    assert window.source.toPlainText() == source
+    after = window.project.snapshot()
+    window.undo()
+    assert window.project == before
+    window.redo()
+    assert window.project == after
 
 
 def test_unsaved_new_cancel_failed_save_and_discard(window, qtbot, monkeypatch):
@@ -262,8 +264,6 @@ def test_background_render_keeps_editor_live_and_discards_stale_result(window, q
         qtbot.keyClick(window.notes, Qt.Key.Key_Space)
         qtbot.keyClicks(window.notes, "7")
         assert window.project.score.notes[1].degree == 7
-        window.switch_mode()
-        assert window.project.mode == "source"
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Discard)
         window.new_project()
         assert window.project == Project()

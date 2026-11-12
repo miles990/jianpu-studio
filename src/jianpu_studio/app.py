@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 import threading
@@ -25,12 +26,10 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .editing import EditActions
-from .engine import Cancelled, find_tool, recognize, render, run_tool, worker_command, worker_env
+from .engine import Cancelled, find_tool, recognize, render
 from .model import (
-    MAX_FILE_BYTES,
     Note,
     Project,
-    Score,
     atomic_write,
     demo_project,
     load_project,
@@ -74,7 +73,7 @@ class Task(QThread):
 
 
 class MainWindow(EditActions, QMainWindow):
-    def __init__(self, recovery: bool = True):
+    def __init__(self, recovery: bool = True, initial_path: Path | None = None):
         super().__init__()
         self.setMinimumSize(860, 560)
         self.resize(1380, 850)
@@ -114,6 +113,7 @@ class MainWindow(EditActions, QMainWindow):
         self.job_number = 0
         self.data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
         self.recovery_path = self.data_dir / "recovery.jps"
+        self.recovery_protected = False
         self.autopreview = QTimer(self)
         self.autopreview.setSingleShot(True)
         self.autopreview.setInterval(1200)
@@ -126,10 +126,18 @@ class MainWindow(EditActions, QMainWindow):
         self.autosave.setInterval(15000)
         self.autosave.timeout.connect(self.write_recovery)
         self.autosave.start()
-        if recovery and self.recovery_path.is_file():
-            QTimer.singleShot(0, self.restore_recovery)
+        if initial_path is not None or (recovery and self.recovery_path.is_file()):
+            QTimer.singleShot(0, lambda: self.finish_startup(recovery, initial_path))
         else:
             QTimer.singleShot(250, lambda: self.render_score(False))
+
+    def finish_startup(self, recovery, initial_path):
+        # One callback: a separate open-file timer could run inside a recovery
+        # dialog's nested event loop and delete the only unsaved copy.
+        if recovery and self.recovery_path.is_file():
+            self.restore_recovery()
+        if initial_path is not None:
+            self.open_file(path=initial_path)
 
     def build_ui(self):
         build_workspace(self, label, button)
@@ -174,31 +182,26 @@ class MainWindow(EditActions, QMainWindow):
     def current_tool(self, name):
         return find_tool(name, str(self.settings.value(name, "")))
 
-    def switch_mode(self):
-        if self.task and self.task_blocks_edit:
-            return
-        if self.print_preview_active:
-            self.change_workspace(0)
-        if self.project.mode == "visual":
-            try:
-                source = self.project.score.to_jianpu()
-            except ValueError as exc:
-                self.error("請先完成小節", exc)
-                return
-            if self.project.source and self.project.source != source:
-                answer = QMessageBox.question(self, "繼續進階原始碼", "專案保留了上次的進階原始碼。\n\n按「是」繼續原始碼；按「否」使用目前視覺草稿重新產生（取代舊原始碼）。", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes)
-                if answer == QMessageBox.StandardButton.Cancel:
-                    return
-                if answer == QMessageBox.StandardButton.Yes:
-                    source = self.project.source
-            def update(p):
-                p.source = source
-                p.mode = "source"
-            self.mutate(update)
-        else:
-            answer = QMessageBox.question(self, "返回視覺草稿", "進階原始碼不能自動還原成視覺音符。\n返回後將使用切換前的視覺草稿；進階原始碼仍保留在專案內。\n\n確定返回？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-            if answer == QMessageBox.StandardButton.Yes:
-                self.mutate(lambda p: setattr(p, "mode", "visual"))
+    @staticmethod
+    def prepare_visual_project(project):
+        """Accept only an authoritative editable score, never a stale draft."""
+        project.score.validate()
+        if project.mode == "visual":
+            return project
+        try:
+            unchanged = project.source.strip() == project.score.to_jianpu().strip()
+        except ValueError:
+            unchanged = False
+        if unchanged:
+            visual = project.snapshot()
+            visual.mode = "visual"
+            return visual
+        raise ValueError("這份舊專案含有目前無法轉成可編輯音符的內容。"
+                         "本版只提供視覺編輯，未載入或變更原檔；可保留原檔並使用 0.3.0 處理。")
+
+    def clear_recovery(self):
+        if not self.recovery_protected:
+            self.recovery_path.unlink(missing_ok=True)
 
     def guard_unsaved(self) -> bool:
         if self.task and self.task_blocks_edit:
@@ -213,6 +216,7 @@ class MainWindow(EditActions, QMainWindow):
         return answer == QMessageBox.StandardButton.Discard
 
     def reset(self, project: Project, path: Path | None = None, dirty=False):
+        project = self.prepare_visual_project(project)
         if self.task and not self.task_blocks_edit:
             self.task.cancel.set()
         self.autopreview.stop()
@@ -242,7 +246,7 @@ class MainWindow(EditActions, QMainWindow):
         self.measure_notice.hide()
         if self.print_preview_active:
             self.change_workspace(0)
-        self.recovery_path.unlink(missing_ok=True)
+        self.clear_recovery()
         self.sync(selection=[], current=-1)
         if self.print_preview_active and self.auto_check.isChecked():
             self.autopreview.start()
@@ -260,19 +264,15 @@ class MainWindow(EditActions, QMainWindow):
         if not self.guard_unsaved():
             return
         if path is None:
-            name, _ = QFileDialog.getOpenFileName(self, "開啟樂譜", "", "樂譜專案 (*.jps);;簡譜文字 (*.jly *.txt)")
+            name, _ = QFileDialog.getOpenFileName(self, "開啟樂譜", "", "樂譜專案 (*.jps)")
             if not name:
                 return
             path = Path(name)
         try:
-            if path.suffix.lower() == ".jps":
-                self.reset(load_project(path), path)
-                self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
-            else:
-                if path.stat().st_size > MAX_FILE_BYTES:
-                    raise ValueError("樂譜檔超過 4 MB。")
-                source = path.read_text(encoding="utf-8-sig")
-                self.reset(Project(Score(title=path.stem), "source", source), dirty=True)
+            if path.suffix.lower() != ".jps":
+                raise ValueError("請開啟 .jps 樂譜專案；MusicXML 請用「檔案 → 匯入 MusicXML」。本版不提供文字樂譜編輯。")
+            self.reset(load_project(path), path)
+            self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
         except Exception as exc:
             self.error("無法開啟樂譜", exc)
 
@@ -283,7 +283,7 @@ class MainWindow(EditActions, QMainWindow):
         try:
             save_project(self.path, self.project)
             self.dirty = False
-            self.recovery_path.unlink(missing_ok=True)
+            self.clear_recovery()
             self.sync()
             self.statusBar().showMessage(f"已儲存：{self.path}", 6000)
             return True
@@ -303,7 +303,7 @@ class MainWindow(EditActions, QMainWindow):
         return False
 
     def write_recovery(self):
-        if self.dirty:
+        if self.dirty and not self.recovery_protected:
             try:
                 save_project(self.recovery_path, self.project)
             except OSError:
@@ -313,12 +313,27 @@ class MainWindow(EditActions, QMainWindow):
         try:
             recovered = load_project(self.recovery_path)
         except Exception:
-            self.statusBar().showMessage("找到無法讀取的復原檔，請從原專案開啟。", 8000)
+            self.statusBar().showMessage("找到無法讀取的復原檔，已保留原檔並暫停自動暫存；請手動儲存新樂譜。", 8000)
+            self.recovery_protected = True
+            return
+        try:
+            recovered = self.prepare_visual_project(recovered)
+        except ValueError as exc:
+            try:
+                data = self.recovery_path.read_bytes()
+                backup = self.recovery_path.with_name("recovery-legacy-" + hashlib.sha256(data).hexdigest() + ".jps")
+                atomic_write(backup, data)
+                self.clear_recovery()
+                self.error("舊版復原暫存已保留", f"{exc}\n\n完整暫存保留於：{backup}")
+            except OSError:
+                # Never overwrite or delete the only copy if backup failed.
+                self.recovery_protected = True
+                self.error("舊版復原暫存已保留", f"{exc}\n\n無法建立備份，原暫存保留於：{self.recovery_path}\n本次自動復原暫存暫停，請手動儲存新樂譜。")
             return
         if QMessageBox.question(self, "復原未儲存樂譜", "上次有未儲存的樂譜，現在復原嗎？") == QMessageBox.StandardButton.Yes:
             self.reset(recovered, dirty=True)
         else:
-            self.recovery_path.unlink(missing_ok=True)
+            self.clear_recovery()
             self.autopreview.start()
 
     def job_dir(self) -> Path:
@@ -334,6 +349,7 @@ class MainWindow(EditActions, QMainWindow):
                 self.task.cancel.set()
                 self.task_blocks_edit = True
                 self.editor.setEnabled(False)
+                self.score_settings.setEnabled(False)
             return
         self.autopreview.stop()
         task = Task(fn, self)
@@ -341,6 +357,7 @@ class MainWindow(EditActions, QMainWindow):
         self.task = task
         self.task_blocks_edit = blocks_edit
         self.editor.setEnabled(not blocks_edit)
+        self.score_settings.setEnabled(not blocks_edit)
         self.preview_button.setEnabled(not blocks_edit)
         self.progress.show()
         self.cancel_button.show()
@@ -351,6 +368,7 @@ class MainWindow(EditActions, QMainWindow):
             self.task_blocks_edit = False
             task.deleteLater()
             self.editor.setEnabled(True)
+            self.score_settings.setEnabled(True)
             self.preview_button.setEnabled(True)
             self.progress.hide()
             self.cancel_button.hide()
@@ -608,15 +626,8 @@ class MainWindow(EditActions, QMainWindow):
         xml = read_xml(path)
         project, message = visual_import(xml)
         if project is None:
-            target = output / "imported.jly"
-            try:
-                run_tool(worker_command("import", str(path), str(target)), output, cancel, env=worker_env())
-            except Exception:
-                error = target.with_suffix(".error.txt")
-                if error.is_file():
-                    raise ValueError(error.read_text(encoding="utf-8")) from None
-                raise
-            project = Project(Score(title="匯入樂譜"), "source", target.read_text(encoding="utf-8"))
+            raise ValueError("這份 MusicXML 含有目前尚不能完整圖形化的聲部、歌詞或記號。"
+                             "為避免遺失音樂內容，本次未匯入，原檔及目前樂譜不變。")
         return project, message
 
     def import_complete(self, result):
@@ -708,7 +719,23 @@ class MainWindow(EditActions, QMainWindow):
             self.error("無法開啟 Audiveris", exc)
 
     def show_help(self):
-        QMessageBox.information(self, "快速上手 / 快捷鍵", "小節：點小節號選取；＋新增小節，或用小節選單前插／後插／曲尾新增。清空保留拍數，刪除會讓後段前移。\n填寫小節：點休止符 0，用數字取代休止，保留後面小節位置。\n新增模式：0–7 輸入音符；屬性列設定下一音符。可選擇插在選取前、後或曲尾。\n修改模式：先選音符，再調整屬性；只改動那個屬性。混合值顯示「不同」。\n\n音符區快捷鍵（相容部分 EOP 習慣）：\nSpace 切換新增 / 修改，Enter 試聽 / 停止。\nQ / W / E / R / A / S：全、二分、四分、八分、十六分、三十二分音符。\n↑ / ↓ 八度，. 附點，[ / ] 縮短 / 延長。\nShift 連選、Ctrl 加選、Ctrl+A 全選，M 選小節。\nCtrl+C / X / V 複製 / 剪下 / 貼上，Ctrl+D 重複，Delete 刪除。\nInsert 前插小節、Ctrl+Insert 新增多節、Ctrl+B 曲尾加小節、Ctrl+Delete 刪除小節。\nCtrl+Z 復原，Ctrl+Y 重做，Ctrl+S 儲存，F5 列印預覽。\n平常在同一張主譜面閱讀與編輯。PDF 只在列印／匯出時產生，PDF 本身不能直接編輯音符。\n\n「記號 / 二胡」可設定力度、延長、常用演奏記號、前後倚音、指法、弓法、滑音。連續選取可加連音 / 延音 / 漸強弱 / 小節反覆。\n三連音：選一個未附點音符或休止符，用「記號」選單拆成三份，總拍數不變。進階語法另支援弱起、多聲部等；返回時保留視覺草稿。\n\n每 15 秒儲存本機復原暫存。MIDI 試聽目前使用 Windows 內建合成器。")
+        QMessageBox.information(self, "快速上手 / 快捷鍵", (
+            "上方樂譜設定：直接修改曲名、調號、拍號與速度。\n"
+            "左側音符工具：按「新增音符」「修改音符」或「填寫小節」，再選音高、時值、八度、升降與附點。\n"
+            "填寫小節會取代休止空位，不推移後面的音樂。修改音符只改動選取音符的指定屬性。\n"
+            "左側小節工具：點小節號選取，再新增、重複、清空或刪除。清空保留拍數，刪除會移除整節。\n"
+            "力度／演奏、連線／反覆、倚音／二胡：三個按鈕直接開啟對應設定。\n\n"
+            "音符區快捷鍵：\n"
+            "0–7 輸入；Space 切換新增／修改；Enter 試聽／停止。\n"
+            "Q W E R A S：全、二分、四分、八分、十六分、三十二分。\n"
+            "↑ ↓ 八度；. 附點；[ ] 縮短／延長。\n"
+            "Shift 連選、Ctrl 加選、Ctrl+A 全選、M 選小節。\n"
+            "Ctrl+C / X / V 複製／剪下／貼上；Ctrl+D 重複；Delete 刪除音符。\n"
+            "Insert 前插小節；Ctrl+Insert 批次新增；Ctrl+B 曲尾新增；Ctrl+Delete 刪除小節。\n"
+            "Ctrl+Z 復原；Ctrl+Y 重做；Ctrl+S 儲存；F5 列印預覽。\n\n"
+            "三連音：選一個未附點音符或休止符，用音符工具「三連音」拆成三份，總拍數不變。\n"
+            "PDF 只在列印／匯出時產生，平常直接在主譜面閱讀與編輯。\n"
+            "每 15 秒保留本機復原暫存。MIDI 使用 Windows 內建音色。"))
 
     def check_updates(self):
         from .update_dialog import UpdateDialog
@@ -748,7 +775,7 @@ class MainWindow(EditActions, QMainWindow):
         self.autosave.stop()
         self.player.stop()
         self.autopreview.stop()
-        self.recovery_path.unlink(missing_ok=True)
+        self.clear_recovery()
         self.clear_pdf_preview()
         self.temp.cleanup()
         event.accept()

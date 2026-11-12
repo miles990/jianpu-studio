@@ -1,4 +1,4 @@
-"""Bounded MusicXML reading; lossless advanced fallback for complex music."""
+"""Bounded MusicXML reading and conservative visual import."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ def visual_import(xml: str) -> tuple[Project | None, str]:
     """Only accept a precisely representable subset; never silently drop voices."""
     root = ET.fromstring(xml)
     parts = root.findall("part")
-    fallback = "此樂譜包含多聲部、和弦、連結線、反覆、弱起或特殊節奏；已保留為進階簡譜，避免遺失資訊。"
+    fallback = "此樂譜包含目前無法完整圖形化的聲部或記號；為避免遺失資訊，本次未匯入。"
     if len(parts) != 1 or any(root.find(f".//{tag}") is not None for tag in
                               ("backup", "forward", "chord", "tie", "notations", "grace", "time-modification", "repeat", "ending", "transpose", "unpitched", "harmony")):
         return None, fallback
@@ -84,7 +84,7 @@ def visual_import(xml: str) -> tuple[Project | None, str]:
             measure_beats = Fraction(0)
             for element in measure.findall("note"):
                 if element.find("lyric") is not None:
-                    return None, "歌詞資訊已保留在進階簡譜模式。"
+                    return None, "目前尚無法完整匯入這份樂譜的歌詞對位；為避免遺失資訊，本次未匯入。"
                 voices.add(element.findtext("voice", "1"))
                 if len(voices) > 1:
                     return None, fallback

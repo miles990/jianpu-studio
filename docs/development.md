@@ -4,16 +4,19 @@ Python 3.12 + PySide6 native widgets. The application is offline; there is no we
 
 ```text
 Visual Score (.jps) → score_view (immediate editable display)
-        └──────────→ deterministic jianpu text
-Source editor (.jly) ────────────────────────→ isolated jianpu-ly worker
+        └──────────→ deterministic jianpu text → isolated jianpu-ly worker
                                                ↓ .ly
                                             LilyPond
                                                ├→ MIDI (playback / export)
                                                └→ PDF + MIDI (print / PDF export)
-MusicXML / MXL → conservative visual import or preserved source
+MusicXML / MXL → conservative visual import (reject unsupported content)
 ```
 
-`model.py` uses 48 integer ticks per quarter note, rational durations, and a versioned JSON schema. This represents undotted 3:2 triplets and dotted 32nd notes without rounding. Triplet splitting preserves the original duration; complete three-note groups are validated before structural edits. `musicxml.py` validates bounded ZIP/XML inputs with defusedxml; visual import accepts only representable monophonic measures and falls back to upstream conversion for complex music. Both converters preserve the editable source in the project. Upstream jianpu-ly is vendored unchanged at `b3c2bbb7de423b7c9956204898e6ac1a7ca50c62`.
+`model.py` uses 48 integer ticks per quarter note, rational durations, and a versioned JSON schema. This represents undotted 3:2 triplets and dotted 32nd notes without rounding. Triplet splitting preserves the original duration; complete three-note groups are validated before structural edits. `musicxml.py` validates bounded ZIP/XML inputs with defusedxml; visual import accepts only representable monophonic measures. Unsupported content is rejected before replacing the current score. Upstream jianpu-ly is vendored unchanged at `b3c2bbb7de423b7c9956204898e6ac1a7ca50c62`.
+
+Version 0.3.1 removes the source editor and source-file open/export actions. Legacy source-mode projects are accepted only when their source exactly matches the generated visual score (apart from surrounding whitespace); otherwise opening is refused without changing the file or current project. Incompatible recovery files are backed up byte-for-byte before a new recovery file can be written. If that backup fails, automatic recovery writes and cleanup are disabled for the session to preserve the only copy. The model and worker retain source support internally for schema compatibility and backend tests.
+
+Opening a file from Windows passes an initial path to the main window. One startup callback completes recovery first, then opens that file through the unsaved-work guard. Separate timers would be unsafe because a recovery dialog can run a nested event loop. Blocking imports disable both the note editor and the always-visible score settings; background rendering leaves them editable.
 
 `engine.py` executes tools without a shell, in separate per-job directories, with cancellation and timeouts (render 120 seconds; OMR 600 seconds). Conversion runs in a fresh worker process to isolate upstream globals. The frozen executable supports the same `--worker` contract. Normal score editing does not request a PDF. Playback and MIDI export use `render(create_pdf=False)` with LilyPond `-dno-print-pages`; PDF output is requested only for print preview, PDF export, or opening the print file. Rendering runs without locking editing. A single task queue coalesces output requests; revision checks discard stale results and prevent exporting an outdated preview. Imports temporarily lock the editor. `score_view.py` paints visible measures, while immutable notes let undo snapshots share unchanged note data.
 

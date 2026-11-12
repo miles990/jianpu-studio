@@ -253,7 +253,7 @@ def test_score_and_explicit_print_preview_are_reachable(measure_window, size):
     assert window.project == before
     assert window.notes.selected_rows() == [4, 5, 6, 7]
     assert window.notes.currentRow() == 5
-    controls = [window.save_button, window.notes, window.input_mode,
+    controls = [window.save_button, window.notes, window.edit_mode_button,
                 window.duration, window.staff, *window.measure_controls]
     for control in controls:
         for scroll in window.findChildren(QScrollArea):
@@ -272,28 +272,6 @@ def test_score_and_explicit_print_preview_are_reachable(measure_window, size):
     assert not window.pdf_view.isVisible()
     assert window.project == before
     assert window.notes.selected_rows() == [4, 5, 6, 7]
-
-
-def test_source_mode_protects_visual_measures_and_remains_editable(measure_window, monkeypatch):
-    window = measure_window
-    load_score(window, [Note(1)] * 8)
-    window.notes.select_rows([0, 1, 2, 3])
-    window.show_print_preview()
-    window.switch_mode()
-    assert window.project.mode == "source"
-    assert window.source.isVisible(), "entering source mode must expose its editor from PDF-only mode"
-    assert all(not control.isEnabled() for control in window.measure_controls)
-    before = window.project.snapshot()
-    history_count = len(window.history)
-    monkeypatch.setattr(window, "error", lambda *args: None)
-    window.insert_bars(position="end", count=2)
-    for action in ("clear", "delete", "duplicate"):
-        window.measure_action(action)
-    assert window.project == before
-    assert len(window.history) == history_count
-    window.source.insertPlainText("% 原始碼仍可編輯\n")
-    assert "% 原始碼仍可編輯" in window.project.source
-    assert window.project.score == before.score
 
 
 def test_editing_is_local_and_midi_pdf_are_prepared_on_demand(qtbot, tmp_path, monkeypatch):

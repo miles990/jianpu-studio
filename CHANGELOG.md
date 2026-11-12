@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- Keep score settings visible and group note and measure tools in a dedicated side panel.
+- Expose insert, edit, and fill modes as direct controls, with separate dynamics/articulations, connections/repeats, and grace/erhu buttons.
+- Remove advanced-source editing and text-source open/export actions from the user interface; retain PDF, MIDI, and print workflows.
+- Accept legacy source projects only when their source exactly matches the saved visual score; reject differing source content and unsupported MusicXML without replacing the current project or overwriting the original file.
+- Archive incompatible recovery data before reuse, preserve it if backup fails, and finish startup recovery before opening a file from Windows. Lock the always-visible score settings during imports.
+- Back up legacy recovery files that cannot be loaded visually; protect the original and suspend automatic recovery writes if backup or reading fails.
+- Refresh the visual-only user guide and add focused official-source research on grouped notation controls.
+
 ## 0.3.0
 
 - Default to a single readable, editable score surface; collapse title, composer, key, meter, and tempo into expandable score settings.

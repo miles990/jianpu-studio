@@ -197,10 +197,11 @@ class NotationActions:
         ):
             menu.addAction(title, fn)
         menu.addSeparator()
-        menu.addAction("全部基本記號／二胡…", self.notation_settings)
+        for index, title in enumerate(("力度 / 演奏…", "連線 / 反覆…", "倚音 / 二胡…")):
+            menu.addAction(title, lambda checked=False, tab=index: self.notation_settings(tab))
         return menu
 
-    def notation_settings(self):
+    def notation_settings(self, tab_index=0):
         if self.project.mode != "visual":
             return
         rows = self.notes.selected_rows()
@@ -217,6 +218,7 @@ class NotationActions:
         hint.setWordWrap(True)
         layout.addWidget(hint)
         tabs = QTabWidget()
+        tabs.setObjectName("notation_tabs")
         layout.addWidget(tabs)
         forms = []
         for title in ("力度／演奏", "連線／反覆", "倚音／二胡"):
@@ -225,6 +227,7 @@ class NotationActions:
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             tabs.addTab(page, title)
             forms.append(form)
+        tabs.setCurrentIndex(tab_index if tab_index in (0, 1, 2) else 0)
         controls = {}
         options = {
             "dynamic": (0, "力度", [("無", "")] + [(s, s) for s in ("ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz")]),
@@ -245,7 +248,7 @@ class NotationActions:
                 control.setCurrentIndex(control.findData(getattr(self.next_note, name)))
             forms[tab].addRow(title, control)
             controls[name] = control
-        explanation = QLabel("延長記號表示自由延長；同音延音線合併拍數；三連音則把原拍數平均分成三份。\n三連音請在譜面選一音，再用「記號」箭頭操作。")
+        explanation = QLabel("延長記號表示自由延長；同音延音線合併拍數；三連音則把原拍數平均分成三份。\n三連音請在譜面選一音，再用音符工具的「三連音」操作。")
         explanation.setWordWrap(True)
         forms[0].addRow(explanation)
         range_controls = {}

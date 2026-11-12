@@ -23,6 +23,11 @@ QTabBar::tab { padding: 7px 10px; background: #edf1ef; border: 0; }
 QTabBar::tab:selected { background: #ffffff; color: #197e69; border-bottom: 2px solid #197e69; }
 QGroupBox { border: 1px solid #dbe3e0; border-radius: 6px; margin-top: 10px; padding-top: 14px; }
 QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+QGroupBox#score_settings, QGroupBox#note_tools, QGroupBox#measure_tools { background: #ffffff; margin-top: 9px; padding-top: 9px; }
+QGroupBox#score_settings::title, QGroupBox#note_tools::title, QGroupBox#measure_tools::title { color: #17664f; font-weight: 600; }
+QWidget#tool_panel QPushButton, QWidget#tool_panel QToolButton { padding: 2px 5px; }
+QWidget#tool_panel QComboBox, QWidget#tool_panel QSpinBox { padding: 2px 4px; }
+QWidget#tool_panel QPushButton#pitch { padding: 3px; min-width: 24px; min-height: 24px; font-size: 19px; }
 QStatusBar { background: #eaf0ed; }
 QSplitter::handle { background: #e1e7e4; width: 2px; }
 QProgressBar { border: none; background: #e1e7e4; height: 4px; }

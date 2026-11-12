@@ -33,7 +33,8 @@ def main() -> int:
     tessdata = app_root() / "runtime/tessdata"
     if tessdata.is_dir():
         os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
-    window = MainWindow(recovery=not self_test)
+    initial_path = Path(sys.argv[1]) if not self_test and len(sys.argv) > 1 else None
+    window = MainWindow(recovery=not self_test, initial_path=initial_path)
     window.show()
     if self_test:
         QTimer.singleShot(0, lambda: window.render_score(True))
@@ -65,8 +66,6 @@ def main() -> int:
         timer.timeout.connect(capture)
         timer.start(1000)
         QTimer.singleShot(90000, timeout)
-    elif len(sys.argv) > 1:
-        window.open_file(path=Path(sys.argv[1]))
     result = app.exec()
     lock.unlock()
     return result
