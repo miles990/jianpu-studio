@@ -171,9 +171,22 @@ def render(source: str, output: Path, lilypond: Path,
 def recognize(image: Path, output: Path, audiveris: Path,
               cancel: threading.Event | None = None) -> tuple[Path, str]:
     cancel = cancel or threading.Event()
+    image, output = image.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    log = run_tool([str(audiveris), "-batch", "-transcribe", "-export", "-save", "-output", str(output), "--", str(image)],
-                   output, cancel, timeout=600)
+    # The upstream Windows jpackage launcher can replace non-ACP command-line
+    # characters with '?'. Keep ALL file arguments relative and ASCII. Windows
+    # still receives the Unicode working directory through CreateProcessW.
+    staged = output / ("input" + image.suffix.lower())
+    if staged != image:
+        shutil.copy2(image, staged)
+    env = dict(os.environ)
+    model = Path(env.get("TESSDATA_PREFIX", str(app_root() / "runtime/tessdata"))) / "eng.traineddata"
+    if model.is_file():
+        (output / "tessdata").mkdir(exist_ok=True)
+        shutil.copy2(model, output / "tessdata/eng.traineddata")
+        env["TESSDATA_PREFIX"] = "tessdata"
+    log = run_tool([str(audiveris), "-batch", "-transcribe", "-export", "-save", "-output", ".", "--", staged.name],
+                   output, cancel, timeout=600, env=env)
     candidates = sorted(output.rglob("*.mxl")) + sorted(output.rglob("*.musicxml")) + sorted(output.rglob("*.xml"))
     candidates = [p for p in candidates if p.name != "container.xml"]
     atomic_write(output / "recognition.log", log)
