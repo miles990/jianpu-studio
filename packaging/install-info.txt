@@ -1,4 +1,4 @@
-簡譜工房 Jianpu Studio
+﻿簡譜工房 Jianpu Studio
 
 完整安裝包含：
 • 繁體中文簡譜編輯器

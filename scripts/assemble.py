@@ -18,6 +18,7 @@ for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
 licenses = dist / "licenses"
 licenses.mkdir(exist_ok=True)
 shutil.copy2(root / "src/jianpu_studio/vendor/LICENSE-jianpu-ly", licenses)
+shutil.copy2(root / "packaging/LICENSE-Inno-Setup.txt", licenses)
 for filename in ("LICENSE.txt", "LICENSE"):
     python_license = Path(sys.base_prefix) / filename
     if python_license.is_file():

@@ -1,4 +1,4 @@
-#ifndef AppVersion
+﻿#ifndef AppVersion
   #define AppVersion "0.1.0"
 #endif
 
@@ -30,7 +30,7 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "traditionalchinese"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
+Name: "traditionalchinese"; MessagesFile: "ChineseTraditional.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
