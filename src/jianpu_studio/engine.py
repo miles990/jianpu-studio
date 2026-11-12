@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .model import atomic_write
+from .windows_paths import compatible_launcher
 
 
 class ToolError(RuntimeError):
@@ -189,8 +190,9 @@ def recognize(image: Path, output: Path, audiveris: Path,
         (output / "tessdata").mkdir(exist_ok=True)
         shutil.copy2(model, output / "tessdata/eng.traineddata")
         env["TESSDATA_PREFIX"] = "tessdata"
-    log = run_tool([str(audiveris), "-batch", "-transcribe", "-export", "-save", "-output", ".", "--", staged.name],
-                   output, cancel, timeout=600, env=env)
+    with compatible_launcher(audiveris) as launcher:
+        log = run_tool([str(launcher), "-batch", "-transcribe", "-export", "-save", "-output", ".", "--", staged.name],
+                       output, cancel, timeout=600, env=env)
     candidates = sorted(output.rglob("*.mxl")) + sorted(output.rglob("*.musicxml")) + sorted(output.rglob("*.xml"))
     candidates = [p for p in candidates if p.name != "container.xml"]
     atomic_write(output / "recognition.log", log)
