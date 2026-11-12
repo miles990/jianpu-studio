@@ -15,7 +15,7 @@ _drive_lock = threading.Lock()
 
 
 @contextmanager
-def compatible_launcher(executable: Path):
+def compatible_launcher(executable: Path, *, use_short_path: bool = True):
     executable = executable.resolve()
     if os.name != "nt" or str(executable).isascii():
         yield executable
@@ -29,7 +29,7 @@ def compatible_launcher(executable: Path):
     short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
     short_path.restype = wintypes.DWORD
     length = short_path(str(executable), None, 0)
-    if length:
+    if use_short_path and length:
         buffer = ctypes.create_unicode_buffer(length)
         if short_path(str(executable), buffer, length) and buffer.value.isascii():
             yield Path(buffer.value)
@@ -50,6 +50,8 @@ def compatible_launcher(executable: Path):
     device = None
     with _drive_lock:
         occupied = kernel.GetLogicalDrives()
+        if not occupied:
+            raise RuntimeError("無法讀取 Windows 磁碟清單，請改用英文安裝路徑。")
         for code in range(ord("Z"), ord("P") - 1, -1):
             if not occupied & (1 << (code - ord("A"))):
                 name = chr(code) + ":"
