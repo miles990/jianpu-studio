@@ -63,3 +63,13 @@ def test_bad_score_reports_converter_error(tmp_path):
         pytest.skip("JIANPU_LILYPOND not configured")
     with pytest.raises(ToolError):
         render("1=C 4/4\n1 2 3", tmp_path.resolve(), tool.resolve())
+
+
+@pytest.mark.integration
+def test_multiple_movements_choose_primary_midi(tmp_path):
+    tool = find_tool("lilypond")
+    if not tool:
+        pytest.skip("JIANPU_LILYPOND not configured")
+    result = render("1=C 4/4 1 2 3 4\nNextScore\n1=C 4/4 5 6 7 1\n", tmp_path.resolve(), tool.resolve())
+    assert result.midi.name in ("score.mid", "score.midi")
+    assert len(list(tmp_path.glob("*.mid*"))) == 2

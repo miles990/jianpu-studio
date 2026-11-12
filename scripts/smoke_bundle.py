@@ -49,6 +49,6 @@ with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
         subprocess.run([str(exe), "--worker", "import", str(xml), str(work / "recognized.jly")], check=True, timeout=90)
         assert (work / "recognized.jly").stat().st_size > 30
         subprocess.run([str(exe), "--worker", "convert", str(work / "recognized.jly"), str(work / "recognized.ly"), "24"], check=True, timeout=90)
-        subprocess.run([str(lily), "--pdf", "-o", str(work / "recognized"), str(work / "recognized.ly")], check=True, timeout=120)
-        assert (work / "recognized.pdf").read_bytes().startswith(b"%PDF")
+        subprocess.run([str(lily), "--pdf", "-o", str(work / "recognized-score"), str(work / "recognized.ly")], check=True, timeout=120)
+        assert (work / "recognized-score.pdf").read_bytes().startswith(b"%PDF")
 print("Frozen bundle smoke test passed")

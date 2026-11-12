@@ -163,7 +163,11 @@ def render(source: str, output: Path, lilypond: Path,
     pdf = output / "score.pdf"
     if not pdf.is_file():
         raise ToolError("排譜引擎未產生 PDF。\n" + log[-12000:])
-    midi = next(iter(sorted(output.glob("*.midi"))), None) or next(iter(sorted(output.glob("*.mid"))), None)
+    # LilyPond numbers additional movements/parts. Prefer the main MIDI;
+    # lexicographic sorting would incorrectly put score-1 before score.
+    midi = next((p for p in (output / "score.midi", output / "score.mid") if p.is_file()), None)
+    if midi is None:
+        midi = next(iter(sorted(output.glob("*.midi"))), None) or next(iter(sorted(output.glob("*.mid"))), None)
     atomic_write(output / "render.log", log)
     return RenderResult(pdf, midi, output / "score.ly", log)
 
