@@ -89,6 +89,7 @@ jobs:
           path: |
             work/windows-tests.xml
             work/msi-extract.log
+            work/bundle-diagnostics/*
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

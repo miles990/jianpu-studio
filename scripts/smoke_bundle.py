@@ -18,6 +18,12 @@ exe = root / "JianpuStudio.exe"
 lily = root / "runtime/lilypond/bin/lilypond.exe"
 audiveris = root / "runtime/audiveris/Audiveris.exe"
 
+if args.omr:
+    diagnostics = Path("work/bundle-diagnostics").resolve()
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    subprocess.run([str(exe), "--self-test", str(diagnostics)], check=True, timeout=110)
+    assert (diagnostics / "windows-ui.png").is_file()
+
 with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
     work = Path(work)
     (work / "score.jly").write_text(demo_project().notation(), encoding="utf-8")

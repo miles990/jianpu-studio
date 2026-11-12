@@ -8,7 +8,7 @@ def main() -> int:
         from .worker import run
         return run(sys.argv[2:])
 
-    from PySide6.QtCore import QLockFile, QStandardPaths
+    from PySide6.QtCore import QLockFile, QStandardPaths, QTimer
     from PySide6.QtGui import QFont, QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -17,7 +17,8 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setOrganizationName("JianpuStudio")
-    app.setApplicationName("JianpuStudio")
+    self_test = len(sys.argv) > 2 and sys.argv[1] == "--self-test"
+    app.setApplicationName("JianpuStudioSelfTest" if self_test else "JianpuStudio")
     app.setFont(QFont("Microsoft JhengHei" if os.name == "nt" else "Noto Sans CJK TC", 10))
     icon = Path(__file__).parent / "assets/icon.png"
     if icon.exists():
@@ -32,9 +33,31 @@ def main() -> int:
     tessdata = app_root() / "runtime/tessdata"
     if tessdata.is_dir():
         os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
-    window = MainWindow()
+    window = MainWindow(recovery=not self_test)
     window.show()
-    if len(sys.argv) > 1:
+    if self_test:
+        output = Path(sys.argv[2]).resolve()
+        output.mkdir(parents=True, exist_ok=True)
+        timer = QTimer(window)
+        def capture():
+            if window.result and window.pdf_document.pageCount() > 0:
+                if not window.grab().save(str(output / "windows-ui.png")):
+                    app.exit(2)
+                    return
+                (output / "ui-test.txt").write_text("Frozen GUI rendered demo PDF successfully.\n", encoding="utf-8")
+                window.dirty = False
+                window.close()
+                app.exit(0)
+        def timeout():
+            (output / "ui-error.txt").write_text(window.preview_status.text() + "\n" + window.log.toPlainText(), encoding="utf-8")
+            if window.task:
+                window.task.cancel.set()
+                window.task.wait(20000)
+            app.exit(1)
+        timer.timeout.connect(capture)
+        timer.start(1000)
+        QTimer.singleShot(90000, timeout)
+    elif len(sys.argv) > 1:
         window.open_file(path=Path(sys.argv[1]))
     result = app.exec()
     lock.unlock()
