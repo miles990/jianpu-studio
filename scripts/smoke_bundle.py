@@ -25,7 +25,10 @@ with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
     assert (work / "score.ly").is_file(), list(work.iterdir())
     subprocess.run([str(lily), "--pdf", "-o", str(work / "score"), str(work / "score.ly")], check=True, timeout=120)
     assert (work / "score.pdf").read_bytes().startswith(b"%PDF")
-    assert (work / "score.midi").read_bytes().startswith(b"MThd")
+    midi = work / "score.mid"
+    if not midi.is_file():
+        midi = work / "score.midi"
+    assert midi.read_bytes().startswith(b"MThd")
     if args.omr:
         os.environ["TESSDATA_PREFIX"] = str(root / "runtime/tessdata")
         subprocess.run([str(lily), "--png", "-dresolution=180", "-o", str(work / "photo"),

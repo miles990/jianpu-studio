@@ -1,6 +1,10 @@
 """Attach independently executable engines and their notices to the app."""
 import hashlib
+import json
+import platform
 import shutil
+import subprocess
+import sys
 from importlib.metadata import distribution
 from pathlib import Path
 
@@ -14,6 +18,19 @@ for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
 licenses = dist / "licenses"
 licenses.mkdir(exist_ok=True)
 shutil.copy2(root / "src/jianpu_studio/vendor/LICENSE-jianpu-ly", licenses)
+for filename in ("LICENSE.txt", "LICENSE"):
+    python_license = Path(sys.base_prefix) / filename
+    if python_license.is_file():
+        shutil.copy2(python_license, licenses / "Python-LICENSE.txt")
+        break
+build_info = {
+    "python": platform.python_version(),
+    "platform": platform.platform(),
+    "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+    "packages": {name: distribution(name).version for name in
+                 ("PySide6", "shiboken6", "Pillow", "defusedxml", "PyInstaller")},
+}
+(dist / "BUILD-INFO.json").write_text(json.dumps(build_info, indent=2) + "\n", encoding="utf-8")
 for package in ("PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", "Pillow", "defusedxml"):
     d = distribution(package)
     for file in d.files or []:

@@ -28,6 +28,8 @@ class PhotoDialog(QDialog):
         self.setWindowTitle("照片轉簡譜 · 先整理照片")
         self.resize(980, 760)
         with Image.open(path) as original:
+            if original.width * original.height > 40_000_000:
+                raise ValueError("照片超過 4,000 萬像素，請先縮小影像再匯入。")
             self.original = ImageOps.exif_transpose(original).convert("RGB")
         self.quarter_turns = 0
         layout = QVBoxLayout(self)
