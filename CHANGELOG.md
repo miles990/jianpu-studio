@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.2.0
+## 0.2.1
+
+- 首個整合新版小節工作區、二胡記號與程式內更新的發布版本，包含下列 0.2.0／0.1.3 變更。
+- 修正 Windows CI 對無主控台 GUI 程式結束狀態的判定，等待實際程序結束，保留升級後診斷。
+- 0.1.3／0.2.0 未完成發布關卡，因此不提供這兩版安裝包；舊版使用者直接升級至 0.2.1。
+
+## 0.2.0（整合版，未發布安裝包）
 
 - Replace the card-based editor with a measure-based score view, compact workspace controls, score zoom, bar navigation, and focused editing, preview, and photo-review views.
 - Add explicit insert/edit modes, before/after/end insertion, multi-selection, measure selection, copy/cut/paste/duplicate, and selection-aware undo/redo.
@@ -11,7 +17,7 @@
 - Add advanced-source snippets for pickups, tuplets, grace notes, slurs, repeats, line breaks, and additional parts; these remain source-editing workflows.
 - Refresh the Traditional Chinese README and user guide; generate readable offline HTML with semantic lists, tables, and code blocks without third-party runtime dependencies.
 
-## 0.1.3
+## 0.1.3（更新功能開發版，未發布安裝包）
 
 - Add in-app stable-release checks, cancellable downloads, size/SHA-256 verification, and updates to the existing Windows installation scope and directory.
 - Prompt for unsaved music before applying an update; restart the app when installation finishes.

@@ -1,6 +1,6 @@
-# 簡譜工房 0.2.0 — 小節編輯與二胡記號
+# 簡譜工房 0.2.1 — 小節編輯與二胡記號
 
-**[下載 Windows 安裝程式](https://github.com/miles990/jianpu-studio/releases/latest)**，選擇 `JianpuStudio-0.2.0-Windows-x64-Setup.exe`。所需環境全部內附，不用另外安裝 Python、Java、排譜或辨識工具。
+**[下載 Windows 安裝程式](https://github.com/miles990/jianpu-studio/releases/latest)**，選擇 `JianpuStudio-0.2.1-Windows-x64-Setup.exe`。所需環境全部內附，不用另外安裝 Python、Java、排譜或辨識工具。
 
 ## 這版有什麼改變？
 
@@ -14,7 +14,7 @@
 
 ## 如何更新？
 
-**0.1.3 起的安裝版：**「說明 → 檢查更新 → 下載更新」，檔案大小與 SHA-256 核對成功後按「關閉並更新」。依提示儲存樂譜，沿用原安裝模式及位置，完成後重新開啟。
+**0.2.1 起的安裝版：**「說明 → 檢查更新 → 下載更新」，檔案大小與 SHA-256 核對成功後按「關閉並更新」。依提示儲存樂譜，沿用原安裝模式及位置，完成後重新開啟。
 
 **0.1.2 或更早：**先儲存並關閉程式，再執行本版安裝檔，選原安裝模式與資料夾。不需先解除安裝，之後即可從程式內更新。
 
@@ -26,4 +26,4 @@
 
 快捷鍵沿用部分 EOP 習慣，不能直接開啟 EOPN。弱起、三連音、倚音、多聲部仍需進階語法，尚無完整圖形化流程；進階原始碼不會自動轉回視覺音符。試聽使用 Windows MIDI 音色，無法重現真實二胡弓法與滑音。
 
-適用 Windows 10 1903 以上／Windows 11 x64。安裝檔尚未簽章，請從本專案下載頁取得並可核對 `SHA256SUMS.txt`。操作方式見[完整手冊](user-guide.md)。
+適用 Windows 10 1903 以上／Windows 11 x64。安裝檔尚未簽章，請從本專案下載頁取得並可核對 `SHA256SUMS.txt`。操作方式見[完整手冊](https://github.com/miles990/jianpu-studio/blob/main/docs/user-guide.md)。
