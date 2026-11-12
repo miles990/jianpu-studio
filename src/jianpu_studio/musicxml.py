@@ -49,6 +49,9 @@ def visual_import(xml: str) -> tuple[Project | None, str]:
     if len(parts) != 1 or any(root.find(f".//{tag}") is not None for tag in
                               ("backup", "forward", "chord", "tie", "notations", "grace", "time-modification", "repeat", "ending", "transpose", "unpitched", "harmony")):
         return None, fallback
+    for direction in root.findall(".//direction-type"):
+        if any(child.tag != "metronome" for child in direction):
+            return None, fallback
     score = Score(title=root.findtext("work/work-title") or root.findtext("movement-title") or "匯入樂譜")
     score.composer = root.findtext("identification/creator") or ""
     fifths_to_key = {-6: "Gb", -5: "Db", -4: "Ab", -3: "Eb", -2: "Bb", -1: "F", 0: "C", 1: "G", 2: "D", 3: "A", 4: "E", 5: "B", 6: "F#"}

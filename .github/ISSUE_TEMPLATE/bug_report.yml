@@ -1,0 +1,27 @@
+name: 錯誤回報
+description: 回報編輯、排譜、辨識或安裝問題
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 程式版本與 Windows 版本
+      placeholder: 0.1.0 / Windows 11 x64
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重現步驟、預期結果與實際結果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 排版／辨識訊息
+      description: 請先移除私人路徑與個人資訊。
+      render: text
+  - type: textarea
+    id: example
+    attributes:
+      label: 最小重現檔或截圖
+      description: 只上傳有權公開的樂譜或照片；可以改用自行建立的簡短旋律。

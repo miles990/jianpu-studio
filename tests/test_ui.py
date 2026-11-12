@@ -22,6 +22,10 @@ def test_visual_edit_undo_save_and_keyboard(qtbot, tmp_path, monkeypatch):
     assert len(window.project.score.notes) == 3
     window.redo()
     assert len(window.project.score.notes) == 4
+    window.notes.setCurrentRow(1)
+    window.degree.setCurrentIndex(5)
+    window.apply_note()
+    assert window.project.score.notes[1].degree == 5
     window.path = tmp_path / "中文 樂譜.jps"
     assert window.save()
     assert load_project(window.path) == window.project

@@ -33,6 +33,19 @@ def test_complex_score_falls_back():
     assert "避免遺失" in message
 
 
+def test_dynamics_and_directions_are_not_silently_dropped():
+    with_dynamics = XML.replace("<note><pitch>", '<direction><direction-type><dynamics><f/></dynamics></direction-type></direction><note><pitch>', 1)
+    project, _ = visual_import(with_dynamics)
+    assert project is None
+
+
+def test_transposed_key_keeps_relative_pitches():
+    g_major = XML.replace("<fifths>0</fifths>", "<fifths>1</fifths>")
+    project, _ = visual_import(g_major)
+    assert project.score.key == "G"
+    assert [(n.degree, n.octave) for n in project.score.notes] == [(4, -1), (5, -1), (6, -1), (0, 0)]
+
+
 def test_compressed_musicxml(tmp_path):
     path = tmp_path / "score.mxl"
     with zipfile.ZipFile(path, "w") as archive:

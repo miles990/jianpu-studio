@@ -538,6 +538,12 @@ class MainWindow(QMainWindow):
             except ValueError as exc:
                 self.error("請先完成小節", exc)
                 return
+            if self.project.source and self.project.source != source:
+                answer = QMessageBox.question(self, "繼續進階原始碼", "專案保留了上次的進階原始碼。\n\n按「是」繼續原始碼；按「否」使用目前視覺草稿重新產生（取代舊原始碼）。", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Yes)
+                if answer == QMessageBox.StandardButton.Cancel:
+                    return
+                if answer == QMessageBox.StandardButton.Yes:
+                    source = self.project.source
             def update(p):
                 p.source = source
                 p.mode = "source"

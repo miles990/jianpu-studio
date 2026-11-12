@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - name: Install Qt test system libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 libxcb-cursor0
       - run: pip install -e '.[dev]'
       - run: python scripts/fetch_runtime.py --platform linux
       - run: ruff check src tests scripts
