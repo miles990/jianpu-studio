@@ -1,0 +1,4 @@
+{
+  "verifyLocal": null,
+  "note": "填入「本機以真瀏覽器（或產品的驗收儀器）驗要部署的建置」的指令；null 時 wow-preflight --for deploy 會擋下"
+}

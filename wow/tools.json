@@ -1,0 +1,74 @@
+{
+  "tidy": {
+    "rules": [
+      {
+        "dir": "wow/work/runs/websmoke",
+        "keep": 5
+      },
+      {
+        "dir": "wow/work/runs/judge",
+        "keep": 50,
+        "kind": "files"
+      },
+      {
+        "dir": "wow/work/runs/checks",
+        "keep": 10,
+        "kind": "dirs"
+      },
+      {
+        "dir": "wow/work/agent-runs",
+        "keep": 50,
+        "kind": "dirs"
+      }
+    ],
+    "refRoots": [
+      "wow"
+    ],
+    "scratch": null,
+    "scratchDays": 2,
+    "minFree": 20
+  },
+  "lock": {
+    "name": "measure",
+    "waitMin": 30,
+    "staleMin": 30,
+    "voidOnLoad": false,
+    "maxLoad": null
+  },
+  "ab": {
+    "rounds": 6,
+    "threshold": 0.1,
+    "lock": "measure",
+    "higher": [],
+    "lower": []
+  },
+  "websmoke": {
+    "dir": null,
+    "urls": [
+      "/"
+    ],
+    "browsers": [
+      "chromium",
+      "webkit"
+    ],
+    "playwright": null,
+    "selectors": [],
+    "text": [],
+    "ignore": []
+  },
+  "blind": {
+    "setup": null,
+    "start": null,
+    "copy": [],
+    "ready": null,
+    "task": null,
+    "instrument": null
+  },
+  "judge": {
+    "criteria": "wow/judge-criteria.md",
+    "spotcheck": 0.1,
+    "minConf": 0.7
+  },
+  "checks": [],
+  "_說明": "各工具 --help 有欄位說明；null＝尚未設定。blind.start 佔位：{port} {repo} {sandbox} {app}。"
+}

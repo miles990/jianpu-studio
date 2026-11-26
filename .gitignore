@@ -10,3 +10,12 @@ vendor-runtime/
 work/
 *.spec.bak
 .coverage
+# wow：中間／測試產物只留本機（wow/work/）；舊路徑一併忽略。成品在產品目錄；wow/ 只交過程紀錄。wow-tidy 輪替
+wow/work/
+wow/runs/
+wow/reviews/
+wow/evidence/
+wow/brief.md
+.wow/
+# 第三方套件與建置產物不提交（F22；wow-preflight --staged 會擋）
+node_modules/
