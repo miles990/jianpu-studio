@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 
 from defusedxml import ElementTree as ET
 
+from .i18n import tr
 from .model import KEYS, METERS, Note, Project, Score
 
 MAX_XML = 16 * 1024 * 1024
@@ -15,20 +16,20 @@ MAX_XML = 16 * 1024 * 1024
 
 def read_xml(path: Path) -> str:
     if path.stat().st_size > MAX_XML:
-        raise ValueError("MusicXML 檔案太大（上限 16 MB）。")
+        raise ValueError(tr("MusicXML 檔案太大（上限 16 MB）。"))
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
             if len(archive.infolist()) > 2000:
-                raise ValueError("MXL 封裝含太多檔案。")
+                raise ValueError(tr("MXL 封裝含太多檔案。"))
             def read_member(name: str) -> bytes:
                 p = PurePosixPath(name)
                 if p.is_absolute() or ".." in p.parts or archive.getinfo(name).file_size > MAX_XML:
-                    raise ValueError("MXL 封裝含不安全路徑或過大的 XML。")
+                    raise ValueError(tr("MXL 封裝含不安全路徑或過大的 XML。"))
                 return archive.read(name)
             container = ET.fromstring(read_member("META-INF/container.xml"))
             files = [e for e in container.iter() if e.tag.split("}")[-1] == "rootfile"]
             if not files:
-                raise ValueError("MXL 找不到樂譜主檔。")
+                raise ValueError(tr("MXL 找不到樂譜主檔。"))
             data = read_member(files[0].attrib["full-path"])
     else:
         data = path.read_bytes()
@@ -37,7 +38,7 @@ def read_xml(path: Path) -> str:
     for element in root.iter():
         element.tag = element.tag.split("}")[-1]
     if root.tag != "score-partwise":
-        raise ValueError("目前支援 MusicXML score-partwise 格式。")
+        raise ValueError(tr("目前支援 MusicXML score-partwise 格式。"))
     return ET.tostring(root, encoding="unicode")
 
 
@@ -45,14 +46,14 @@ def visual_import(xml: str) -> tuple[Project | None, str]:
     """Only accept a precisely representable subset; never silently drop voices."""
     root = ET.fromstring(xml)
     parts = root.findall("part")
-    fallback = "此樂譜包含目前無法完整圖形化的聲部或記號；為避免遺失資訊，本次未匯入。"
+    fallback = tr("此樂譜包含目前無法完整圖形化的聲部或記號；為避免遺失資訊，本次未匯入。")
     if len(parts) != 1 or any(root.find(f".//{tag}") is not None for tag in
                               ("backup", "forward", "chord", "tie", "notations", "grace", "time-modification", "repeat", "ending", "transpose", "unpitched", "harmony")):
         return None, fallback
     for direction in root.findall(".//direction-type"):
         if any(child.tag != "metronome" for child in direction):
             return None, fallback
-    score = Score(title=root.findtext("work/work-title") or root.findtext("movement-title") or "匯入樂譜")
+    score = Score(title=root.findtext("work/work-title") or root.findtext("movement-title") or tr("匯入樂譜"))
     score.composer = root.findtext("identification/creator") or ""
     fifths_to_key = {-6: "Gb", -5: "Db", -4: "Ab", -3: "Eb", -2: "Bb", -1: "F", 0: "C", 1: "G", 2: "D", 3: "A", 4: "E", 5: "B", 6: "F#"}
     divisions, fifths, seen, voices = 1, 0, False, set()
@@ -84,7 +85,7 @@ def visual_import(xml: str) -> tuple[Project | None, str]:
             measure_beats = Fraction(0)
             for element in measure.findall("note"):
                 if element.find("lyric") is not None:
-                    return None, "目前尚無法完整匯入這份樂譜的歌詞對位；為避免遺失資訊，本次未匯入。"
+                    return None, tr("目前尚無法完整匯入這份樂譜的歌詞對位；為避免遺失資訊，本次未匯入。")
                 voices.add(element.findtext("voice", "1"))
                 if len(voices) > 1:
                     return None, fallback
@@ -121,6 +122,6 @@ def visual_import(xml: str) -> tuple[Project | None, str]:
         score.validate()
         if score.rhythm_error():
             return None, fallback
-        return Project(score), "已匯入可點選編輯的單聲部樂譜。請核對音高、節奏與調號。"
+        return Project(score), tr("已匯入可點選編輯的單聲部樂譜。請核對音高、節奏與調號。")
     except (ValueError, TypeError, StopIteration):
         return None, fallback

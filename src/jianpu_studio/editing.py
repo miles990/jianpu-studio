@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .i18n import tr
 from .model import DURATIONS, TICKS_PER_QUARTER, Note
 from .notation_actions import NotationActions
 
@@ -39,14 +40,14 @@ class EditActions(NotationActions):
         try:
             operation(project)
             if project.mode != "visual":
-                raise ValueError("本版只提供視覺編輯，未變更目前樂譜。")
+                raise ValueError(tr("本版只提供視覺編輯，未變更目前樂譜。"))
             project.score.validate()
             self.validate_tuplet_edit(project.score)
             if self.project.score.notation_error() is None:
                 if error := project.score.notation_error():
                     raise ValueError(error)
         except (ValueError, TypeError) as exc:
-            self.error("無法套用這項修改", exc)
+            self.error(tr("無法套用這項修改"), exc)
             self.sync(selection=before[1], current=before[2])
             return False
         if project == self.project:
@@ -67,7 +68,7 @@ class EditActions(NotationActions):
         self.play_after_render = False
         self.output_request = None
         self.player.stop()
-        self.preview_status.setText("樂譜已修改，等待更新排版。")
+        self.preview_status.setText(tr("樂譜已修改，等待更新排版。"))
         if self.print_preview_active and self.auto_check.isChecked():
             self.autopreview.start()
 
@@ -107,10 +108,10 @@ class EditActions(NotationActions):
             error = score.rhythm_error() or score.notation_error()
             bars = max(1, (sum(n.ticks for n in score.notes) + int(score.bar_length*TICKS_PER_QUARTER)-1) // int(score.bar_length*TICKS_PER_QUARTER))
             self.bar_jump.setMaximum(bars)
-            self.rhythm_label.setText(error or f"{len(score.notes)} 個音符 · {bars} 小節 · 拍數完整")
+            self.rhythm_label.setText(error or tr("{notes} 個音符 · {bars} 小節 · 拍數完整").format(notes=len(score.notes), bars=bars))
             self.problem_button.setVisible(bool(error))
-            title = score.title or "未命名樂曲"
-            self.setWindowTitle(f"{'● ' if self.dirty else ''}{title} — 簡譜工房 {__version__}")
+            title = score.title or tr("未命名樂曲")
+            self.setWindowTitle(tr("{mark}{title} — 簡譜工房 {version}").format(mark="● " if self.dirty else "", title=title, version=__version__))
             for control in (self.undo_action, self.undo_button):
                 control.setEnabled(bool(self.history))
             for control in (self.redo_action, self.redo_button):
@@ -153,7 +154,7 @@ class EditActions(NotationActions):
         try:
             for name in ("degree", "duration", "octave", "accidental"):
                 widget = getattr(self, name)
-                widget.setPlaceholderText("未選取" if editing and not rows else "不同")
+                widget.setPlaceholderText(tr("未選取") if editing and not rows else tr("不同"))
                 distinct = {getattr(note, name) for note in values}
                 widget.setCurrentIndex(widget.findData(next(iter(distinct))) if len(distinct) == 1 else -1)
                 widget.setEnabled(not editing or bool(rows))
@@ -166,20 +167,22 @@ class EditActions(NotationActions):
         for button in self.selection_buttons:
             button.setEnabled(bool(rows))
         if editing:
-            text = f"修改所選 {len(rows)} 音符 · 只改動您調整的屬性；「不同」表示混合值" if rows else "修改模式 · 請先選取音符（Shift 連選、Ctrl 加選）"
+            text = tr("修改所選 {count} 音符 · 只改動您調整的屬性；「不同」表示混合值").format(count=len(rows)) if rows else tr("修改模式 · 請先選取音符（Shift 連選、Ctrl 加選）")
         elif mode == "fill":
-            text = f"填寫小節 · 下一音符 {self.next_note.beats} 拍 · 點選休止符 0 後輸入數字，保留後續小節位置"
+            text = tr("填寫小節 · 下一音符 {beats} 拍 · 點選休止符 0 後輸入數字，保留後續小節位置").format(beats=self.next_note.beats)
         else:
-            position = {"after": "所選之後", "before": "所選之前", "end": "曲尾"}[self.insert_position.currentData()]
+            position = {"after": tr("所選之後"), "before": tr("所選之前"), "end": tr("曲尾")}[self.insert_position.currentData()]
             note = self.next_note
-            pitch = ("休止 0" if note.degree == 0 else {"": "", "#": "♯", "b": "♭", "n": "♮"}[note.accidental] + str(note.degree))
-            octave = {-2: "低兩八度", -1: "低八度", 0: "", 1: "高八度", 2: "高兩八度"}[note.octave]
-            text = f"新增模式 · 下一個：{pitch}{'（'+octave+'）' if octave else ''} · {note.beats} 拍 · 插在{position if rows else '曲尾'}"
+            pitch = (tr("休止 0") if note.degree == 0 else {"": "", "#": "♯", "b": "♭", "n": "♮"}[note.accidental] + str(note.degree))
+            octave = {-2: tr("低兩八度"), -1: tr("低八度"), 0: "", 1: tr("高八度"), 2: tr("高兩八度")}[note.octave]
+            text = tr("新增模式 · 下一個：{pitch}{octave} · {beats} 拍 · 插在{position}").format(
+                pitch=pitch, octave=tr("（{octave}）").format(octave=octave) if octave else "",
+                beats=note.beats, position=position if rows else tr("曲尾"))
         self.selection_label.setText(text)
         if hasattr(self, "measure_selection"):
             bars = self.selected_measures()
             names = "、".join(str(n + 1) for n in bars[:4]) + ("…" if len(bars) > 4 else "")
-            self.measure_selection.setText(f"第 {names} 小節" if bars else "點小節號選取整小節")
+            self.measure_selection.setText(tr("第 {names} 小節").format(names=names) if bars else tr("點小節號選取整小節"))
             visual = self.project.mode == "visual"
             for control in self.measure_controls:
                 control.setEnabled(visual and (control is self.add_bar_button or bool(bars)))
@@ -217,7 +220,7 @@ class EditActions(NotationActions):
         if not notes:
             return
         if len(self.project.score.notes) + len(notes) > 10000:
-            self.error("無法新增", "每份樂譜最多支援 10,000 個音符。")
+            self.error(tr("無法新增"), tr("每份樂譜最多支援 10,000 個音符。"))
             return
         index = self.insertion_index()
         previous_rows, previous_current = self.notes.selected_rows(), self.notes.currentRow()
@@ -263,20 +266,20 @@ class EditActions(NotationActions):
     def paste_notes(self):
         mime = QApplication.clipboard().mimeData()
         if not mime or not mime.hasFormat(NOTE_MIME):
-            self.statusBar().showMessage("請先在譜面選取並複製音符，再貼到指定位置。", 5000)
+            self.statusBar().showMessage(tr("請先在譜面選取並複製音符，再貼到指定位置。"), 5000)
             return
         try:
             payload = bytes(mime.data(NOTE_MIME))
             if len(payload) > 8*1024*1024:
-                raise ValueError("剪貼簿音符資料太大。")
+                raise ValueError(tr("剪貼簿音符資料太大。"))
             raw = json.loads(payload)
             if not isinstance(raw, list) or len(raw) > 10000:
-                raise ValueError("剪貼簿音符格式不正確。")
+                raise ValueError(tr("剪貼簿音符格式不正確。"))
             notes = [Note(**item) for item in raw]
             for note in notes:
                 note.validate()
         except (TypeError, ValueError) as exc:
-            self.error("無法貼上音符", exc)
+            self.error(tr("無法貼上音符"), exc)
             return
         self.insert_notes(notes)
 
@@ -339,12 +342,12 @@ class EditActions(NotationActions):
             self.notes.select_bar(bar)
         self.add_measure_menu(menu)
         menu.addSeparator()
-        for title, command in (("剪下　Ctrl+X", "cut"), ("複製　Ctrl+C", "copy"), ("貼上　Ctrl+V", "paste"), ("重複　Ctrl+D", "duplicate"), ("刪除　Delete", "delete")):
+        for title, command in ((tr("剪下　Ctrl+X"), "cut"), (tr("複製　Ctrl+C"), "copy"), (tr("貼上　Ctrl+V"), "paste"), (tr("重複　Ctrl+D"), "duplicate"), (tr("刪除　Delete"), "delete")):
             item = menu.addAction(title, lambda c=command: self.note_command(c))
             item.setEnabled(command == "paste" or bool(self.notes.selected_rows()))
         menu.addSeparator()
         marks = self.notation_menu()
-        marks.setTitle("基本記號 / 二胡")
+        marks.setTitle(tr("基本記號 / 二胡"))
         menu.addMenu(marks)
         menu.exec(self.notes.viewport().mapToGlobal(position))
 
@@ -355,7 +358,7 @@ class EditActions(NotationActions):
 
     def measure_ready(self):
         if self.project.mode != "visual":
-            self.statusBar().showMessage("目前內容不能使用小節工具，請先開啟可編輯的樂譜專案。", 6000)
+            self.statusBar().showMessage(tr("目前內容不能使用小節工具，請先開啟可編輯的樂譜專案。"), 6000)
             return False
         return not (self.loading or (self.task and self.task_blocks_edit))
 
@@ -385,29 +388,29 @@ class EditActions(NotationActions):
             ranges = measure_ranges(self.project.score)
             bars = self.selected_measures()
             if position not in ("before", "after", "end"):
-                raise ValueError("請選擇小節前、後或曲尾。")
+                raise ValueError(tr("請選擇小節前、後或曲尾。"))
             at_bar = len(ranges) if position == "end" or not bars else bars[0] if position == "before" else bars[-1] + 1
             result = insert_measures(self.project.score, at_bar, count)
             self.apply_measure_edit(result, fill=True)
         except ValueError as exc:
-            self.error("無法新增小節", exc)
+            self.error(tr("無法新增小節"), exc)
 
     def measure_action(self, action):
         if not self.measure_ready():
             return
         bars = self.selected_measures()
         if not bars:
-            self.statusBar().showMessage("請先點小節號，或選取要處理的小節中的音符。", 6000)
+            self.statusBar().showMessage(tr("請先點小節號，或選取要處理的小節中的音符。"), 6000)
             return
         from .measures import clear_measures, delete_measures, duplicate_measures
         operations = {"clear": clear_measures, "delete": delete_measures, "duplicate": duplicate_measures}
         try:
             self.capture_fields()
             if action not in operations:
-                raise ValueError("不支援的小節操作。")
+                raise ValueError(tr("不支援的小節操作。"))
             self.apply_measure_edit(operations[action](self.project.score, bars), fill=action == "clear")
         except ValueError as exc:
-            self.error("無法修改小節", exc)
+            self.error(tr("無法修改小節"), exc)
 
     def fill_rest(self, note):
         if not self.measure_ready():
@@ -415,7 +418,7 @@ class EditActions(NotationActions):
         from .measures import replace_rest_input
         rows = self.notes.selected_rows()
         if not rows:
-            self.statusBar().showMessage("請先點選要填寫的休止符 0，或按「＋新增小節」。", 6000)
+            self.statusBar().showMessage(tr("請先點選要填寫的休止符 0，或按「＋新增小節」。"), 6000)
             return
         row = self.notes.currentRow() if self.notes.currentRow() in rows else rows[0]
         try:
@@ -436,7 +439,7 @@ class EditActions(NotationActions):
         if not self.measure_ready():
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle("新增小節")
+        dialog.setWindowTitle(tr("新增小節"))
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
         count = QSpinBox()
@@ -444,12 +447,12 @@ class EditActions(NotationActions):
         count.setObjectName("measureCount")
         position = QComboBox()
         position.setObjectName("measurePosition")
-        for text, value in (("所選小節之後", "after"), ("所選小節之前", "before"), ("曲尾", "end")):
+        for text, value in ((tr("所選小節之後"), "after"), (tr("所選小節之前"), "before"), (tr("曲尾"), "end")):
             position.addItem(text, value)
-        form.addRow("小節數", count)
-        form.addRow("插入位置", position)
+        form.addRow(tr("小節數"), count)
+        form.addRow(tr("插入位置"), position)
         layout.addLayout(form)
-        hint = QLabel("新小節先填入足拍休止符；可用「填寫小節」直接輸入旋律。沒有選取時加到曲尾。")
+        hint = QLabel(tr("新小節先填入足拍休止符；可用「填寫小節」直接輸入旋律。沒有選取時加到曲尾。"))
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.dialog_buttons(dialog, layout)
@@ -458,13 +461,13 @@ class EditActions(NotationActions):
 
     def add_measure_menu(self, menu):
         ready = self.project.mode == "visual"
-        for text, fn in (("前插一小節　Insert", lambda: self.insert_bars("before")),
-                         ("後插一小節", lambda: self.insert_bars("after")),
-                         ("曲尾加一小節　Ctrl+B", lambda: self.insert_bars("end")),
-                         ("新增多個小節…　Ctrl+Insert", self.insert_bars_dialog)):
+        for text, fn in ((tr("前插一小節　Insert"), lambda: self.insert_bars("before")),
+                         (tr("後插一小節"), lambda: self.insert_bars("after")),
+                         (tr("曲尾加一小節　Ctrl+B"), lambda: self.insert_bars("end")),
+                         (tr("新增多個小節…　Ctrl+Insert"), self.insert_bars_dialog)):
             menu.addAction(text, fn).setEnabled(ready)
         menu.addSeparator()
-        for text, command in (("重複所選小節", "duplicate"), ("清空小節（保留拍數）", "clear"), ("刪除小節（後段前移）　Ctrl+Delete", "delete")):
+        for text, command in ((tr("重複所選小節"), "duplicate"), (tr("清空小節（保留拍數）"), "clear"), (tr("刪除小節（後段前移）　Ctrl+Delete"), "delete")):
             menu.addAction(text, lambda a=command: self.measure_action(a)).setEnabled(ready and bool(self.selected_measures()))
 
     def fill_bar(self):
@@ -488,7 +491,7 @@ class EditActions(NotationActions):
     def goto_problem(self):
         score = self.project.score
         message = score.rhythm_error() or score.notation_error() or ""
-        match = re.search(r"第\s*(\d+)\s*個音符", message)
+        match = re.search(r"第\s*(\d+)\s*[個个]音符", message)
         row = int(match[1])-1 if match else len(score.notes)-1
         if row >= 0:
             self.notes.select_rows([row])
@@ -512,7 +515,7 @@ class EditActions(NotationActions):
         self.editor_container.show()
         self.preview_panel.hide()
         self.preview_tabs.setCurrentIndex(0)
-        self.preview_heading.setText("列印預覽")
+        self.preview_heading.setText(tr("列印預覽"))
         self.auto_check.hide()
         self.preview_button.hide()
         self.preview_status.hide()
@@ -522,7 +525,7 @@ class EditActions(NotationActions):
         self.editor_container.hide()
         self.preview_panel.show()
         self.preview_tabs.setCurrentIndex(0)
-        self.preview_heading.setText("列印預覽")
+        self.preview_heading.setText(tr("列印預覽"))
         self.auto_check.show()
         self.preview_button.show()
         self.preview_status.show()
@@ -532,13 +535,13 @@ class EditActions(NotationActions):
 
     def show_work_log(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("作業訊息")
+        dialog.setWindowTitle(tr("作業訊息"))
         dialog.resize(720, 460)
         layout = QVBoxLayout(dialog)
-        text = QPlainTextEdit(self.log.toPlainText() or "目前沒有排版紀錄。")
+        text = QPlainTextEdit(self.log.toPlainText() or tr("目前沒有排版紀錄。"))
         text.setReadOnly(True)
         layout.addWidget(text)
-        copy = QPushButton("複製完整紀錄")
+        copy = QPushButton(tr("複製完整紀錄"))
         copy.clicked.connect(lambda: QApplication.clipboard().setText(text.toPlainText()))
         layout.addWidget(copy)
         self.dialog_buttons(dialog, layout)
@@ -558,7 +561,7 @@ class EditActions(NotationActions):
 
     def layout_settings(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle("紙張與排版")
+        dialog.setWindowTitle(tr("紙張與排版"))
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
         paper = QComboBox()
@@ -570,12 +573,12 @@ class EditActions(NotationActions):
         size.setValue(self.project.score.staff_size)
         bars = QSpinBox()
         bars.setRange(0, 8)
-        bars.setSpecialValueText("自動")
+        bars.setSpecialValueText(tr("自動"))
         bars.setValue(self.project.score.bars_per_line)
-        for title, control in (("紙張", paper), ("譜字大小", size), ("每行小節數", bars)):
+        for title, control in ((tr("紙張"), paper), (tr("譜字大小"), size), (tr("每行小節數"), bars)):
             form.addRow(title, control)
         layout.addLayout(form)
-        note = QLabel("紙張與譜字大小用於正式 PDF；每行小節數用於視覺草稿轉出的簡譜。")
+        note = QLabel(tr("紙張與譜字大小用於正式 PDF；每行小節數用於視覺草稿轉出的簡譜。"))
         note.setWordWrap(True)
         layout.addWidget(note)
         self.dialog_buttons(dialog, layout)
@@ -589,6 +592,8 @@ class EditActions(NotationActions):
     @staticmethod
     def dialog_buttons(dialog, layout):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("確定"))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("取消"))
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)

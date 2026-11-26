@@ -18,13 +18,14 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractItemView, QToolTip
 
+from .i18n import N_, tr, ui_font_family
 from .model import TICKS_PER_QUARTER, Score
 
 ARTICULATION_LABELS = {
-    "staccato": "斷奏", "tenuto": "保持音", "accent": "重音", "fermata": "延長記號",
-    "trill": "顫音", "mordent": "波音", "breathe": "換氣", "turn": "迴音", "marcato": "強重音",
-    "staccatissimo": "極短斷奏", "harmonic": "泛音",
-}
+    "staccato": N_("斷奏"), "tenuto": N_("保持音"), "accent": N_("重音"), "fermata": N_("延長記號"),
+    "trill": N_("顫音"), "mordent": N_("波音"), "breathe": N_("換氣"), "turn": N_("迴音"), "marcato": N_("強重音"),
+    "staccatissimo": N_("極短斷奏"), "harmonic": N_("泛音"),
+}  # catalog sources; show tr(value)
 GRACE_PATTERN = re.compile(r"([#b]?)([1-7])([,']{0,2})")
 
 
@@ -59,32 +60,33 @@ class ScoreModel(QAbstractListModel):
             bar = self.positions[row] // self.bar_ticks + 1
             marks = []
             if note.finger >= 0:
-                marks.append("空弦" if note.finger == 0 else f"{note.finger} 指")
+                marks.append(tr("空弦") if note.finger == 0 else tr("{n} 指").format(n=note.finger))
             if note.bow:
-                marks.append({"upbow": "推弓", "downbow": "拉弓"}[note.bow])
+                marks.append({"upbow": tr("推弓"), "downbow": tr("拉弓")}[note.bow])
             if note.dynamic:
-                marks.append("力度 " + note.dynamic)
+                marks.append(tr("力度 {name}").format(name=note.dynamic))
             if note.slide:
-                marks.append("上滑音" if note.slide == "up" else "下滑音")
+                marks.append(tr("上滑音") if note.slide == "up" else tr("下滑音"))
             if note.articulation:
-                marks.append(ARTICULATION_LABELS.get(note.articulation, note.articulation))
+                marks.append(tr(ARTICULATION_LABELS.get(note.articulation, note.articulation)))
             if note.accidental == "n":
-                marks.append("還原記號")
+                marks.append(tr("還原記號"))
             if note.tuplet:
-                marks.append("三連音")
+                marks.append(tr("三連音"))
             if note.hairpin:
-                marks.append("漸強起點" if note.hairpin == "crescendo" else "漸弱起點")
+                marks.append(tr("漸強起點") if note.hairpin == "crescendo" else tr("漸弱起點"))
             if note.hairpin_end:
-                marks.append("漸強弱終點")
+                marks.append(tr("漸強弱終點"))
             if note.grace_before:
-                marks.append("前倚音 " + note.grace_before)
+                marks.append(tr("前倚音 {notes}").format(notes=note.grace_before))
             if note.grace_after:
-                marks.append("後倚音 " + note.grace_after)
-            marks.extend(label for field, label in (("slur_start", "連弓起點"), ("slur_end", "連弓終點"),
-                                                   ("tie", "延音線"), ("repeat_start", "反覆起點"),
-                                                   ("repeat_end", "反覆終點")) if getattr(note, field))
+                marks.append(tr("後倚音 {notes}").format(notes=note.grace_after))
+            marks.extend(label for field, label in (("slur_start", tr("連弓起點")), ("slur_end", tr("連弓終點")),
+                                                   ("tie", tr("延音線")), ("repeat_start", tr("反覆起點")),
+                                                   ("repeat_end", tr("反覆終點"))) if getattr(note, field))
             description = "，" + "、".join(marks) if marks else ""
-            return f"第 {bar} 小節，第 {row + 1} 個音符：{note.token()}，{note.beats} 拍{description}"
+            return tr("第 {bar} 小節，第 {n} 個音符：{token}，{beats} 拍{description}").format(
+                bar=bar, n=row + 1, token=note.token(), beats=note.beats, description=description)
         if role == Qt.ItemDataRole.UserRole:
             return note
         return None
@@ -186,8 +188,8 @@ class NoteList(QAbstractItemView):
         self.setHorizontalScrollMode(self.ScrollMode.ScrollPerPixel)
         self.setVerticalScrollMode(self.ScrollMode.ScrollPerPixel)
         self.setEditTriggers(self.EditTrigger.NoEditTriggers)
-        self.setAccessibleName("簡譜編輯譜面")
-        self.setAccessibleDescription("數字輸入音符；Shift 連選、Ctrl 多選；M 選小節；空白鍵切換插入與修改；Enter 播放。")
+        self.setAccessibleName(tr("簡譜編輯譜面"))
+        self.setAccessibleDescription(tr("數字輸入音符；Shift 連選、Ctrl 多選；M 選小節；空白鍵切換插入與修改；Enter 播放。"))
         self.setMinimumSize(320, 180)
         self.viewport().setMouseTracking(True)
         self.selectionModel().currentChanged.connect(lambda current, _: self.currentRowChanged.emit(current.row()))
@@ -210,6 +212,15 @@ class NoteList(QAbstractItemView):
         else:
             self.viewport().update()
         return changed
+
+    def refresh_language(self):
+        """Texts drawn on the canvas or read by assistive tools follow the language."""
+        self.setAccessibleName(tr("簡譜編輯譜面"))
+        self.setAccessibleDescription(tr("數字輸入音符；Shift 連選、Ctrl 多選；M 選小節；空白鍵切換插入與修改；Enter 播放。"))
+        count = self.score_model.rowCount()
+        if count:
+            self.score_model.dataChanged.emit(self.score_model.index(0), self.score_model.index(count - 1))
+        self.relayout()
 
     def set_zoom(self, percent):
         self.zoom_percent = max(25, min(400, percent))
@@ -370,13 +381,13 @@ class NoteList(QAbstractItemView):
         top = max(8, int(16*s))
         y = top
         for text, size, weight, alignment in (
-                (score.title or "未命名樂曲", 19, QFont.Weight.DemiBold, Qt.AlignmentFlag.AlignHCenter),
+                (score.title or tr("未命名樂曲"), 19, QFont.Weight.DemiBold, Qt.AlignmentFlag.AlignHCenter),
                 (score.composer, 10, QFont.Weight.Normal, Qt.AlignmentFlag.AlignRight),
                 (f"1 = {score.key}    {score.meter}    ♩ = {score.tempo}", 11,
                  QFont.Weight.Normal, Qt.AlignmentFlag.AlignLeft)):
             if not text:
                 continue
-            font = QFont("Microsoft JhengHei", max(7, int(size*s)), weight)
+            font = QFont(ui_font_family(), max(7, int(size*s)), weight)
             flags = alignment | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere
             height = max(QFontMetrics(font).height(),
                          QFontMetrics(font).boundingRect(QRect(0, 0, width, 100000), flags, text).height())
@@ -658,7 +669,7 @@ class NoteList(QAbstractItemView):
             else:
                 bar = self.measure_at(event.pos())
                 if bar is not None:
-                    QToolTip.showText(event.globalPos(), f"第 {bar+1} 小節 · 點選整小節；右鍵開啟小節操作", self)
+                    QToolTip.showText(event.globalPos(), tr("第 {bar} 小節 · 點選整小節；右鍵開啟小節操作").format(bar=bar + 1), self)
                 else:
                     QToolTip.hideText()
             return True
@@ -733,7 +744,7 @@ class NoteList(QAbstractItemView):
         p.setBrush(Qt.BrushStyle.NoBrush)
         mark_y = cy - 43*s
         if note.finger >= 0:
-            p.setFont(QFont("Microsoft JhengHei", max(6, int(10*s))))
+            p.setFont(QFont(ui_font_family(), max(6, int(10*s))))
             p.drawText(QRect(int(cx-9*s), int(mark_y-12*s), int(18*s), int(20*s)),
                        Qt.AlignmentFlag.AlignCenter, "○一二三四"[note.finger])
         if note.bow:
@@ -880,14 +891,14 @@ class NoteList(QAbstractItemView):
             p.setPen(QPen(QColor("#8cb8a8"), max(1, s)))
             p.drawRoundedRect(self.empty_button_rect, 4*s, 4*s)
             p.setPen(QColor("#17664f"))
-            p.setFont(QFont("Microsoft JhengHei", max(8, int(12*s))))
-            p.drawText(self.empty_button_rect, Qt.AlignmentFlag.AlignCenter, "＋ 新增小節")
+            p.setFont(QFont(ui_font_family(), max(8, int(12*s))))
+            p.drawText(self.empty_button_rect, Qt.AlignmentFlag.AlignCenter, tr("＋ 新增小節"))
             p.setPen(QColor("#63777d"))
-            p.setFont(QFont("Microsoft JhengHei", max(7, int(10*s))))
+            p.setFont(QFont(ui_font_family(), max(7, int(10*s))))
             hint = QRect(self.empty_bar_rect.left(), self.empty_button_rect.bottom()+int(12*s),
                          self.empty_bar_rect.width(), int(32*s))
             p.drawText(hint, Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap,
-                       "或按 1–7 加入音符，0 加入休止符")
+                       tr("或按 1–7 加入音符，0 加入休止符"))
             return
         notes = self.score_model._notes
         bar_ticks = self.score_model.bar_ticks
@@ -897,10 +908,10 @@ class NoteList(QAbstractItemView):
             incomplete = indices[-1] == len(notes)-1 and self.score_model.total_ticks % bar_ticks != 0
             line_number = self.note_lines[indices[0]]
             cy = self.line_baselines[line_number]
-            p.setFont(QFont("Microsoft JhengHei", max(6, int(9*s))))
+            p.setFont(QFont(ui_font_family(), max(6, int(9*s))))
             p.setPen(QColor("#9b431f" if overflow else "#536a76"))
             p.drawText(frame.adjusted(int(3*s), int(2*s), -int(4*s), 0), Qt.AlignmentFlag.AlignTop,
-                       f"{bar+1}" + (" · 超拍" if overflow else " · 待補拍" if incomplete else ""))
+                       f"{bar+1}" + (tr(" · 超拍") if overflow else tr(" · 待補拍") if incomplete else ""))
             p.setPen(QPen(QColor("#c25b35" if overflow else "#60737c"), max(1, s)))
             if frame.left() == self.line_rects[line_number].left() and not notes[indices[0]].repeat_start:
                 p.drawLine(QPointF(frame.left(), cy-20*s), QPointF(frame.left(), cy+24*s))

@@ -1,8 +1,12 @@
 """Shared appearance for the compact desktop workspace."""
 
-STYLE = """
+_FAMILIES = {
+    "zh_TW": "'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', 'Segoe UI'",
+    "zh_CN": "'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI'",
+}
+_TEMPLATE = """
 QMainWindow, QDialog { background: #f5f7f6; color: #172f39; }
-QWidget { font-family: 'Microsoft JhengHei', 'Noto Sans CJK TC', 'Segoe UI'; font-size: 13px; color: #172f39; }
+QWidget { font-family: @FAMILY@; font-size: 13px; color: #172f39; }
 QLabel#brand { font-size: 19px; font-weight: 700; color: #172f39; }
 QLabel#muted { color: #75858a; }
 QLabel#section { font-size: 16px; font-weight: 700; }
@@ -35,3 +39,11 @@ QProgressBar::chunk { background: #197e69; }
 QMenuBar, QMenu { background: #ffffff; }
 QMenu::item:selected { background: #e1f3ed; }
 """
+
+
+def stylesheet(language: str = "zh_TW") -> str:
+    """The workspace stylesheet with the CJK font stack of the interface language."""
+    return _TEMPLATE.replace("@FAMILY@", _FAMILIES.get(language, _FAMILIES["zh_TW"]))
+
+
+STYLE = stylesheet("zh_TW")

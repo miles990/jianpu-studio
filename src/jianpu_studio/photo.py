@@ -19,20 +19,22 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .i18n import tr
+
 Image.MAX_IMAGE_PIXELS = 40_000_000
 
 
 class PhotoDialog(QDialog):
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("照片轉簡譜 · 先整理照片")
+        self.setWindowTitle(tr("照片轉簡譜 · 先整理照片"))
         self.resize(980, 760)
         if self.screen():
             available = self.screen().availableGeometry()
             self.resize(min(980, available.width()-60), min(760, available.height()-70))
         with Image.open(path) as original:
             if original.width * original.height > 40_000_000:
-                raise ValueError("照片超過 4,000 萬像素，請先縮小影像再匯入。")
+                raise ValueError(tr("照片超過 4,000 萬像素，請先縮小影像再匯入。"))
             self.original = ImageOps.exif_transpose(original).convert("RGB")
         self.preview_original = self.original.copy()
         self.preview_original.thumbnail((1200, 1200))
@@ -42,34 +44,34 @@ class PhotoDialog(QDialog):
         self.preview_timer.timeout.connect(self.refresh)
         self.quarter_turns = 0
         layout = QVBoxLayout(self)
-        hint = QLabel("適用：印刷五線譜照片／掃描圖。請讓譜線水平、保留完整小節。\n目前不辨識手寫譜或已經是數字的簡譜照片。辨識後仍需核對音符。")
+        hint = QLabel(tr("適用：印刷五線譜照片／掃描圖。請讓譜線水平、保留完整小節。\n目前不辨識手寫譜或已經是數字的簡譜照片。辨識後仍需核對音符。"))
         hint.setWordWrap(True)
         hint.setObjectName("notice")
         layout.addWidget(hint)
         w, h = self.original.size
-        resolution_hint = QLabel(f"原圖 {w} × {h} 像素。辨識會依譜線間距判斷，解析度不足時自動放大重試。\n放大無法補回遺失的細節；優先使用清晰原圖或 300 DPI 掃描，完成後對照校對。")
+        resolution_hint = QLabel(tr("原圖 {width} × {height} 像素。辨識會依譜線間距判斷，解析度不足時自動放大重試。\n放大無法補回遺失的細節；優先使用清晰原圖或 300 DPI 掃描，完成後對照校對。").format(width=w, height=h))
         resolution_hint.setWordWrap(True)
         layout.addWidget(resolution_hint)
         row = QHBoxLayout()
-        rotate = QPushButton("順時針旋轉 90°")
+        rotate = QPushButton(tr("順時針旋轉 90°"))
         rotate.clicked.connect(self.rotate)
         row.addWidget(rotate)
-        row.addWidget(QLabel("微調角度"))
+        row.addWidget(QLabel(tr("微調角度")))
         self.angle = QDoubleSpinBox()
         self.angle.setRange(-15, 15)
         self.angle.setSingleStep(0.5)
         self.angle.valueChanged.connect(self.queue_refresh)
         row.addWidget(self.angle)
-        self.contrast = QCheckBox("增強對比")
+        self.contrast = QCheckBox(tr("增強對比"))
         self.contrast.setChecked(True)
         self.contrast.toggled.connect(self.queue_refresh)
         row.addWidget(self.contrast)
         row.addStretch()
         layout.addLayout(row)
         row = QHBoxLayout()
-        row.addWidget(QLabel("裁掉白邊（%）"))
+        row.addWidget(QLabel(tr("裁掉白邊（%）")))
         self.crops = []
-        for name in ("左", "上", "右", "下"):
+        for name in (tr("左"), tr("上"), tr("右"), tr("下")):
             row.addWidget(QLabel(name))
             box = QSpinBox()
             box.setRange(0, 40)
@@ -84,9 +86,9 @@ class PhotoDialog(QDialog):
         scroll.setWidget(self.image_label)
         layout.addWidget(scroll, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("開始辨識")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("開始辨識"))
         buttons.button(QDialogButtonBox.StandardButton.Ok).setObjectName("primary")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("取消"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

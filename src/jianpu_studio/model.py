@@ -10,9 +10,12 @@ from dataclasses import asdict, dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 
+from .i18n import N_, tr
+
 KEYS = ("C", "G", "D", "A", "E", "B", "F#", "F", "Bb", "Eb", "Ab", "Db", "Gb")
 METERS = ("4/4", "3/4", "2/4", "6/8", "3/8", "2/2", "9/8", "12/8")
-DURATIONS = {1: "全音符 · 4 拍", 2: "二分 · 2 拍", 4: "四分 · 1 拍", 8: "八分 · ½ 拍", 16: "十六分 · ¼ 拍", 32: "三十二分 · ⅛ 拍"}
+DURATIONS = {1: N_("全音符 · 4 拍"), 2: N_("二分 · 2 拍"), 4: N_("四分 · 1 拍"), 8: N_("八分 · ½ 拍"),
+             16: N_("十六分 · ¼ 拍"), 32: N_("三十二分 · ⅛ 拍")}  # values are catalog sources; show tr(value)
 MAX_FILE_BYTES = 4 * 1024 * 1024
 TICKS_PER_QUARTER = 48
 GRACE_PATTERN = r"(?:[#b]?[1-7](?:'{1,2}|,{1,2})?)"
@@ -31,7 +34,7 @@ def _grace_source(value: str) -> str:
 def text_value(value: object, name: str, limit: int = 200) -> str:
     if (not isinstance(value, str) or len(value) > limit
             or any(ord(c) < 32 or c in "\x85\u2028\u2029" for c in value)):
-        raise ValueError(f"{name}須為單行文字，最多 {limit} 字。")
+        raise ValueError(tr("{name}須為單行文字，最多 {limit} 字。").format(name=name, limit=limit))
     return value
 
 
@@ -62,50 +65,50 @@ class Note:
 
     def validate(self) -> None:
         if type(self.degree) is not int or not 0 <= self.degree <= 7:
-            raise ValueError("音高必須是 0（休止）到 7。")
+            raise ValueError(tr("音高必須是 0（休止）到 7。"))
         if type(self.octave) is not int or self.octave not in range(-2, 3):
-            raise ValueError("八度範圍為低兩個到高兩個八度。")
+            raise ValueError(tr("八度範圍為低兩個到高兩個八度。"))
         if type(self.duration) is not int or self.duration not in DURATIONS:
-            raise ValueError("不支援這個音符時值。")
+            raise ValueError(tr("不支援這個音符時值。"))
         if type(self.dotted) is not bool or self.accidental not in ("", "#", "b", "n"):
-            raise ValueError("無效的附點或升降記號。")
+            raise ValueError(tr("無效的附點或升降記號。"))
         if self.degree == 0 and (self.octave or self.accidental):
-            raise ValueError("休止符沒有八度或升降記號。")
+            raise ValueError(tr("休止符沒有八度或升降記號。"))
         if type(self.finger) is not int or self.finger not in range(-1, 5):
-            raise ValueError("二胡指法須為空弦 0 到 4 指。")
+            raise ValueError(tr("二胡指法須為空弦 0 到 4 指。"))
         if self.bow not in ("", "upbow", "downbow") or self.slide not in ("", "up", "down"):
-            raise ValueError("不支援的弓法或滑音。")
+            raise ValueError(tr("不支援的弓法或滑音。"))
         if self.dynamic not in ("", "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz"):
-            raise ValueError("不支援的力度。")
+            raise ValueError(tr("不支援的力度。"))
         if self.articulation not in ("", "staccato", "tenuto", "accent", "fermata", "trill", "mordent",
                                      "breathe", "turn", "marcato", "staccatissimo", "harmonic"):
-            raise ValueError("不支援的演奏記號。")
+            raise ValueError(tr("不支援的演奏記號。"))
         if any(type(getattr(self, name)) is not bool for name in ("slur_start", "slur_end", "tie", "repeat_start", "repeat_end",
                                                                  "tuplet_start", "tuplet_end", "hairpin_end")):
-            raise ValueError("連線或反覆格式不正確。")
+            raise ValueError(tr("連線或反覆格式不正確。"))
         if type(self.tuplet) is not int or self.tuplet not in (0, 3):
-            raise ValueError("目前支援三連音，每組三個等時值音符。")
+            raise ValueError(tr("目前支援三連音，每組三個等時值音符。"))
         if self.tuplet and (self.dotted or self.duration not in (4, 8, 16, 32)):
-            raise ValueError("三連音支援未附點的四分、八分、十六分或三十二分音符。")
+            raise ValueError(tr("三連音支援未附點的四分、八分、十六分或三十二分音符。"))
         if not self.tuplet and (self.tuplet_start or self.tuplet_end):
-            raise ValueError("三連音起終點須屬於三連音群組。")
+            raise ValueError(tr("三連音起終點須屬於三連音群組。"))
         if self.hairpin not in ("", "crescendo", "diminuendo"):
-            raise ValueError("不支援的漸強或漸弱記號。")
+            raise ValueError(tr("不支援的漸強或漸弱記號。"))
         for grace in (self.grace_before, self.grace_after):
             if not isinstance(grace, str) or (grace and re.fullmatch(GRACE_PATTERN + "{1,8}", grace) is None):
-                raise ValueError("倚音須為 1–8 個音（1–7），可加 #、b 及最多兩個八度後綴，例如 23 或 #4'5。")
+                raise ValueError(tr("倚音須為 1–8 個音（1–7），可加 #、b 及最多兩個八度後綴，例如 23 或 #4'5。"))
         if self.degree == 0 and (self.finger >= 0 or self.bow or self.slide or self.slur_start or self.slur_end or self.tie):
-            raise ValueError("休止符不能加指法、弓法、滑音或連線。")
+            raise ValueError(tr("休止符不能加指法、弓法、滑音或連線。"))
         if self.degree == 0 and (self.grace_before or self.grace_after):
-            raise ValueError("休止符不能加倚音。")
+            raise ValueError(tr("休止符不能加倚音。"))
         if self.grace_after and (self.finger >= 0 or self.bow or self.dynamic
                                  or self.articulation not in ("", "breathe")
                                  or self.slur_start or self.slur_end or self.tie or self.hairpin or self.hairpin_end):
             # Upstream places these post-events outside afterGrace's main
             # note, or moves a tie onto the last ornament. Refuse that precise
             # combination instead of printing detached marks or wrong MIDI.
-            raise ValueError("後倚音目前不能與同一主音的指法、弓法、力度、演奏記號或連線端點並用；"
-                             "這個組合尚不支援，請分開設定或保留原譜。換氣記號可並用。")
+            raise ValueError(tr("後倚音目前不能與同一主音的指法、弓法、力度、演奏記號或連線端點並用；"
+                                "這個組合尚不支援，請分開設定或保留原譜。換氣記號可並用。"))
 
     @property
     def beats(self) -> Fraction:
@@ -182,7 +185,7 @@ def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
         note = notes[row]
         if not note.tuplet:
             if note.tuplet_start or note.tuplet_end:
-                raise ValueError(f"第 {row+1} 個音符的三連音端點沒有群組。")
+                raise ValueError(tr("第 {n} 個音符的三連音端點沒有群組。").format(n=row + 1))
             row += 1
             continue
         group = notes[row:row+3]
@@ -190,7 +193,7 @@ def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
                 or any(n.tuplet != 3 or n.dotted or n.duration not in (4, 8, 16, 32) for n in group)
                 or len({n.duration for n in group}) != 1
                 or any(n.tuplet_start != (i == 0) or n.tuplet_end != (i == 2) for i, n in enumerate(group))):
-            raise ValueError(f"第 {row+1} 個音符的三連音不完整；請選取完整的三個等時值、未附點音符。")
+            raise ValueError(tr("第 {n} 個音符的三連音不完整；請選取完整的三個等時值、未附點音符。").format(n=row + 1))
         ranges.append((row, row+3))
         row += 3
     return ranges
@@ -198,7 +201,7 @@ def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
 
 @dataclass
 class Score:
-    title: str = "未命名樂曲"
+    title: str = field(default_factory=lambda: tr("未命名樂曲"))
     composer: str = ""
     key: str = "C"
     meter: str = "4/4"
@@ -216,22 +219,22 @@ class Score:
         return Fraction(int(numerator) * 4, int(denominator))
 
     def validate(self) -> None:
-        text_value(self.title, "曲名")
-        text_value(self.composer, "作曲者")
-        text_value(self.lyrics, "歌詞", 20000)
+        text_value(self.title, tr("曲名"))
+        text_value(self.composer, tr("作曲者"))
+        text_value(self.lyrics, tr("歌詞"), 20000)
         if self.key not in KEYS or self.meter not in METERS:
-            raise ValueError("不支援此調號或拍號。")
+            raise ValueError(tr("不支援此調號或拍號。"))
         if type(self.tempo) is not int or not 20 <= self.tempo <= 300:
-            raise ValueError("速度須介於每分鐘 20 到 300 拍。")
+            raise ValueError(tr("速度須介於每分鐘 20 到 300 拍。"))
         if type(self.with_staff) is not bool or not isinstance(self.notes, list) or len(self.notes) > 10000:
-            raise ValueError("樂譜格式不正確或音符太多（上限 10,000）。")
+            raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
         if self.paper_size not in ("a4", "letter") or type(self.staff_size) is not int or not 16 <= self.staff_size <= 30:
-            raise ValueError("紙張須為 A4 / Letter，譜字大小須為 16–30。")
+            raise ValueError(tr("紙張須為 A4 / Letter，譜字大小須為 16–30。"))
         if type(self.bars_per_line) is not int or not 0 <= self.bars_per_line <= 8:
-            raise ValueError("每行小節數須為自動（0）到 8。")
+            raise ValueError(tr("每行小節數須為自動（0）到 8。"))
         for note in self.notes:
             if not isinstance(note, Note):
-                raise ValueError("樂譜音符格式不正確。")
+                raise ValueError(tr("樂譜音符格式不正確。"))
             note.validate()
         tuplet_ranges(self.notes)
 
@@ -241,10 +244,10 @@ class Score:
         for i, note in enumerate(self.notes):
             offset = position % bar_ticks
             if offset + note.ticks > bar_ticks:
-                return f"第 {i + 1} 個音符超出第 {position // bar_ticks + 1} 小節。請縮短時值，跨小節長音可拆成音符再加延音線。"
+                return tr("第 {n} 個音符超出第 {bar} 小節。請縮短時值，跨小節長音可拆成音符再加延音線。").format(n=i + 1, bar=position // bar_ticks + 1)
             position += note.ticks
         if self.notes and position % bar_ticks:
-            return f"最後一小節還缺 {Fraction(bar_ticks - position % bar_ticks, TICKS_PER_QUARTER)} 拍。按「補齊休止符」即可完成。"
+            return tr("最後一小節還缺 {beats} 拍。按「補齊休止符」即可完成。").format(beats=Fraction(bar_ticks - position % bar_ticks, TICKS_PER_QUARTER))
         return None
 
     def notation_error(self) -> str | None:
@@ -257,43 +260,43 @@ class Score:
             return str(exc)
         for i, note in enumerate(self.notes):
             if i in groups and position % bar_ticks + sum(n.ticks for n in self.notes[i:groups[i]]) > bar_ticks:
-                return f"第 {i+1} 個音符的三連音跨越小節；請將整組移到同一小節內。"
+                return tr("第 {n} 個音符的三連音跨越小節；請將整組移到同一小節內。").format(n=i + 1)
             if note.hairpin_end:
                 if not hairpin:
-                    return f"第 {i+1} 個音符的漸強或漸弱線缺少起點。"
+                    return tr("第 {n} 個音符的漸強或漸弱線缺少起點。").format(n=i + 1)
                 hairpin = False
             elif hairpin and note.dynamic:
-                return f"第 {i+1} 個音符的力度會中斷漸強或漸弱線；請把力度放在起終點，或拆成兩段。"
+                return tr("第 {n} 個音符的力度會中斷漸強或漸弱線；請把力度放在起終點，或拆成兩段。").format(n=i + 1)
             if note.hairpin:
                 if hairpin:
-                    return f"第 {i+1} 個音符有重疊的漸強或漸弱線，請先結束前一段。"
+                    return tr("第 {n} 個音符有重疊的漸強或漸弱線，請先結束前一段。").format(n=i + 1)
                 hairpin = True
             if note.slur_end:
                 if not slur:
-                    return f"第 {i+1} 個音符的連弓線缺少起點。"
+                    return tr("第 {n} 個音符的連弓線缺少起點。").format(n=i + 1)
                 slur = False
             if note.slur_start:
                 if slur:
-                    return f"第 {i+1} 個音符有重疊連弓線，請先移除舊連線。"
+                    return tr("第 {n} 個音符有重疊連弓線，請先移除舊連線。").format(n=i + 1)
                 slur = True
             if note.tie and (not note.degree or i+1 == len(self.notes) or
                              (note.degree, note.octave, "" if note.accidental == "n" else note.accidental) !=
                              (self.notes[i+1].degree, self.notes[i+1].octave,
                               "" if self.notes[i+1].accidental == "n" else self.notes[i+1].accidental)):
-                return f"第 {i+1} 個音符的延音線須接到下一個相同音高的音符。"
+                return tr("第 {n} 個音符的延音線須接到下一個相同音高的音符。").format(n=i + 1)
             if note.repeat_start:
                 if repeat or position % bar_ticks:
-                    return f"第 {i+1} 個音符的反覆起點須在小節開頭，且不能重疊。"
+                    return tr("第 {n} 個音符的反覆起點須在小節開頭，且不能重疊。").format(n=i + 1)
                 repeat = True
             position += note.ticks
             if note.repeat_end:
                 if not repeat or position % bar_ticks:
-                    return f"第 {i+1} 個音符的反覆終點須在完整小節末，且需要起點。"
+                    return tr("第 {n} 個音符的反覆終點須在完整小節末，且需要起點。").format(n=i + 1)
                 repeat = False
         if slur or repeat:
-            return "連弓線或反覆段落缺少終點。請選取完整範圍重新設定，或移除記號。"
+            return tr("連弓線或反覆段落缺少終點。請選取完整範圍重新設定，或移除記號。")
         if hairpin:
-            return "漸強或漸弱線缺少終點；請選取完整範圍重新設定，或移除記號。"
+            return tr("漸強或漸弱線缺少終點；請選取完整範圍重新設定，或移除記號。")
         return None
 
     def fill_last_bar(self) -> None:
@@ -309,15 +312,15 @@ class Score:
             if candidates:
                 fills[ticks] = min(candidates, key=len)
         if fills[remainder] is None:
-            raise ValueError("剩餘拍數無法用目前支援的休止符補齊，請調整附點三十二分音符。")
+            raise ValueError(tr("剩餘拍數無法用目前支援的休止符補齊，請調整附點三十二分音符。"))
         if len(self.notes) + len(fills[remainder]) > 10000:
-            raise ValueError("音符太多（上限 10,000）。")
+            raise ValueError(tr("音符太多（上限 10,000）。"))
         self.notes.extend(reversed(fills[remainder]))
 
     def to_jianpu(self) -> str:
         self.validate()
         if not self.notes:
-            raise ValueError("請先加入音符。")
+            raise ValueError(tr("請先加入音符。"))
         if error := self.rhythm_error():
             raise ValueError(error)
         if error := self.notation_error():
@@ -365,20 +368,20 @@ class Project:
     def from_dict(cls, data: dict) -> Project:
         if (not isinstance(data, dict) or data.get("format") != "jianpu-studio"
                 or type(data.get("version")) is not int or data.get("version") != 1):
-            raise ValueError("不是支援的簡譜工房專案（需要格式版本 1）。")
+            raise ValueError(tr("不是支援的簡譜工房專案（需要格式版本 1）。"))
         try:
             raw = dict(data["score"])
             if not isinstance(raw.get("notes"), list) or len(raw["notes"]) > 10000:
-                raise ValueError("樂譜格式不正確或音符太多（上限 10,000）。")
+                raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
             raw["notes"] = [Note(**n) for n in raw["notes"]]
             score = Score(**raw)
             score.validate()
             mode, source = data.get("mode", "visual"), data.get("source", "")
             if mode not in ("visual", "source") or not isinstance(source, str) or len(source) > MAX_FILE_BYTES:
-                raise ValueError("專案模式或原始碼不正確。")
+                raise ValueError(tr("專案模式或原始碼不正確。"))
             return cls(score, mode, source)
         except (KeyError, TypeError) as exc:
-            raise ValueError("專案資料不完整或欄位格式錯誤。") from exc
+            raise ValueError(tr("專案資料不完整或欄位格式錯誤。")) from exc
 
     def notation(self) -> str:
         return self.score.to_jianpu() if self.mode == "visual" else self.source
@@ -405,7 +408,7 @@ def save_project(path: Path, project: Project) -> None:
 
 def load_project(path: Path) -> Project:
     if path.stat().st_size > MAX_FILE_BYTES:
-        raise ValueError("專案檔太大（上限 4 MB）。")
+        raise ValueError(tr("專案檔太大（上限 4 MB）。"))
     return Project.from_dict(json.loads(path.read_text(encoding="utf-8-sig")))
 
 
@@ -413,4 +416,4 @@ def demo_project() -> Project:
     notes = []
     for line in ("1 1 5 5 6 6 5-", "4 4 3 3 2 2 1-", "5 5 4 4 3 3 2-", "5 5 4 4 3 3 2-", "1 1 5 5 6 6 5-", "4 4 3 3 2 2 1-"):
         notes.extend(Note(int(token[0]), duration=2 if token.endswith("-") else 4) for token in line.split())
-    return Project(Score(title="小星星", composer="法國傳統旋律", notes=notes))
+    return Project(Score(title=tr("小星星"), composer=tr("法國傳統旋律"), notes=notes))

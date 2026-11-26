@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Iterable
 
+from .i18n import tr
 from .model import DURATIONS, TICKS_PER_QUARTER, Note, Score
 
 MAX_NOTES = 10000
@@ -36,7 +37,7 @@ def measure_ranges(score: Score) -> list[tuple[int, int]]:
     ranges, start, position = [], 0, 0
     for row, note in enumerate(score.notes):
         if position % bar_ticks + note.ticks > bar_ticks:
-            raise ValueError(f"第 {row + 1} 個音符超出第 {position // bar_ticks + 1} 小節。請先縮短時值或拆分跨小節長音。")
+            raise ValueError(tr("第 {n} 個音符超出第 {bar} 小節。請先縮短時值或拆分跨小節長音。").format(n=row + 1, bar=position // bar_ticks + 1))
         position += note.ticks
         if position % bar_ticks == 0:
             ranges.append((start, row + 1))
@@ -49,7 +50,7 @@ def measure_ranges(score: Score) -> list[tuple[int, int]]:
 def _context(score: Score) -> tuple[list[tuple[int, int]], list[Entry]]:
     ranges = measure_ranges(score)
     if error := score.notation_error():
-        raise ValueError("請先修正連線或反覆記號，再編輯小節：" + error)
+        raise ValueError(tr("請先修正連線或反覆記號，再編輯小節：{detail}").format(detail=error))
     return ranges, [(note, (0, row)) for row, note in enumerate(score.notes)]
 
 
@@ -67,7 +68,7 @@ def _rests(ticks: int) -> tuple[Note, ...]:
                 if fills[length] is None or len(candidate) < len(fills[length]):
                     fills[length] = candidate
     if fills[ticks] is None:
-        raise ValueError("剩餘拍數無法用目前支援的休止符表示；請調整附點三十二分音符的時值。")
+        raise ValueError(tr("剩餘拍數無法用目前支援的休止符表示；請調整附點三十二分音符的時值。"))
     return fills[ticks]
 
 
@@ -75,11 +76,11 @@ def _bar_selection(indices: Iterable[int], count: int) -> list[int]:
     try:
         raw = list(indices)
     except TypeError as exc:
-        raise ValueError("請先選取要編輯的小節。") from exc
+        raise ValueError(tr("請先選取要編輯的小節。")) from exc
     if not raw:
-        raise ValueError("請先選取要編輯的小節。")
+        raise ValueError(tr("請先選取要編輯的小節。"))
     if any(type(bar) is not int or not 0 <= bar < count for bar in raw):
-        raise ValueError("選取的小節不存在。")
+        raise ValueError(tr("選取的小節不存在。"))
     return sorted(set(raw))
 
 
@@ -108,7 +109,7 @@ def _spans(notes: list[Note]):
 
 def _finish(score: Score, entries: list[Entry], selection=(), current=None) -> MeasureEdit:
     if len(entries) > MAX_NOTES:
-        raise ValueError("音符太多（上限 10,000）；請減少新增或複製的小節數。")
+        raise ValueError(tr("音符太多（上限 10,000）；請減少新增或複製的小節數。"))
     positions, groups, run_starts = {}, set(), []
     for row, (_, origin) in enumerate(entries):
         if origin is not None:
@@ -137,10 +138,10 @@ def _finish(score: Score, entries: list[Entry], selection=(), current=None) -> M
     result_score = replace(score, notes=notes)
     measure_ranges(result_score)
     if error := result_score.notation_error():
-        raise ValueError("這項小節修改無法安全保留原有記號：" + error)
+        raise ValueError(tr("這項小節修改無法安全保留原有記號：{detail}").format(detail=error))
     selection = tuple(selection)
     current = selection[0] if current is None and selection else -1 if current is None else current
-    notice = f"已移除 {dropped} 個受影響的連線、漸強弱或反覆記號，可用復原還原。" if dropped else ""
+    notice = tr("已移除 {count} 個受影響的連線、漸強弱或反覆記號，可用復原還原。").format(count=dropped) if dropped else ""
     return MeasureEdit(notes, selection, current, notice)
 
 
@@ -157,12 +158,12 @@ def insert_measures(score: Score, at_bar: int, count: int = 1) -> MeasureEdit:
     """
     ranges, entries = _context(score)
     if type(at_bar) is not int or not 0 <= at_bar <= len(ranges):
-        raise ValueError("新增小節的位置不存在。")
+        raise ValueError(tr("新增小節的位置不存在。"))
     if type(count) is not int or count < 1:
-        raise ValueError("新增小節數須為正整數。")
+        raise ValueError(tr("新增小節數須為正整數。"))
     rests = _rests(int(score.bar_length * TICKS_PER_QUARTER))
     if len(entries) + count*len(rests) > MAX_NOTES:
-        raise ValueError("音符太多（上限 10,000）；請減少新增的小節數。")
+        raise ValueError(tr("音符太多（上限 10,000）；請減少新增的小節數。"))
     if at_bar == len(ranges):
         _complete_tail(score, entries)
         position = len(entries)
@@ -211,7 +212,7 @@ def duplicate_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
     ranges, entries = _context(score)
     selected = _bar_selection(bar_indices, len(ranges))
     if selected != list(range(selected[0], selected[-1]+1)):
-        raise ValueError("複製小節需選取連續的小節。")
+        raise ValueError(tr("複製小節需選取連續的小節。"))
     start, end = ranges[selected[0]][0], ranges[selected[-1]][1]
     if selected[-1] == len(ranges)-1:
         _complete_tail(score, entries)
@@ -230,27 +231,27 @@ def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
     """
     ranges, entries = _context(score)
     if type(row) is not int or not 0 <= row < len(entries):
-        raise ValueError("請先選取要填入音符的休止符。")
+        raise ValueError(tr("請先選取要填入音符的休止符。"))
     if not isinstance(note, Note):
-        raise ValueError("輸入音符格式不正確。")
+        raise ValueError(tr("輸入音符格式不正確。"))
     note.validate()
     if score.notes[row].degree != 0:
-        raise ValueError("填入音符只會覆寫休止符；請選取休止符或切換到修改音符。")
+        raise ValueError(tr("填入音符只會覆寫休止符；請選取休止符或切換到修改音符。"))
     if any(getattr(note, field) for field in _CONNECTIONS):
-        raise ValueError("請先填入音符，再選取範圍加入連線或反覆記號。")
+        raise ValueError(tr("請先填入音符，再選取範圍加入連線或反覆記號。"))
     previous = score.notes[row]
     if previous.tuplet:
         if note.duration != previous.duration or note.dotted:
-            raise ValueError("填入三連音休止符時須保持原時值；請選取完整三連音群組調整時值。")
+            raise ValueError(tr("填入三連音休止符時須保持原時值；請選取完整三連音群組調整時值。"))
         note = replace(note, tuplet=previous.tuplet, tuplet_start=previous.tuplet_start, tuplet_end=previous.tuplet_end)
     elif note.tuplet:
-        raise ValueError("請先填入音符，再選取完整的三個音符設定三連音。")
+        raise ValueError(tr("請先填入音符，再選取完整的三個音符設定三連音。"))
     _, bar_end = next((start, end) for start, end in ranges if start <= row < end)
     consumed, end, remainder = 0, row, None
     while end < bar_end and score.notes[end].degree == 0:
         rest = score.notes[end]
         if end != row and (rest.dynamic or rest.articulation):
-            raise ValueError("相鄰休止符含力度或演奏記號；請先調整該記號，避免覆寫時遺失。")
+            raise ValueError(tr("相鄰休止符含力度或演奏記號；請先調整該記號，避免覆寫時遺失。"))
         consumed += rest.ticks
         end += 1
         if consumed >= note.ticks:
@@ -263,8 +264,8 @@ def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
                 continue
     if remainder is None:
         if consumed >= note.ticks:
-            raise ValueError("剩餘拍數無法用目前支援的休止符表示；請調整附點或時值。")
-        raise ValueError("這個音符超過同小節內可用的連續休止拍數；不會覆蓋已有音符或推移後續小節。")
+            raise ValueError(tr("剩餘拍數無法用目前支援的休止符表示；請調整附點或時值。"))
+        raise ValueError(tr("這個音符超過同小節內可用的連續休止拍數；不會覆蓋已有音符或推移後續小節。"))
     note = replace(note, dynamic=note.dynamic or previous.dynamic, articulation=note.articulation or previous.articulation)
     unchanged = end == row+1 and not remainder and note == replace(previous, **_CONNECTION_DEFAULTS)
     # Entering the same rest is a no-op, including its existing bar repeat.

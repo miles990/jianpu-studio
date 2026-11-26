@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .i18n import tr
 from .model import TICKS_PER_QUARTER, tuplet_ranges
 
 
@@ -22,7 +23,7 @@ class NotationActions:
         for start, end in tuplet_ranges(self.project.score.notes):
             members = set(range(start, end))
             if selected & members and not members <= selected:
-                self.error("請選取整組三連音", "複製、刪除或重複時，請選取完整的三個音符。音高及演奏記號仍可逐個修改。")
+                self.error(tr("請選取整組三連音"), tr("複製、刪除或重複時，請選取完整的三個音符。音高及演奏記號仍可逐個修改。"))
                 return False
         return True
 
@@ -31,7 +32,7 @@ class NotationActions:
             return
         rows = self.notes.selected_rows()
         if not rows:
-            self.statusBar().showMessage("請先點選要拆成三連音的音符或休止符。", 6000)
+            self.statusBar().showMessage(tr("請先點選要拆成三連音的音符或休止符。"), 6000)
             return
         try:
             self.capture_fields()
@@ -39,19 +40,19 @@ class NotationActions:
             if collapse:
                 groups = [(a, b) for a, b in tuplet_ranges(notes) if any(a <= row < b for row in rows)]
                 if len(groups) != 1 or any(not groups[0][0] <= row < groups[0][1] for row in rows):
-                    raise ValueError("請選取同一組三連音中的音符。合併會保留首音音高及整組總拍數。")
+                    raise ValueError(tr("請選取同一組三連音中的音符。合併會保留首音音高及整組總拍數。"))
                 start, end = groups[0]
                 first, middle, last = notes[start:end]
                 if first.grace_after:
-                    raise ValueError("首音有獨立後倚音，請先移除或移到整組終點，再合併三連音。")
+                    raise ValueError(tr("首音有獨立後倚音，請先移除或移到整組終點，再合併三連音。"))
                 if (middle.slur_start or middle.slur_end or middle.hairpin or middle.hairpin_end
                         or first.slur_end or first.hairpin_end or last.slur_start or last.hairpin):
-                    raise ValueError("三連音內有連線或漸強弱端點，請先移除這些範圍記號再合併。")
+                    raise ValueError(tr("三連音內有連線或漸強弱端點，請先移除這些範圍記號再合併。"))
                 # Do not silently drop a separately marked inner note.
                 for note in (middle, last):
                     if (note.finger >= 0 or note.bow or note.dynamic or note.articulation
                             or note.slide or note.grace_before or (note is middle and note.grace_after)):
-                        raise ValueError("組內後兩音有獨立演奏記號，請先移除這些記號再合併；合併會保留首音音高。")
+                        raise ValueError(tr("組內後兩音有獨立演奏記號，請先移除這些記號再合併；合併會保留首音音高。"))
                 merged = replace(first, duration=first.duration // 2, tuplet=0, tuplet_start=False,
                                  tuplet_end=False, slur_end=last.slur_end, tie=last.tie,
                                  repeat_end=last.repeat_end, hairpin_end=last.hairpin_end,
@@ -59,11 +60,11 @@ class NotationActions:
                 replacement = [merged]
             else:
                 if len(rows) != 1:
-                    raise ValueError("請只選一個音符或休止符。程式會將它原來的拍數平均分成三份，後面的小節不會移動。")
+                    raise ValueError(tr("請只選一個音符或休止符。程式會將它原來的拍數平均分成三份，後面的小節不會移動。"))
                 start, end = rows[0], rows[0] + 1
                 original = notes[start]
                 if original.tuplet or original.dotted or original.duration not in (2, 4, 8, 16):
-                    raise ValueError("請選未附點的二分、四分、八分或十六分音符／休止符；已是三連音可先合併。")
+                    raise ValueError(tr("請選未附點的二分、四分、八分或十六分音符／休止符；已是三連音可先合併。"))
                 replacement = []
                 for part in range(3):
                     replacement.append(replace(
@@ -85,7 +86,7 @@ class NotationActions:
                         grace_after=original.grace_after if part == 2 else "",
                     ))
             if sum(n.ticks for n in replacement) != sum(n.ticks for n in notes[start:end]):
-                raise ValueError("三連音的總拍數不一致，未修改原譜。")
+                raise ValueError(tr("三連音的總拍數不一致，未修改原譜。"))
             def update(project):
                 project.score.notes[start:end] = replacement
                 if error := project.score.notation_error():
@@ -93,9 +94,9 @@ class NotationActions:
             if self.mutate(update, selection=range(start, start + len(replacement)), current=start):
                 self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
                 self.notes.setFocus()
-                self.statusBar().showMessage("已合併為首音，總拍數不變。" if collapse else "已拆成三連音，總拍數不變；點選各音符即可修改音高。", 8000)
+                self.statusBar().showMessage(tr("已合併為首音，總拍數不變。") if collapse else tr("已拆成三連音，總拍數不變；點選各音符即可修改音高。"), 8000)
         except ValueError as exc:
-            self.error("無法修改三連音", exc)
+            self.error(tr("無法修改三連音"), exc)
 
     @staticmethod
     def clear_range_marks(notes, rows, name, *, keep_adjacent=False):
@@ -145,11 +146,11 @@ class NotationActions:
                 self.update_selection()
                 return True
             except ValueError as exc:
-                self.error("無法設定記號", exc)
+                self.error(tr("無法設定記號"), exc)
                 return False
         rows = self.notes.selected_rows()
         if not rows:
-            self.statusBar().showMessage("請先選取要標記的音符。", 5000)
+            self.statusBar().showMessage(tr("請先選取要標記的音符。"), 5000)
             return False
         def update(project):
             for row in rows:
@@ -159,7 +160,7 @@ class NotationActions:
                     continue
                 if action != "remove" and (rows != list(range(rows[0], rows[-1] + 1))
                                            or (name != "repeat" and len(rows) < 2)):
-                    raise ValueError("連音、延音與漸強弱需選至少兩個連續音符；反覆需選完整的連續小節。")
+                    raise ValueError(tr("連音、延音與漸強弱需選至少兩個連續音符；反覆需選完整的連續小節。"))
                 self.clear_range_marks(project.score.notes, rows, name, keep_adjacent=action != "remove")
                 if action == "remove":
                     continue
@@ -179,7 +180,7 @@ class NotationActions:
 
     def quick_notation(self, changes=None, ranges=None):
         if not self.notes.selected_rows():
-            self.statusBar().showMessage("請先選取要加記號的音符；連線與漸強弱需連續選取兩個以上。", 6000)
+            self.statusBar().showMessage(tr("請先選取要加記號的音符；連線與漸強弱需連續選取兩個以上。"), 6000)
             return
         self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
         self.apply_notation_changes(changes or {}, ranges)
@@ -187,17 +188,17 @@ class NotationActions:
     def notation_menu(self):
         menu = QMenu(self)
         for title, fn in (
-            ("拆成三連音（總拍數不變）", self.triplet_action),
-            ("合併三連音為首音", lambda: self.triplet_action(True)),
-            ("連音線／連弓線", lambda: self.quick_notation(ranges={"slur": "add"})),
-            ("延音線（相同音高）", lambda: self.quick_notation(ranges={"tie": "add"})),
-            ("延長記號 𝄐", lambda: self.quick_notation({"articulation": "fermata"})),
-            ("漸強 ＜", lambda: self.quick_notation(ranges={"hairpin": "crescendo"})),
-            ("漸弱 ＞", lambda: self.quick_notation(ranges={"hairpin": "diminuendo"})),
+            (tr("拆成三連音（總拍數不變）"), self.triplet_action),
+            (tr("合併三連音為首音"), lambda: self.triplet_action(True)),
+            (tr("連音線／連弓線"), lambda: self.quick_notation(ranges={"slur": "add"})),
+            (tr("延音線（相同音高）"), lambda: self.quick_notation(ranges={"tie": "add"})),
+            (tr("延長記號 𝄐"), lambda: self.quick_notation({"articulation": "fermata"})),
+            (tr("漸強 ＜"), lambda: self.quick_notation(ranges={"hairpin": "crescendo"})),
+            (tr("漸弱 ＞"), lambda: self.quick_notation(ranges={"hairpin": "diminuendo"})),
         ):
             menu.addAction(title, fn)
         menu.addSeparator()
-        for index, title in enumerate(("力度 / 演奏…", "連線 / 反覆…", "倚音 / 二胡…")):
+        for index, title in enumerate((tr("力度 / 演奏…"), tr("連線 / 反覆…"), tr("倚音 / 二胡…"))):
             menu.addAction(title, lambda checked=False, tab=index: self.notation_settings(tab))
         return menu
 
@@ -207,21 +208,22 @@ class NotationActions:
         rows = self.notes.selected_rows()
         editing = self.input_mode.currentData() == "edit"
         if editing and not rows:
-            self.statusBar().showMessage("請先選取要標記的音符。", 5000)
+            self.statusBar().showMessage(tr("請先選取要標記的音符。"), 5000)
             return
         dialog = QDialog(self)
         dialog.setObjectName("notation_dialog")
-        dialog.setWindowTitle("基本記號 / 二胡")
+        dialog.setWindowTitle(tr("基本記號 / 二胡"))
         dialog.setMinimumWidth(470)
         layout = QVBoxLayout(dialog)
-        hint = QLabel(f"套用到所選 {len(rows)} 個音符；保持原樣會保留各音符差異。" if editing else "設定下一個新增音符的記號。連線請切到修改模式後選取音符。")
+        hint = QLabel(tr("套用到所選 {count} 個音符；保持原樣會保留各音符差異。").format(count=len(rows)) if editing
+                     else tr("設定下一個新增音符的記號。連線請切到修改模式後選取音符。"))
         hint.setWordWrap(True)
         layout.addWidget(hint)
         tabs = QTabWidget()
         tabs.setObjectName("notation_tabs")
         layout.addWidget(tabs)
         forms = []
-        for title in ("力度／演奏", "連線／反覆", "倚音／二胡"):
+        for title in (tr("力度／演奏"), tr("連線／反覆"), tr("倚音／二胡")):
             page = QWidget()
             form = QFormLayout(page)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
@@ -230,53 +232,53 @@ class NotationActions:
         tabs.setCurrentIndex(tab_index if tab_index in (0, 1, 2) else 0)
         controls = {}
         options = {
-            "dynamic": (0, "力度", [("無", "")] + [(s, s) for s in ("ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz")]),
-            "articulation": (0, "演奏記號", [("無", ""), ("跳音 ·", "staccato"), ("保持音 —", "tenuto"), ("重音 >", "accent"),
-                ("延長記號 𝄐", "fermata"), ("顫音 tr", "trill"), ("波音", "mordent"), ("換氣", "breathe"),
-                ("迴音", "turn"), ("強重音 ∧", "marcato"), ("極短奏", "staccatissimo"), ("泛音 ○", "harmonic")]),
-            "finger": (2, "指法", [("無", -1), ("空弦 0", 0)] + [(f"{i} 指", i) for i in range(1, 5)]),
-            "bow": (2, "弓法", [("無", ""), ("推弓 ∨", "upbow"), ("拉弓 Π", "downbow")]),
-            "slide": (2, "滑音", [("無", ""), ("上滑音", "up"), ("下滑音", "down")]),
+            "dynamic": (0, tr("力度"), [(tr("無"), "")] + [(s, s) for s in ("ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz")]),
+            "articulation": (0, tr("演奏記號"), [(tr("無"), ""), (tr("跳音 ·"), "staccato"), (tr("保持音 —"), "tenuto"), (tr("重音 >"), "accent"),
+                (tr("延長記號 𝄐"), "fermata"), (tr("顫音 tr"), "trill"), (tr("波音"), "mordent"), (tr("換氣"), "breathe"),
+                (tr("迴音"), "turn"), (tr("強重音 ∧"), "marcato"), (tr("極短奏"), "staccatissimo"), (tr("泛音 ○"), "harmonic")]),
+            "finger": (2, tr("指法"), [(tr("無"), -1), (tr("空弦 0"), 0)] + [(tr("{n} 指").format(n=i), i) for i in range(1, 5)]),
+            "bow": (2, tr("弓法"), [(tr("無"), ""), (tr("推弓 ∨"), "upbow"), (tr("拉弓 Π"), "downbow")]),
+            "slide": (2, tr("滑音"), [(tr("無"), ""), (tr("上滑音"), "up"), (tr("下滑音"), "down")]),
         }
         for name, (tab, title, choices) in options.items():
             control = QComboBox()
             control.setObjectName("notation_" + name)
-            control.addItem("保持原樣", None)
+            control.addItem(tr("保持原樣"), None)
             for text, value in choices:
                 control.addItem(text, value)
             if not editing:
                 control.setCurrentIndex(control.findData(getattr(self.next_note, name)))
             forms[tab].addRow(title, control)
             controls[name] = control
-        explanation = QLabel("延長記號表示自由延長；同音延音線合併拍數；三連音則把原拍數平均分成三份。\n三連音請在譜面選一音，再用音符工具的「三連音」操作。")
+        explanation = QLabel(tr("延長記號表示自由延長；同音延音線合併拍數；三連音則把原拍數平均分成三份。\n三連音請在譜面選一音，再用音符工具的「三連音」操作。"))
         explanation.setWordWrap(True)
         forms[0].addRow(explanation)
         range_controls = {}
-        for name, title in (("slur", "連音／連弓線"), ("tie", "同音延音線"), ("hairpin", "漸強／漸弱"), ("repeat", "反覆段落")):
+        for name, title in (("slur", tr("連音／連弓線")), ("tie", tr("同音延音線")), ("hairpin", tr("漸強／漸弱")), ("repeat", tr("反覆段落"))):
             control = QComboBox()
             control.setObjectName("notation_" + name)
-            choices = [("保持原樣", "keep")]
-            choices += [("漸強 ＜", "crescendo"), ("漸弱 ＞", "diminuendo")] if name == "hairpin" else [("加入所選範圍", "add")]
-            choices.append(("移除相交的整條記號", "remove"))
+            choices = [(tr("保持原樣"), "keep")]
+            choices += [(tr("漸強 ＜"), "crescendo"), (tr("漸弱 ＞"), "diminuendo")] if name == "hairpin" else [(tr("加入所選範圍"), "add")]
+            choices.append((tr("移除相交的整條記號"), "remove"))
             for text, value in choices:
                 control.addItem(text, value)
             control.setEnabled(editing)
             forms[1].addRow(title, control)
             range_controls[name] = control
-        range_hint = QLabel("Shift 連續選取。延音線兩端音高須相同；反覆需完整小節。移除會同時清除該條記號的起點及終點，可復原。")
+        range_hint = QLabel(tr("Shift 連續選取。延音線兩端音高須相同；反覆需完整小節。移除會同時清除該條記號的起點及終點，可復原。"))
         range_hint.setWordWrap(True)
         forms[1].addRow(range_hint)
         grace_controls = {}
-        for name, title in (("grace_before", "前倚音"), ("grace_after", "後倚音")):
+        for name, title in (("grace_before", tr("前倚音")), ("grace_after", tr("後倚音"))):
             control = QLineEdit()
             control.setObjectName("notation_" + name)
-            control.setPlaceholderText("留空＝保持原樣；輸入 - 移除；例：23 或 #4'5")
+            control.setPlaceholderText(tr("留空＝保持原樣；輸入 - 移除；例：23 或 #4'5"))
             if not editing:
                 control.setText(getattr(self.next_note, name))
             control.setMaxLength(40)
             forms[2].addRow(title, control)
             grace_controls[name] = control
-        grace_hint = QLabel("倚音可填 1–8 個 1–7 音高；# 升、b 降、' 高八度、, 低八度（最多兩八度）。倚音不另外增加小節拍數。\n\n後倚音目前不能與同一主音的力度、指法／弓法、連線端點或演奏記號（換氣除外）並用；程式會提示並保留原譜。")
+        grace_hint = QLabel(tr("倚音可填 1–8 個 1–7 音高；# 升、b 降、' 高八度、, 低八度（最多兩八度）。倚音不另外增加小節拍數。\n\n後倚音目前不能與同一主音的力度、指法／弓法、連線端點或演奏記號（換氣除外）並用；程式會提示並保留原譜。"))
         grace_hint.setWordWrap(True)
         forms[2].addRow(grace_hint)
         self.dialog_buttons(dialog, layout)
@@ -300,5 +302,5 @@ class NotationActions:
         bar_ticks = int(score.bar_length * TICKS_PER_QUARTER)
         for row, note in enumerate(score.notes):
             if row in starts and position % bar_ticks + sum(n.ticks for n in score.notes[row:starts[row]]) > bar_ticks:
-                raise ValueError("修改會讓三連音跨越小節。請改用整小節操作，或先合併三連音再調整。")
+                raise ValueError(tr("修改會讓三連音跨越小節。請改用整小節操作，或先合併三連音再調整。"))
             position += note.ticks
