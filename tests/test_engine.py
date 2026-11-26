@@ -208,3 +208,28 @@ def test_app_root_inside_macos_bundle(tmp_path, monkeypatch):
     assert find_tool("lilypond") == (contents / "Resources").resolve() / "runtime/lilypond/bin/lilypond"
     monkeypatch.setattr(engine.sys, "executable", str(tmp_path / "portable/JianpuStudio.exe"))
     assert engine.app_root() == (tmp_path / "portable").resolve()
+
+
+def test_lilypond_messages_are_english_but_keep_utf8(monkeypatch):
+    monkeypatch.setenv("LC_ALL", "zh_TW.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "zh_TW")
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    env = engine.lilypond_env()
+    assert env["LC_MESSAGES"] == "C" and "LC_ALL" not in env and "LANGUAGE" not in env
+    assert env["LC_CTYPE"] == "zh_TW.UTF-8"
+
+
+@pytest.mark.integration
+def test_cjk_fingering_and_marks_have_real_glyphs(tmp_path):
+    tool = find_tool("lilypond")
+    if not tool:
+        pytest.skip("JIANPU_LILYPOND not configured")
+    score = Score(title="指法字形", notes=[
+        Note(1, finger=0), Note(2, finger=1, articulation="staccato"), Note(3, finger=2), Note(4, finger=3),
+        Note(5, finger=4, duration=1),
+    ])
+    result = render(score.to_jianpu(), (tmp_path / "指法 字形").resolve(), tool.resolve())
+    for mark in ("宀", "一", "二", "三", "四", "▼"):
+        assert mark in result.lilypond.read_text(encoding="utf-8")
+    assert "no glyph for character" not in result.log
+    assert "warning:" not in result.log.lower(), result.log

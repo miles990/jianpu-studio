@@ -44,6 +44,11 @@ def _remove_legacy_fonts(text: str) -> str:
 def adapt_output(result: str, minor_version: int, paper_size: str) -> str:
     """Make jianpu-ly's LilyPond text valid for the selected LilyPond version."""
     result = _remove_legacy_fonts(result)
+    # jianpu-ly writes erhu fingering (一二三四, 宀 for the open string, ▼) as
+    # \finger \markup. Fingering uses the music font (fetaText encoding), and
+    # LilyPond 2.25+ no longer falls back to a text font for missing glyphs,
+    # so route these markups through the CJK text fonts configured below.
+    result = result.replace("\\finger \\markup { ", "\\finger \\markup { \\override #'(font-encoding . latin1) ")
     if minor_version >= 25:
         # 2.25+ expects an exact rational number of whole notes per minute
         # rather than a moment; 84 quarter notes = 21 whole notes. Without

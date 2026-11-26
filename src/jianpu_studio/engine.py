@@ -128,6 +128,24 @@ def worker_env() -> dict:
     return env
 
 
+def lilypond_env() -> dict:
+    """English LilyPond messages on every OS, without changing text encoding.
+
+    LilyPond translates its log through gettext. LC_MESSAGES=C selects the
+    untranslated (English) messages while LC_CTYPE/LANG keep the user's UTF-8
+    character handling, so warnings read the same everywhere and Unicode
+    paths keep working. LC_ALL would override LC_MESSAGES, so it is moved to
+    LC_CTYPE instead of being dropped.
+    """
+    env = dict(os.environ)
+    every = env.pop("LC_ALL", "")
+    if every and "LC_CTYPE" not in env:
+        env["LC_CTYPE"] = every
+    env.pop("LANGUAGE", None)
+    env["LC_MESSAGES"] = "C"
+    return env
+
+
 def validate_source(source: str) -> None:
     """Allow notation but exclude raw LilyPond/Scheme execution extensions.
 
@@ -174,7 +192,7 @@ def render(source: str, output: Path, lilypond: Path,
     output.mkdir(parents=True, exist_ok=True)
     source_path = output / "score.jly"
     atomic_write(source_path, source)
-    version = run_tool([str(lilypond), "--version"], output, cancel, timeout=20)
+    version = run_tool([str(lilypond), "--version"], output, cancel, timeout=20, env=lilypond_env())
     match = re.search(r"GNU LilyPond 2\.(\d+)", version)
     if not match or int(match[1]) < 24:
         raise ToolError(tr("請使用 LilyPond 2.24 或更新版本。安裝版已附帶 2.26.0。"))
@@ -188,7 +206,7 @@ def render(source: str, output: Path, lilypond: Path,
         raise
     output_option = "--pdf" if create_pdf else "-dno-print-pages"
     log += run_tool([str(lilypond), "-dno-point-and-click", output_option, "-o", str(output / "score"),
-                     str(output / "score.ly")], output, cancel, timeout=120)
+                     str(output / "score.ly")], output, cancel, timeout=120, env=lilypond_env())
     pdf = output / "score.pdf"
     if create_pdf and not pdf.is_file():
         raise ToolError(tr("排譜引擎未產生 PDF。") + "\n" + log[-12000:])
