@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -162,7 +163,7 @@ class MainWindow(EditActions, QMainWindow):
         file_menu.addSeparator()
         action(file_menu, tr("匯入 MusicXML…"), self.import_musicxml)
         action(file_menu, tr("匯出 PDF…"), lambda: self.export("pdf"), "Ctrl+E")
-        action(file_menu, tr("離開"), self.close, "Alt+F4")
+        action(file_menu, tr("離開"), self.close, QKeySequence.StandardKey.Quit).setMenuRole(QAction.MenuRole.QuitRole)
         edit = self.menuBar().addMenu(tr("編輯"))
         self.undo_action = action(edit, tr("復原"), self.undo, QKeySequence.StandardKey.Undo)
         self.redo_action = action(edit, tr("重做"), self.redo, QKeySequence.StandardKey.Redo)
@@ -176,7 +177,7 @@ class MainWindow(EditActions, QMainWindow):
         tools_menu = self.menuBar().addMenu(tr("工具"))
         action(tools_menu, tr("列印預覽"), self.show_print_preview, "F5")
         action(tools_menu, tr("作業訊息"), self.show_work_log)
-        action(tools_menu, tr("工具與環境設定"), self.tool_settings)
+        action(tools_menu, tr("工具與環境設定"), self.tool_settings).setMenuRole(QAction.MenuRole.PreferencesRole)
         self.language_menu = self.menuBar().addMenu(i18n.LANGUAGE_MENU_TITLE)
         self.language_group = QActionGroup(self)
         self.language_actions = {}
@@ -192,7 +193,7 @@ class MainWindow(EditActions, QMainWindow):
         help_menu = self.menuBar().addMenu(tr("說明"))
         action(help_menu, tr("操作說明"), self.show_help, "F1")
         action(help_menu, tr("檢查更新…"), self.check_updates)
-        action(help_menu, tr("關於"), self.show_about)
+        action(help_menu, tr("關於"), self.show_about).setMenuRole(QAction.MenuRole.AboutRole)
 
     def show_about(self):
         QMessageBox.about(self, tr("關於簡譜工房"), tr(
@@ -624,7 +625,7 @@ class MainWindow(EditActions, QMainWindow):
         try:
             copy = prepare_print_copy(result.pdf, self.data_dir / "print-cache")
             if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(copy))):
-                self.error(tr("無法開啟 PDF"), tr("請設定 Windows 的預設 PDF 閱讀器，或先匯出 PDF。"))
+                self.error(tr("無法開啟 PDF"), tr("請設定系統預設的 PDF 閱讀器，或先匯出 PDF。"))
         except OSError as exc:
             self.error(tr("無法開啟 PDF"), exc)
 
@@ -736,7 +737,7 @@ class MainWindow(EditActions, QMainWindow):
             fields[name] = field
             row.addWidget(field)
             def browse(_, target=field):
-                path, _ = QFileDialog.getOpenFileName(dialog, tr("選取執行檔"), "", tr("執行檔 (*.exe);;所有檔案 (*)"))
+                path, _ = QFileDialog.getOpenFileName(dialog, tr("選取執行檔"), "", tr("執行檔 (*.exe);;所有檔案 (*)") if sys.platform == "win32" else tr("所有檔案 (*)"))
                 if path:
                     target.setText(path)
             row.addWidget(button(tr("瀏覽…"), browse))
@@ -781,7 +782,7 @@ class MainWindow(EditActions, QMainWindow):
             tr("Ctrl+Z 復原；Ctrl+Y 重做；Ctrl+S 儲存；F5 列印預覽。") + "\n\n" +
             tr("三連音：選一個未附點音符或休止符，用音符工具「三連音」拆成三份，總拍數不變。") + "\n" +
             tr("PDF 只在列印／匯出時產生，平常直接在主譜面閱讀與編輯。") + "\n" +
-            tr("每 15 秒保留本機復原暫存。MIDI 使用 Windows 內建音色。")))
+            tr("每 15 秒保留本機復原暫存。MIDI 使用系統內建音色。")))
 
     def check_updates(self):
         from .update_dialog import UpdateDialog

@@ -7,6 +7,8 @@ import argparse
 import hashlib
 import json
 import os
+import platform as host
+import re
 import shutil
 import subprocess
 import tarfile
@@ -22,7 +24,9 @@ def download(key: str) -> Path:
     spec = LOCK[key]
     cache = ROOT / "work/downloads"
     cache.mkdir(parents=True, exist_ok=True)
-    target = cache / key
+    # Name the cache after the pinned file, so a version bump never reuses
+    # an older archive under the same key.
+    target = cache / spec["url"].rsplit("/", 1)[-1]
     if not target.is_file() or hashlib.file_digest(target.open("rb"), "sha256").hexdigest() != spec["sha256"]:
         print(f"Downloading {key}", flush=True)
         part = target.with_suffix(".part")
@@ -36,20 +40,31 @@ def download(key: str) -> Path:
     return target
 
 
-def stage(platform: str, with_omr: bool = True):
+def lilypond_key(platform: str, arch: str) -> str:
+    return f"lilypond-macos-{arch}" if platform == "macos" else f"lilypond-{platform}"
+
+
+def stage(platform: str, with_omr: bool = True, arch: str = ""):
     destination = ROOT / "vendor-runtime"
     destination.mkdir(exist_ok=True)
-    archive = download(f"lilypond-{platform}")
+    key = lilypond_key(platform, arch)
+    version = re.search(r"/lilypond-(\d+\.\d+\.\d+)-", LOCK[key]["url"])[1]
+    archive = download(key)
     unpack = ROOT / "work/lilypond-extract"
-    unpack.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(unpack, ignore_errors=True)
+    unpack.mkdir(parents=True)
     if platform == "windows":
         with zipfile.ZipFile(archive) as z:
             z.extractall(unpack)
     else:
         with tarfile.open(archive) as t:
             t.extractall(unpack, filter="data")
-    shutil.copytree(unpack / "lilypond-2.24.4", destination / "lilypond", dirs_exist_ok=True)
-    font = destination / "lilypond/share/lilypond/2.24.4/fonts/otf/NotoSerifCJKtc-Regular.otf"
+    # Replace, never merge: a stale share/lilypond/<old version> must not remain.
+    shutil.rmtree(destination / "lilypond", ignore_errors=True)
+    shutil.copytree(unpack / f"lilypond-{version}", destination / "lilypond", symlinks=True)
+    # The Traditional Chinese Noto OTF contains the full CJK glyph set, so
+    # Simplified titles and lyrics also render without missing glyphs.
+    font = destination / f"lilypond/share/lilypond/{version}/fonts/otf/NotoSerifCJKtc-Regular.otf"
     shutil.copy2(download("font"), font)
     licenses = destination / "licenses"
     licenses.mkdir(exist_ok=True)
@@ -81,7 +96,11 @@ def stage(platform: str, with_omr: bool = True):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--platform", choices=["windows", "linux"], default="windows" if os.name == "nt" else "linux")
+    default = "windows" if os.name == "nt" else "macos" if host.system() == "Darwin" else "linux"
+    parser.add_argument("--platform", choices=["windows", "linux", "macos"], default=default)
+    parser.add_argument("--arch", choices=["arm64", "x86_64"],
+                        default="arm64" if host.machine().lower() in ("arm64", "aarch64") else "x86_64",
+                        help="macOS LilyPond architecture (default: this machine)")
     parser.add_argument("--no-omr", action="store_true")
     args = parser.parse_args()
-    stage(args.platform, not args.no_omr)
+    stage(args.platform, not args.no_omr, args.arch)

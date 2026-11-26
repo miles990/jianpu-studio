@@ -153,3 +153,58 @@ def test_erhu_marks_and_letter_layout_reach_real_pdf(tmp_path, qapp):
 def test_render_options_are_validated_before_process_start(tmp_path, options):
     with pytest.raises(ValueError):
         render(demo_project().notation(), tmp_path, tmp_path / "unused", **options)
+
+
+def midi_tempos(data: bytes) -> list[int]:
+    """Microseconds per quarter note from every Set Tempo meta event."""
+    tempos, offset = [], 0
+    while (offset := data.find(b"\xff\x51\x03", offset)) != -1:
+        tempos.append(int.from_bytes(data[offset+3:offset+6], "big"))
+        offset += 6
+    return tempos
+
+
+def test_worker_adapts_jianpu_ly_output_to_lilypond_version():
+    from jianpu_studio.worker import adapt_output
+    legacy = ('\\paper {\n  #(define fonts\n    (set-global-fonts\n     #:roman "A,B"\n'
+              '     #:factor (/ staff-height pt 20)\n    ))\n  print-all-headers = ##t\n}\n'
+              '\\midi { \\context { \\Score tempoWholesPerMinute = #(ly:make-moment 84 4)}}')
+    new = adapt_output(legacy, 26, "letter")
+    assert "set-global-fonts" not in new and "print-all-headers = ##t\n}" in new
+    assert "tempoWholesPerMinute = #21 }}" in new
+    assert '#(set-paper-size "letter")' in new
+    assert 'property-defaults.fonts.serif = "Noto Serif CJK TC,' in new
+    for system_font in ("Microsoft JhengHei", "PingFang TC", "Songti TC", "Microsoft YaHei"):
+        assert system_font in new
+    assert "ly:make-moment 84 4" in adapt_output(legacy, 24, "a4")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("source, bpm", [
+    (demo_project().notation(), demo_project().score.tempo),
+    ("1=C 4/4 1 2 3 4 5 6 7 1'", 84),  # jianpu-ly's default MIDI tempo
+])
+def test_real_midi_tempo(tmp_path, source, bpm):
+    tool = find_tool("lilypond")
+    if not tool:
+        pytest.skip("JIANPU_LILYPOND not configured")
+    result = render(source, tmp_path.resolve(), tool.resolve(), create_pdf=False)
+    assert "tempoWholesPerMinute" not in result.log and "set-global-fonts" not in result.log
+    tempos = midi_tempos(result.midi.read_bytes())
+    assert tempos and abs(tempos[0] - 60_000_000 / bpm) <= 1, tempos
+
+
+def test_app_root_inside_macos_bundle(tmp_path, monkeypatch):
+    contents = tmp_path / "簡譜 工房.app/Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Resources/runtime/lilypond/bin").mkdir(parents=True)
+    lily = contents / "Resources/runtime/lilypond/bin/lilypond"
+    lily.write_text("")
+    monkeypatch.setattr(engine.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(engine.sys, "executable", str(contents / "MacOS/JianpuStudio"))
+    monkeypatch.setattr(engine.sys, "platform", "darwin")
+    monkeypatch.delenv("JIANPU_LILYPOND", raising=False)
+    assert engine.app_root() == (contents / "Resources").resolve()
+    assert find_tool("lilypond") == (contents / "Resources").resolve() / "runtime/lilypond/bin/lilypond"
+    monkeypatch.setattr(engine.sys, "executable", str(tmp_path / "portable/JianpuStudio.exe"))
+    assert engine.app_root() == (tmp_path / "portable").resolve()

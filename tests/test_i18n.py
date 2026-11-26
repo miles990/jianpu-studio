@@ -192,8 +192,8 @@ def test_convert_round_trips_every_catalog_entry():
             filled_value = value.format(**{name: "X" for name in placeholders(value)})
         else:
             filled_source, filled_value = source, value
-        assert i18n.convert(filled_source, "zh_CN") == filled_value, source
-        assert i18n.convert(filled_value, "zh_TW") == filled_source, source
+        assert i18n.convert(filled_source, "zh_CN") == i18n.platform_keys(filled_value), source
+        assert i18n.convert(filled_value, "zh_TW") == i18n.platform_keys(filled_source), source
 
 
 def test_model_messages_follow_the_language_at_the_time_they_are_raised():
@@ -411,8 +411,45 @@ def test_language_menu_names_each_language_in_its_own_script_with_a_checkmark(wi
     assert window.language_menu.title() == "語言 / 语言"
 
 
-def test_canvas_font_and_stylesheet_follow_the_language(window):
-    assert "Microsoft JhengHei" in window.styleSheet()
-    window.language_actions["zh_CN"].trigger()
-    assert "Microsoft YaHei" in window.styleSheet() and "JhengHei" not in window.styleSheet()
-    assert i18n.ui_font_family() in ("PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC")
+@pytest.mark.parametrize("platform, tw, cn", [
+    ("win32", "Microsoft JhengHei", "Microsoft YaHei"),
+    ("darwin", "PingFang TC", "PingFang SC"),
+    ("linux", "Noto Sans CJK TC", "Noto Sans CJK SC"),
+])
+def test_fonts_are_per_platform_and_per_language(monkeypatch, platform, tw, cn):
+    from jianpu_studio.widgets import stylesheet
+    monkeypatch.setattr("sys.platform", platform)
+    assert (i18n.ui_font_family("zh_TW"), i18n.ui_font_family("zh_CN")) == (tw, cn)
+    assert stylesheet("zh_TW").count(f"'{tw}'") >= 1 and cn not in stylesheet("zh_TW")
+    assert f"font-family: '{cn}'" in stylesheet("zh_CN")
+    sans, serif = i18n.latin_sans_family(), i18n.latin_serif_family()
+    assert (platform == "linux") == (sans == "DejaVu Sans" and serif == "DejaVu Serif")
+
+
+@pytest.mark.parametrize("platform, mod", [("darwin", "⌘"), ("win32", "Ctrl"), ("linux", "Ctrl")])
+def test_shortcut_hints_name_the_platform_modifier(monkeypatch, platform, mod):
+    monkeypatch.setattr("sys.platform", platform)
+    assert i18n.modifier_name() == mod
+    hint = i18n.tr("Ctrl+Z 復原；Ctrl+Y 重做；Ctrl+S 儲存；F5 列印預覽。")
+    assert hint.startswith(mod + "Z" if mod == "⌘" else "Ctrl+Z")
+    assert i18n.tr("Shift 連選、Ctrl 加選、Ctrl+A 全選、M 選小節。") == (
+        f"Shift 連選、{mod} 加選、{mod}A 全選、M 選小節。" if mod == "⌘" else "Shift 連選、Ctrl 加選、Ctrl+A 全選、M 選小節。")
+    shown = i18n.tr("剪下　Ctrl+X")
+    i18n.set_language("zh_CN")
+    assert i18n.convert(shown, "zh_CN", "zh_TW") == i18n.tr("剪下　Ctrl+X")
+    assert i18n.convert(i18n.tr("剪下　Ctrl+X"), "zh_TW", "zh_CN") == shown
+
+
+def test_wording_is_true_on_every_platform():
+    texts = " ".join(CATALOG) + (SRC / "app.py").read_text(encoding="utf-8")
+    assert "Windows 的預設" not in texts and "Windows 內建音色" not in texts and "Alt+F4" not in texts
+
+
+def test_quit_about_and_preferences_have_application_menu_roles(window):
+    roles = {a.text(): a.menuRole() for a in window.findChildren(QAction)}
+    assert roles["離開"] == QAction.MenuRole.QuitRole
+    assert roles["關於"] == QAction.MenuRole.AboutRole
+    assert roles["工具與環境設定"] == QAction.MenuRole.PreferencesRole
+    assert window.language_menu.menuAction().isVisible() and window.language_menu.isEnabled()
+    assert all(a.menuRole() == QAction.MenuRole.TextHeuristicRole for a in window.language_menu.actions())
+    assert window.language_menu.menuAction() in window.menuBar().actions()

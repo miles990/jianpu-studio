@@ -1,4 +1,8 @@
-"""Attach independently executable engines and their notices to the app."""
+"""Attach independently executable engines and their notices to the app.
+
+Windows: dist/JianpuStudio. macOS: pass --target dist/JianpuStudio.app/Contents/Resources.
+"""
+import argparse
 import hashlib
 import json
 import platform
@@ -9,8 +13,10 @@ from importlib.metadata import distribution
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
-dist = root / "dist/JianpuStudio"
-shutil.copytree(root / "vendor-runtime", dist / "runtime", dirs_exist_ok=True)
+parser = argparse.ArgumentParser()
+parser.add_argument("--target", type=Path, default=root / "dist/JianpuStudio")
+dist = parser.parse_args().target.resolve()
+shutil.copytree(root / "vendor-runtime", dist / "runtime", dirs_exist_ok=True, symlinks=True)
 for name in ("docs", "examples"):
     shutil.copytree(root / name, dist / name, dirs_exist_ok=True)
 for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
@@ -18,7 +24,8 @@ for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "README.md"):
 licenses = dist / "licenses"
 licenses.mkdir(exist_ok=True)
 shutil.copy2(root / "src/jianpu_studio/vendor/LICENSE-jianpu-ly", licenses)
-shutil.copy2(root / "packaging/LICENSE-Inno-Setup.txt", licenses)
+if sys.platform == "win32":
+    shutil.copy2(root / "packaging/LICENSE-Inno-Setup.txt", licenses)
 for filename in ("LICENSE.txt", "LICENSE"):
     python_license = Path(sys.base_prefix) / filename
     if python_license.is_file():
@@ -43,7 +50,7 @@ for package in ("PySide6", "PySide6_Essentials", "PySide6_Addons", "shiboken6", 
                 shutil.copy2(source, target)
 lines = []
 for path in sorted(dist.rglob("*")):
-    if path.is_file():
+    if path.is_file() and not path.is_symlink():
         with path.open("rb") as stream:
             lines.append(f"{hashlib.file_digest(stream, 'sha256').hexdigest()}  {path.relative_to(dist).as_posix()}")
 (dist / "MANIFEST.sha256").write_text("\n".join(lines) + "\n", encoding="utf-8")

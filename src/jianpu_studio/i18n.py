@@ -45,10 +45,29 @@ def N_(text: str) -> str:
     return text
 
 
-def tr(text: str) -> str:
-    if _language == TRADITIONAL:
+def modifier_name() -> str:
+    """The name of the shortcut modifier Qt calls Ctrl: it is the Command key on macOS."""
+    return "⌘" if sys.platform == "darwin" else "Ctrl"
+
+
+def platform_keys(text: str) -> str:
+    """Show shortcut hints with this platform's modifier (Ctrl+Z -> ⌘Z on macOS)."""
+    if "Ctrl" not in text or modifier_name() == "Ctrl":
         return text
-    return catalog().get(text, text)
+    return text.replace("Ctrl+", modifier_name()).replace("Ctrl", modifier_name())
+
+
+def _portable_keys(text: str) -> str:
+    """Undo ``platform_keys`` so shown text can be matched against the catalog."""
+    if "⌘" not in text:
+        return text
+    return re.sub(r"⌘(?=\S)", "Ctrl+", text).replace("⌘", "Ctrl")
+
+
+def tr(text: str) -> str:
+    if _language != TRADITIONAL:
+        text = catalog().get(text, text)
+    return platform_keys(text)
 
 
 def current_language() -> str:
@@ -142,9 +161,17 @@ def ui_font_family(language: str | None = None) -> str:
     simplified = (language or _language) == SIMPLIFIED
     if sys.platform == "darwin":
         return "PingFang SC" if simplified else "PingFang TC"
-    if sys.platform == "win32" or not simplified:
+    if sys.platform == "win32":
         return "Microsoft YaHei" if simplified else "Microsoft JhengHei"
-    return "Noto Sans CJK SC"
+    return "Noto Sans CJK SC" if simplified else "Noto Sans CJK TC"
+
+
+def latin_sans_family() -> str:
+    return {"darwin": "Helvetica Neue", "win32": "Segoe UI"}.get(sys.platform, "DejaVu Sans")
+
+
+def latin_serif_family() -> str:
+    return "DejaVu Serif" if sys.platform not in ("darwin", "win32") else "Times New Roman"
 
 
 # --- converting text that is already on screen -------------------------------
@@ -178,6 +205,10 @@ def _index(old: str, new: str):
 
 
 def convert(text: str, new: str, old: str | None = None) -> str:
+    return platform_keys(_convert(_portable_keys(text), new, old))
+
+
+def _convert(text: str, new: str, old: str | None = None) -> str:
     """Re-render text that was produced by ``tr`` in ``old`` for ``new``.
 
     Unknown text, including anything the user typed, is returned unchanged.
@@ -192,9 +223,9 @@ def convert(text: str, new: str, old: str | None = None) -> str:
     for _, pattern, target in templates:
         match = pattern.fullmatch(text)
         if match:
-            return target.format(**{k: convert(v, new, old) for k, v in match.groupdict().items()})
+            return target.format(**{k: _convert(v, new, old) for k, v in match.groupdict().items()})
     if "\n" in text:
-        return "\n".join(convert(line, new, old) for line in text.split("\n"))
+        return "\n".join(_convert(line, new, old) for line in text.split("\n"))
     return text
 
 

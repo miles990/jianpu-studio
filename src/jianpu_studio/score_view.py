@@ -18,7 +18,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QRegion
 from PySide6.QtWidgets import QAbstractItemView, QToolTip
 
-from .i18n import N_, tr, ui_font_family
+from .i18n import N_, latin_sans_family, latin_serif_family, tr, ui_font_family
 from .model import TICKS_PER_QUARTER, Score
 
 ARTICULATION_LABELS = {
@@ -767,7 +767,7 @@ class NoteList(QAbstractItemView):
             p.drawLine(end, QPointF(end.x()-5*s, end.y()))
             p.drawLine(end, QPointF(end.x(), end.y()-direction*5*s))
         if note.dynamic:
-            font = QFont("DejaVu Serif", max(7, int(12*s)), QFont.Weight.Bold)
+            font = QFont(latin_serif_family(), max(7, int(12*s)), QFont.Weight.Bold)
             font.setItalic(True)
             p.setFont(font)
             offset = 47*s if dynamic_offset is None else dynamic_offset
@@ -828,7 +828,7 @@ class NoteList(QAbstractItemView):
             path.moveTo(-10, -1)
             path.cubicTo(-10, 3, -5, 3, -5, -1)
         elif mark in ("trill", "breathe"):
-            font = QFont("DejaVu Serif", 12 if mark == "trill" else 17)
+            font = QFont(latin_serif_family(), 12 if mark == "trill" else 17)
             font.setItalic(mark == "trill")
             painter.setFont(font)
             painter.drawText(QRect(-13, -14, 26, 25), Qt.AlignmentFlag.AlignCenter,
@@ -849,11 +849,11 @@ class NoteList(QAbstractItemView):
             for number, (accidental, degree, octave) in enumerate(group):
                 x, y = start+(7+14*number)*s, cy-7*s
                 centers.append(x)
-                painter.setFont(QFont("DejaVu Sans", max(6, int(9*s))))
+                painter.setFont(QFont(latin_sans_family(), max(6, int(9*s))))
                 painter.drawText(QRect(int(x-5*s), int(y-10*s), max(1, int(10*s)), max(1, int(20*s))),
                                  Qt.AlignmentFlag.AlignCenter, degree)
                 if accidental:
-                    painter.setFont(QFont("DejaVu Sans", max(5, int(6*s))))
+                    painter.setFont(QFont(latin_sans_family(), max(5, int(6*s))))
                     painter.drawText(QPointF(x-10*s, y+2*s), "♯" if accidental == "#" else "♭")
                 for dot in range(abs(octave)):
                     dot_y = y-(11+4*dot)*s if octave > 0 else y+(13+4*dot)*s
@@ -867,7 +867,7 @@ class NoteList(QAbstractItemView):
             painter.drawPath(path)
         for path in self.line_hairpins[line]:
             painter.drawPath(path)
-        painter.setFont(QFont("DejaVu Serif", max(7, int(11*self.scale))))
+        painter.setFont(QFont(latin_serif_family(), max(7, int(11*self.scale))))
         for path, rect, number in self.line_tuplets[line]:
             painter.drawPath(path)
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, number)
@@ -934,10 +934,10 @@ class NoteList(QAbstractItemView):
                 p.setPen(QPen(color, max(1, s)))
                 long_beats = self.long_beats(note)
                 cx = self.note_center(i)
-                p.setFont(QFont("DejaVu Sans", max(7, int(22*s)), QFont.Weight.DemiBold))
+                p.setFont(QFont(latin_sans_family(), max(7, int(22*s)), QFont.Weight.DemiBold))
                 number_rect = QRect(int(cx-14*s), int(cy-22*s), int(28*s), int(40*s))
                 p.drawText(number_rect, Qt.AlignmentFlag.AlignCenter, str(note.degree))
-                p.setFont(QFont("DejaVu Sans", max(6, int(13*s))))
+                p.setFont(QFont(latin_sans_family(), max(6, int(13*s))))
                 if note.accidental:
                     p.drawText(QPointF(cx-24*s, cy+5*s), {"#": "♯", "b": "♭", "n": "♮"}[note.accidental])
                 if note.dotted and note.duration > 2:

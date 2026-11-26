@@ -1,6 +1,11 @@
-"""Exercise frozen worker + bundled LilyPond and Audiveris, offline."""
+"""Exercise frozen worker + bundled LilyPond and Audiveris, offline.
+
+Windows: smoke_bundle.py dist/JianpuStudio --omr   (GUI self-test + OMR)
+macOS:   smoke_bundle.py dist/JianpuStudio.app --gui
+"""
 import argparse
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -11,26 +16,41 @@ from jianpu_studio.musicxml import read_xml, visual_import
 
 parser = argparse.ArgumentParser()
 parser.add_argument("directory", type=Path)
-parser.add_argument("--omr", action="store_true")
+parser.add_argument("--omr", action="store_true", help="also run the GUI self-test and Audiveris (Windows)")
+parser.add_argument("--gui", action="store_true", help="run the frozen GUI self-test")
 args = parser.parse_args()
-root = args.directory.resolve()
-exe = root / "JianpuStudio.exe"
-lily = root / "runtime/lilypond/bin/lilypond.exe"
+bundle = args.directory.resolve()
+if bundle.suffix == ".app":
+    # macOS: executable in Contents/MacOS, engines in Contents/Resources.
+    exe = bundle / "Contents/MacOS/JianpuStudio"
+    root = bundle / "Contents/Resources"
+    lily = root / "runtime/lilypond/bin/lilypond"
+    screenshot = "macos-ui.png"
+else:
+    root = bundle
+    exe = root / "JianpuStudio.exe"
+    lily = root / "runtime/lilypond/bin/lilypond.exe"
+    screenshot = "windows-ui.png"
 audiveris = root / "runtime/audiveris/Audiveris.exe"
+minor = re.search(r"GNU LilyPond 2\.(\d+)", subprocess.run([str(lily), "--version"], capture_output=True,
+                                                          text=True, check=True, timeout=60).stdout)[1]
 
-if args.omr:
+if args.omr or args.gui:
     diagnostics = Path("work/bundle-diagnostics").resolve()
     diagnostics.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(exe), "--self-test", str(diagnostics)], check=True, timeout=110)
-    assert (diagnostics / "windows-ui.png").is_file()
+    assert (diagnostics / screenshot).is_file()
 
 with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
     work = Path(work)
     (work / "score.jly").write_text(demo_project().notation(), encoding="utf-8")
-    subprocess.run([str(exe), "--worker", "convert", str(work / "score.jly"), str(work / "score.ly"), "24"], check=True, timeout=90)
+    subprocess.run([str(exe), "--worker", "convert", str(work / "score.jly"), str(work / "score.ly"), minor], check=True, timeout=90)
     assert (work / "score.ly").is_file(), list(work.iterdir())
     subprocess.run([str(lily), "--pdf", "-o", str(work / "score"), str(work / "score.ly")], check=True, timeout=120)
-    assert (work / "score.pdf").read_bytes().startswith(b"%PDF")
+    pdf = (work / "score.pdf").read_bytes()
+    assert pdf.startswith(b"%PDF")
+    # The demo title is Chinese: the bundled Noto font must be found and used.
+    assert b"NotoSerifCJKtc" in pdf, "bundled CJK font not embedded"
     midi = work / "score.mid"
     if not midi.is_file():
         midi = work / "score.midi"
@@ -48,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
             assert [(n.degree, n.duration) for n in project.score.notes] == [(n.degree, n.duration) for n in demo_project().score.notes]
         subprocess.run([str(exe), "--worker", "import", str(xml), str(work / "recognized.jly")], check=True, timeout=90)
         assert (work / "recognized.jly").stat().st_size > 30
-        subprocess.run([str(exe), "--worker", "convert", str(work / "recognized.jly"), str(work / "recognized.ly"), "24"], check=True, timeout=90)
+        subprocess.run([str(exe), "--worker", "convert", str(work / "recognized.jly"), str(work / "recognized.ly"), minor], check=True, timeout=90)
         subprocess.run([str(lily), "--pdf", "-o", str(work / "recognized-score"), str(work / "recognized.ly")], check=True, timeout=120)
         assert (work / "recognized-score.pdf").read_bytes().startswith(b"%PDF")
         # Reproduce the reported five-pixel staff spacing with a real low-DPI
@@ -58,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix="jianpu 中文 smoke ") as work:
         low_xml, low_log = recognize(work / "small-photo.png", work / "small-recognized", audiveris)
         assert "自動放大" in low_log, low_log
         subprocess.run([str(exe), "--worker", "import", str(low_xml), str(work / "small.jly")], check=True, timeout=90)
-        subprocess.run([str(exe), "--worker", "convert", str(work / "small.jly"), str(work / "small.ly"), "24"], check=True, timeout=90)
+        subprocess.run([str(exe), "--worker", "convert", str(work / "small.jly"), str(work / "small.ly"), minor], check=True, timeout=90)
         subprocess.run([str(lily), "--pdf", "-o", str(work / "small-score"), str(work / "small.ly")], check=True, timeout=120)
         assert (work / "small-score.pdf").read_bytes().startswith(b"%PDF")
 print("Frozen bundle smoke test passed")

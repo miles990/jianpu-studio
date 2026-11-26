@@ -1,9 +1,6 @@
 """Shared appearance for the compact desktop workspace."""
+from . import i18n
 
-_FAMILIES = {
-    "zh_TW": "'Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', 'Segoe UI'",
-    "zh_CN": "'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', 'Segoe UI'",
-}
 _TEMPLATE = """
 QMainWindow, QDialog { background: #f5f7f6; color: #172f39; }
 QWidget { font-family: @FAMILY@; font-size: 13px; color: #172f39; }
@@ -18,7 +15,7 @@ QPushButton:pressed { background: #d4eae2; }
 QPushButton:disabled, QToolButton:disabled { color: #a1adaa; background: #edf0ee; }
 QPushButton#primary { background: #197e69; color: #ffffff; border: 1px solid #197e69; font-weight: 700; }
 QPushButton#primary:hover { background: #126651; }
-QPushButton#pitch { min-width: 24px; min-height: 24px; font-family: 'Segoe UI'; font-size: 21px; font-weight: 600; }
+QPushButton#pitch { min-width: 24px; min-height: 24px; font-family: @SANS@; font-size: 21px; font-weight: 600; }
 QLineEdit, QComboBox, QSpinBox, QPlainTextEdit { border: 1px solid #d6dfdc; border-radius: 5px; padding: 4px; background: white; selection-background-color: #197e69; }
 QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid #197e69; }
 QAbstractItemView#notes { background: #edf1f3; border: 1px solid #d5dde2; border-radius: 6px; }
@@ -43,7 +40,8 @@ QMenu::item:selected { background: #e1f3ed; }
 
 def stylesheet(language: str = "zh_TW") -> str:
     """The workspace stylesheet with the CJK font stack of the interface language."""
-    return _TEMPLATE.replace("@FAMILY@", _FAMILIES.get(language, _FAMILIES["zh_TW"]))
+    cjk, sans = i18n.ui_font_family(language), i18n.latin_sans_family()
+    return _TEMPLATE.replace("@FAMILY@", f"'{cjk}', '{sans}'").replace("@SANS@", f"'{sans}'")
 
 
 STYLE = stylesheet("zh_TW")

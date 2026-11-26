@@ -8,8 +8,14 @@ import pytest
 from jianpu_studio import updates
 
 
-def metadata(version="9.9.9", content=b"verified installer"):
-    name = f"JianpuStudio-{version}-Windows-x64-Setup.exe"
+@pytest.fixture(autouse=True)
+def windows_updates(monkeypatch):
+    # The in-place installer flow is Windows behaviour; test it on every host.
+    monkeypatch.setattr(updates, "PLATFORM", "windows")
+
+
+def metadata(version="9.9.9", content=b"verified installer", name=None):
+    name = name or f"JianpuStudio-{version}-Windows-x64-Setup.exe"
     return {"tag_name": "v"+version, "draft": False, "prerelease": False, "body": "Release notes",
             "assets": [{"name": name, "state": "uploaded", "size": len(content),
                         "browser_download_url": f"https://github.com/{updates.REPOSITORY}/releases/download/v{version}/{name}",
@@ -114,5 +120,56 @@ def test_update_dialog_save_guard(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(w, "guard_unsaved", lambda: True)
     dialog.next_step()
     assert len(launched) == 1 and w.updating
+    w.dirty = False
+    w.close()
+
+
+@pytest.mark.parametrize("machine, arch", [("arm64", "arm64"), ("x86_64", "x86_64")])
+def test_macos_checks_version_against_its_own_dmg(monkeypatch, machine, arch):
+    monkeypatch.setattr(updates, "PLATFORM", "macos")
+    monkeypatch.setattr(updates.platform, "machine", lambda: machine)
+    name = f"JianpuStudio-9.9.9-macOS-{arch}.dmg"
+    data = metadata(name=name)
+    data["assets"].append(metadata()["assets"][0])
+    info = updates.release_info(data, "0.3.1")
+    assert info.version == "9.9.9"
+    assert info.url.endswith("/" + name)
+    assert info.page == f"https://github.com/{updates.REPOSITORY}/releases/tag/v9.9.9"
+    assert updates.release_info(metadata("0.3.1", name="JianpuStudio-0.3.1-macOS-arm64.dmg"), "0.3.1") is None
+    with pytest.raises(ValueError, match="macOS"):
+        updates.release_info(metadata(), "0.3.1")  # Windows-only release
+
+
+def test_macos_has_no_installer_target_or_launch(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates.os, "name", "posix")
+    assert updates.installed_target(tmp_path) is None
+
+
+def test_macos_dialog_opens_release_page_without_downloading(qtbot, tmp_path, monkeypatch):
+    from jianpu_studio import update_dialog
+    from jianpu_studio.app import MainWindow
+    from jianpu_studio.update_dialog import UpdateDialog
+    monkeypatch.setattr(updates, "PLATFORM", "macos")
+    monkeypatch.setattr(updates.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(MainWindow, "render_score", lambda *a: None)
+    info = updates.release_info(metadata(name="JianpuStudio-9.9.9-macOS-arm64.dmg"), "0.1.2")
+    monkeypatch.setattr(update_dialog, "fetch_update", lambda _: info)
+    monkeypatch.setattr(update_dialog, "installed_target", lambda _: pytest.fail("no registry lookup on macOS"))
+    forbidden = []
+    monkeypatch.setattr(update_dialog, "download_update", lambda *a: forbidden.append("download"))
+    monkeypatch.setattr(update_dialog, "launch_update", lambda *a: forbidden.append("launch"))
+    opened = []
+    monkeypatch.setattr(update_dialog.QDesktopServices, "openUrl", lambda url: opened.append(url.toString()) or True)
+    w = MainWindow(recovery=False)
+    qtbot.addWidget(w)
+    dialog = UpdateDialog(w)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitUntil(lambda: dialog.info is not None and dialog.worker is None)
+    assert dialog.primary.isEnabled() and dialog.primary.text() == "前往下載新版"
+    assert "DMG" in dialog.destination.text()
+    dialog.next_step()
+    assert opened == [info.page]
+    assert forbidden == [] and dialog.worker is None and not w.updating
     w.dirty = False
     w.close()

@@ -1,11 +1,19 @@
 {
   "lilypond-windows": {
-    "url": "https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/2.24.4/lilypond-2.24.4-mingw-x86_64.zip",
-    "sha256": "e238f5a33ebde7466fe03d0fbcaa155a44536ca582951972482e0b00ceb0fbf1"
+    "url": "https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/2.26.0/lilypond-2.26.0-mingw-x86_64.zip",
+    "sha256": "14ddddc233b469ef60d4ffc1c7f35520f15ac6b58e38cab458c60bdcc3af650c"
   },
   "lilypond-linux": {
-    "url": "https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/2.24.4/lilypond-2.24.4-linux-x86_64.tar.gz",
-    "sha256": "53bc1df875ee56dabe56ae1f0b4550237e0c9acc837b60f0ef8c42fc35a68641"
+    "url": "https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/2.26.0/lilypond-2.26.0-linux-x86_64.tar.gz",
+    "sha256": "cd8a097a9f52cb2b9f4e7914774786f203f4fc61fcd299afcbb63c23fa5c6b24"
+  },
+  "lilypond-macos-arm64": {
+    "url": "https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/2.26.0/lilypond-2.26.0-darwin-arm64.tar.gz",
+    "sha256": "18ffc454fef3753c26a015d95a3c232f89b22f052b897c046e0198740a1221be"
+  },
+  "lilypond-macos-x86_64": {
+    "url": "https://gitlab.com/api/v4/projects/lilypond%2Flilypond/packages/generic/lilypond/2.26.0/lilypond-2.26.0-darwin-x86_64.tar.gz",
+    "sha256": "6dcbca34b13ad6d4ba3606a0b48edd02688284fcd52e9c00141242df1996a148"
   },
   "audiveris-windows": {
     "url": "https://github.com/Audiveris/audiveris/releases/download/5.11.0/Audiveris-5.11.0-windowsConsole-x86_64.msi",

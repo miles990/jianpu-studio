@@ -16,9 +16,25 @@ MusicXML / MXL → conservative visual import (reject unsupported content)
 
 Version 0.3.1 removes the source editor and source-file open/export actions. Legacy source-mode projects are accepted only when their source exactly matches the generated visual score (apart from surrounding whitespace); otherwise opening is refused without changing the file or current project. Incompatible recovery files are backed up byte-for-byte before a new recovery file can be written. If that backup fails, automatic recovery writes and cleanup are disabled for the session to preserve the only copy. The model and worker retain source support internally for schema compatibility and backend tests.
 
-Opening a file from Windows passes an initial path to the main window. One startup callback completes recovery first, then opens that file through the unsaved-work guard. Separate timers would be unsafe because a recovery dialog can run a nested event loop. Blocking imports disable both the note editor and the always-visible score settings; background rendering leaves them editable.
+Opening a file from Windows passes an initial path to the main window. macOS Finder instead sends a `QFileOpenEvent` (also to a running instance); `platform_support.FileOpenRouter` queues it until no modal dialog, blocking task, update or close is in progress, then uses the same guarded `open_file`. One startup callback completes recovery first, then opens that file through the unsaved-work guard. Separate timers would be unsafe because a recovery dialog can run a nested event loop. Blocking imports disable both the note editor and the always-visible score settings; background rendering leaves them editable.
 
-`engine.py` executes tools without a shell, in separate per-job directories, with cancellation and timeouts (render 120 seconds; OMR 600 seconds). Conversion runs in a fresh worker process to isolate upstream globals. The frozen executable supports the same `--worker` contract. Normal score editing does not request a PDF. Playback and MIDI export use `render(create_pdf=False)` with LilyPond `-dno-print-pages`; PDF output is requested only for print preview, PDF export, or opening the print file. Rendering runs without locking editing. A single task queue coalesces output requests; revision checks discard stale results and prevent exporting an outdated preview. Imports temporarily lock the editor. `score_view.py` paints visible measures, while immutable notes let undo snapshots share unchanged note data.
+`engine.py` executes tools without a shell, in separate per-job directories, with cancellation and timeouts (render 120 seconds; OMR 600 seconds). Conversion runs in a fresh worker process to isolate upstream globals. The frozen executable supports the same `--worker` contract. On macOS, cancellation kills the tool's process group (`start_new_session` + `killpg`); Windows uses `taskkill /T`. Normal score editing does not request a PDF. Playback and MIDI export use `render(create_pdf=False)` with LilyPond `-dno-print-pages`; PDF output is requested only for print preview, PDF export, or opening the print file. Rendering runs without locking editing. A single task queue coalesces output requests; revision checks discard stale results and prevent exporting an outdated preview. Imports temporarily lock the editor. `score_view.py` paints visible measures, while immutable notes let undo snapshots share unchanged note data.
+
+## Platforms
+
+All platforms use LilyPond 2.26.0 (2.24 has no Apple Silicon build). jianpu-ly still emits 2.20/2.24-era text, so `worker.adapt_output` adjusts it: it removes jianpu-ly's `set-global-fonts` block (removed in 2.25; jianpu-ly adds it whenever `/Library/Fonts/Arial Unicode.ttf` exists, i.e. on most Macs), writes `tempoWholesPerMinute = #21` instead of a moment on 2.25+ (otherwise LilyPond ignores jianpu-ly's default 84 BPM), and sets fonts with `property-defaults.fonts.serif/sans` (available since 2.24). The font chains start with the bundled Noto Serif CJK TC, then Windows (MingLiU, Microsoft JhengHei/YaHei), macOS (Songti, Heiti, PingFang) and Linux (Noto CJK) faces. The bundled TC font covers all 6,763 GB2312 characters, so Simplified titles and lyrics never lose glyphs; a Simplified font (+24 MB) is not bundled, so a few characters keep Traditional glyph shapes. The system PingFang font is not visible to LilyPond's fontconfig on macOS; Songti TC is.
+
+| | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| LilyPond build | mingw-x86_64 | darwin-arm64 (requires macOS 26) / darwin-x86_64 (10.15+) | linux-x86_64 |
+| Program resources (`app_root()`) | beside `JianpuStudio.exe` | `JianpuStudio.app/Contents/Resources` | source tree |
+| MIDI preview | winmm MCI sequencer | AudioToolbox `MusicPlayer` (ctypes) | not supported; export MIDI |
+| Updates | verified download + silent installer | version check, opens the release page | none |
+| UI font | Microsoft JhengHei | PingFang TC | Noto Sans CJK TC |
+
+The macOS player loads the MIDI through `MusicSequenceFileLoad`, computes the longest track length (`kSequenceTrackProperty_TrackLength`) because `MusicPlayer` never stops by itself, and reports `playing = False` (disposing the player and sequence) once the time passes the end plus a short release tail. Windows keeps its previous behaviour.
+
+GUI tests on macOS: a modal `exec()` started outside `QApplication.exec()` (as pytest-qt tests do) leaves Qt 6.8's Core Foundation event dispatcher without timer or queued-signal delivery for later `qWait()` calls. `tests/conftest.py` runs one short real event loop after each test on macOS. The running application is not affected (nested dialogs run inside `QApplication.exec()`; checked with standalone scripts).
 
 Qt PDF reads an owned `QBuffer` containing the PDF bytes rather than holding the output filename open. The application closes the document and buffer before replacing a preview, so Windows can remove old job directories without a lingering PDF file lock. The buffer must remain alive while the document uses it.
 
@@ -32,7 +48,7 @@ The app restricts raw LilyPond/Scheme extensions. This is defense in depth, **no
 
 ```bash
 python -m pip install -e '.[dev]'
-python scripts/fetch_runtime.py --platform linux
+python scripts/fetch_runtime.py --platform linux   # or: --platform macos [--arch arm64|x86_64]
 QT_QPA_PLATFORM=offscreen JIANPU_LILYPOND="$PWD/vendor-runtime/lilypond/bin/lilypond" pytest -q
 ruff check src tests scripts
 python scripts/check_version.py
@@ -59,6 +75,21 @@ python scripts/smoke_bundle.py dist/JianpuStudio --omr
 `runtime-lock.json` pins URLs and SHA-256 values. The build extracts Audiveris' MSI without installing it; its Java runtime, native libraries, classifier resources, and licenses are copied together. All necessary components are included in the final installer. Tesseract needs the **legacy-capable `tessdata` 4.1.0 model**, not the LSTM-only `tessdata_fast` model. A Traditional Chinese Noto font is placed in LilyPond's private font directory; no system font installation is needed.
 
 The one-folder bundle permits replacing Qt/PySide dynamic libraries. App updates never intentionally remove user-created scores. No code-signing credential is configured. Published installers currently remain unsigned; README states this. Authenticode signing and broader hardware acceptance testing remain future work.
+
+## Build macOS packages
+
+Use macOS with Python 3.12. Build each architecture on a matching Mac (no universal build: the arm64 LilyPond build requires macOS 26, the Intel build runs on 10.15+; the app's `LSMinimumSystemVersion` is 26.0 for arm64 and 12.0 for x86_64, the latter set by PySide6).
+
+```bash
+pip install -e '.[dev]'
+python scripts/fetch_runtime.py --platform macos
+python scripts/build_macos.py
+python scripts/smoke_bundle.py dist/JianpuStudio.app --gui
+```
+
+`build_macos.py` generates the `.icns` from `assets/icon.png` (sips + iconutil), runs PyInstaller (`JianpuStudio.app` with bundle id `io.github.miles990.jianpustudio`, `.jps` document type, high-resolution flag), copies the engines, notices and docs into `Contents/Resources` (`assemble.py --target`), ad-hoc signs and verifies the bundle, and creates `dist/JianpuStudio-<version>-macOS-<arch>.dmg` containing `簡譜工房.app` and an Applications link. There is no Developer ID signature or notarization: on first launch users must allow the app in System Settings → Privacy & Security. Measured on an Apple Silicon Mac (macOS 27.2, arm64, 0.3.1): app 265 MB on disk, DMG 110 MB; LilyPond is 152 MB of the app.
+
+Tag builds on CI run the full test suite on `macos-26` (arm64) and `macos-15-intel` (x86_64), build both DMGs, run the GUI self-test, frozen worker and bundled LilyPond from the mounted DMG, and add the DMGs to the release and the combined `SHA256SUMS.txt`.
 
 ## Release
 

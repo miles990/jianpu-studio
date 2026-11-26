@@ -178,6 +178,7 @@ def test_cancelled_update_resumes_pdf_queued_during_save_prompt(output_window, q
     window = state.window
     destination = tmp_path / "resumed-export.pdf"
     launched, deferred_in_prompt = [], []
+    monkeypatch.setattr(updates, "PLATFORM", "windows")  # installer flow is Windows behaviour
     monkeypatch.setattr(update_dialog.UpdateDialog, "check", lambda self: None)
     monkeypatch.setattr(update_dialog, "installed_target", lambda _: updates.InstallTarget(tmp_path, "CURRENTUSER"))
     monkeypatch.setattr(update_dialog, "launch_update", lambda *args: launched.append(args))

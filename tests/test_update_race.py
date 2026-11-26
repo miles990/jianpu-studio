@@ -14,6 +14,7 @@ def wait_for_cancel(cancel):
 
 @pytest.fixture
 def ready_update(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "PLATFORM", "windows")
     original_render = app_module.MainWindow.render_score
     initial_render = []
     monkeypatch.setattr(app_module.MainWindow, "render_score", lambda *args: initial_render.append(True))

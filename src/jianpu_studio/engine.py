@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .i18n import tr
 from .model import atomic_write
 
 
@@ -32,7 +33,18 @@ class RecognitionError(ToolError):
 
 
 def app_root() -> Path:
-    return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+    """Directory holding runtime/, docs/ and examples/ next to the program.
+
+    Windows/Linux one-folder builds keep them beside the executable. A macOS
+    .app keeps the executable in Contents/MacOS and resources (including the
+    bundled LilyPond) in Contents/Resources.
+    """
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parents[2]
+    executable = Path(sys.executable).resolve().parent
+    if sys.platform == "darwin" and executable.name == "MacOS" and (executable.parent / "Resources").is_dir():
+        return executable.parent / "Resources"
+    return executable
 
 
 def find_tool(name: str, explicit: str = "") -> Path | None:
@@ -46,6 +58,9 @@ def find_tool(name: str, explicit: str = "") -> Path | None:
     candidates = ([root / "runtime/lilypond/bin/lilypond.exe", root / "runtime/lilypond/bin/lilypond"]
                   if name == "lilypond" else
                   [root / "runtime/audiveris/Audiveris.exe", root / "runtime/audiveris/bin/Audiveris"])
+    if sys.platform == "darwin":
+        # Apps started from Finder do not inherit the shell's Homebrew PATH.
+        candidates += [Path(prefix) / "bin" / name for prefix in ("/opt/homebrew", "/usr/local")]
     if name == "audiveris":
         for base in (os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
             if base:
@@ -73,7 +88,7 @@ def terminate_tree(process: subprocess.Popen) -> None:
 def run_tool(args: list[str], cwd: Path, cancel: threading.Event, timeout: float = 120,
              env: dict | None = None) -> str:
     if cancel.is_set():
-        raise Cancelled("作業已取消。")
+        raise Cancelled(tr("作業已取消。"))
     kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
     process = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
@@ -81,9 +96,9 @@ def run_tool(args: list[str], cwd: Path, cancel: threading.Event, timeout: float
     try:
         while True:
             if cancel.is_set():
-                raise Cancelled("作業已取消。")
+                raise Cancelled(tr("作業已取消。"))
             if time.monotonic() - started > timeout:
-                raise ToolError(f"作業超過 {int(timeout)} 秒。請減少頁數或檢查樂譜內容。")
+                raise ToolError(tr("作業超過 {seconds} 秒。請減少頁數或檢查樂譜內容。").format(seconds=int(timeout)))
             try:
                 output, _ = process.communicate(timeout=0.2)
                 break
@@ -95,7 +110,7 @@ def run_tool(args: list[str], cwd: Path, cancel: threading.Event, timeout: float
             process.communicate()
     text = output.decode("utf-8", errors="replace")
     if process.returncode:
-        raise ToolError(text[-16000:] or f"工具結束碼：{process.returncode}")
+        raise ToolError(text[-16000:] or tr("工具結束碼：{code}").format(code=process.returncode))
     return text
 
 
@@ -120,7 +135,7 @@ def validate_source(source: str) -> None:
     jianpu-ly deliberately supports arbitrary LilyPond; this GUI does not.
     """
     if not source.strip() or len(source) > 4 * 1024 * 1024:
-        raise ValueError("樂譜是空白或超過 4 MB。")
+        raise ValueError(tr("樂譜是空白或超過 4 MB。"))
     permitted = {"p", "pp", "ppp", "mp", "mf", "f", "ff", "fff", "sfz", "fermata", "bar",
                  "break", "noBreak", "pageBreak", "noPageBreak", "breathe", "accent", "staccato",
                  "tenuto", "marcato", "staccatissimo", "flageolet", "trill", "prall", "mordent", "turn",
@@ -128,15 +143,15 @@ def validate_source(source: str) -> None:
     for line in source.splitlines():
         line = line.split("%", 1)[0]
         if re.search(r"\bLPH?:|#\s*[({]|\$|[\x00-\x08]", line):
-            raise ValueError("為安全起見，不支援內嵌 LilyPond／Scheme 程式碼（LP:、LPH:）。")
+            raise ValueError(tr("為安全起見，不支援內嵌 LilyPond／Scheme 程式碼（LP:、LPH:）。"))
         if re.match(r"\s*(chords|frets)\s*=", line):
-            raise ValueError("此版本的原始碼模式不接受 chords= 或 frets=。")
+            raise ValueError(tr("此版本的原始碼模式不接受 chords= 或 frets=。"))
         if re.match(r"\s*[A-Za-z]+\s*=", line):
             if any(c in line.split("=", 1)[1] for c in ('"', "\\", "{", "}")):
-                raise ValueError("標題等文字欄位不能含引號、反斜線或大括號。")
+                raise ValueError(tr("標題等文字欄位不能含引號、反斜線或大括號。"))
         for command in re.findall(r"\\([A-Za-z]+)", line):
             if command not in permitted:
-                raise ValueError(f"此版本不接受 LilyPond 指令：\\{command}")
+                raise ValueError(tr("此版本不接受 LilyPond 指令：\\{command}").format(command=command))
 
 
 @dataclass
@@ -152,9 +167,9 @@ def render(source: str, output: Path, lilypond: Path,
            create_pdf: bool = True) -> RenderResult:
     cancel = cancel or threading.Event()
     if type(create_pdf) is not bool:
-        raise ValueError("是否產生 PDF 須為布林值。")
+        raise ValueError(tr("是否產生 PDF 須為布林值。"))
     if paper_size not in ("a4", "letter") or type(staff_size) is not int or not 16 <= staff_size <= 30:
-        raise ValueError("紙張須為 A4 / Letter，譜字大小須為 16–30。")
+        raise ValueError(tr("紙張須為 A4 / Letter，譜字大小須為 16–30。"))
     validate_source(source)
     output.mkdir(parents=True, exist_ok=True)
     source_path = output / "score.jly"
@@ -162,7 +177,7 @@ def render(source: str, output: Path, lilypond: Path,
     version = run_tool([str(lilypond), "--version"], output, cancel, timeout=20)
     match = re.search(r"GNU LilyPond 2\.(\d+)", version)
     if not match or int(match[1]) < 24:
-        raise ToolError("請使用 LilyPond 2.24 或更新版本。安裝版已附帶 2.24.4。")
+        raise ToolError(tr("請使用 LilyPond 2.24 或更新版本。安裝版已附帶 2.26.0。"))
     try:
         log = run_tool(worker_command("convert", str(source_path), str(output / "score.ly"), match[1], paper_size, str(staff_size)),
                        output, cancel, env=worker_env())
@@ -176,16 +191,16 @@ def render(source: str, output: Path, lilypond: Path,
                      str(output / "score.ly")], output, cancel, timeout=120)
     pdf = output / "score.pdf"
     if create_pdf and not pdf.is_file():
-        raise ToolError("排譜引擎未產生 PDF。\n" + log[-12000:])
+        raise ToolError(tr("排譜引擎未產生 PDF。") + "\n" + log[-12000:])
     if not create_pdf and pdf.exists():
-        raise ToolError("僅產生 MIDI 的作業不應含有 PDF。\n" + log[-12000:])
+        raise ToolError(tr("僅產生 MIDI 的作業不應含有 PDF。") + "\n" + log[-12000:])
     # LilyPond numbers additional movements/parts. Prefer the main MIDI;
     # lexicographic sorting would incorrectly put score-1 before score.
     midi = next((p for p in (output / "score.midi", output / "score.mid") if p.is_file()), None)
     if midi is None:
         midi = next(iter(sorted(output.glob("*.midi"))), None) or next(iter(sorted(output.glob("*.mid"))), None)
     if not create_pdf and midi is None:
-        raise ToolError("排譜引擎未產生 MIDI。\n" + log[-12000:])
+        raise ToolError(tr("排譜引擎未產生 MIDI。") + "\n" + log[-12000:])
     atomic_write(output / "render.log", log)
     return RenderResult(pdf, midi, output / "score.ly", log)
 
@@ -225,33 +240,34 @@ def recognize(image: Path, output: Path, audiveris: Path,
             with Image.open(staged) as original:
                 w, h = original.size
                 if w * h * factor * factor > 40_000_000:
-                    raise RecognitionError("譜線間距太小，且放大後會超過影像大小上限。請裁切成單頁或使用較清晰的原圖。", log) from exc
+                    raise RecognitionError(tr("譜線間距太小，且放大後會超過影像大小上限。請裁切成單頁或使用較清晰的原圖。"), log) from exc
                 scaled = original.convert("L").resize((w*factor, h*factor), Image.Resampling.LANCZOS)
                 enhanced = output / "resolution-retry.png"
                 scaled.save(enhanced, dpi=(300, 300))
-            note = f"原圖 {w} × {h} 像素，譜線間距 {interline:g} 像素。已自動放大 {factor} 倍重試；放大不會補回遺失細節，請對照原圖校對。"
+            note = tr("原圖 {width} × {height} 像素，譜線間距 {interline} 像素。已自動放大 {factor} 倍重試；放大不會補回遺失細節，請對照原圖校對。").format(
+                width=w, height=h, interline=f"{interline:g}", factor=factor)
             try:
                 xml, retry_log = recognize(enhanced, output / "resolution-retry", audiveris, cancel, retry_low_resolution=False)
             except Cancelled:
                 raise
             except ToolError as retry_error:
                 details = log + "\n\n" + note + "\n\n" + getattr(retry_error, "details", str(retry_error))
-                raise RecognitionError(note + "\n\n自動重試仍未完成。請優先使用原始 PDF、300 DPI 掃描圖，或更近距離拍攝完整五線譜。", details) from retry_error
+                raise RecognitionError(note + "\n\n" + tr("自動重試仍未完成。請優先使用原始 PDF、300 DPI 掃描圖，或更近距離拍攝完整五線譜。"), details) from retry_error
             combined = note + "\n\n" + retry_log
             atomic_write(output / "recognition.log", combined)
             return xml, combined
         if low:
-            message = f"譜線間距只有 {low[1]} 像素，解析度不足。請使用原始 PDF 或較清晰的掃描圖。"
+            message = tr("譜線間距只有 {pixels} 像素，解析度不足。請使用原始 PDF 或較清晰的掃描圖。").format(pixels=low[1])
         elif "OutOfMemoryError" in log:
-            message = "辨識時記憶體不足。請裁切成單頁並關閉其他大型程式後重試。"
+            message = tr("辨識時記憶體不足。請裁切成單頁並關閉其他大型程式後重試。")
         elif "couldn't load any languages" in log.lower():
-            message = "辨識字庫無法載入。請重新安裝完整版，或檢查工具設定。"
+            message = tr("辨識字庫無法載入。請重新安裝完整版，或檢查工具設定。")
         else:
-            message = "照片辨識未完成。請確認完整五線譜清楚、水平且沒有陰影；詳細紀錄可在「作業訊息」複製。"
+            message = tr("照片辨識未完成。請確認完整五線譜清楚、水平且沒有陰影；詳細紀錄可在「作業訊息」複製。")
         raise RecognitionError(message, log) from exc
     candidates = sorted(output.rglob("*.mxl")) + sorted(output.rglob("*.musicxml")) + sorted(output.rglob("*.xml"))
     candidates = [p for p in candidates if p.name != "container.xml"]
     atomic_write(output / "recognition.log", log)
     if not candidates:
-        raise RecognitionError("未能辨識出五線譜。請使用清晰、平整、完整包含譜線的照片，或先在 Audiveris 校對。", log)
+        raise RecognitionError(tr("未能辨識出五線譜。請使用清晰、平整、完整包含譜線的照片，或先在 Audiveris 校對。"), log)
     return candidates[0], log

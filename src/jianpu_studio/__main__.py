@@ -14,12 +14,16 @@ def main() -> int:
 
     from .app import MainWindow
     from .engine import app_root
+    from .i18n import tr, ui_font_family
+    from .platform_support import FileOpenRouter, initial_path_from_args
 
     app = QApplication(sys.argv)
     app.setOrganizationName("JianpuStudio")
     self_test = len(sys.argv) > 2 and sys.argv[1] == "--self-test"
     app.setApplicationName("JianpuStudioSelfTest" if self_test else "JianpuStudio")
-    app.setFont(QFont("Microsoft JhengHei" if os.name == "nt" else "Noto Sans CJK TC", 10))
+    app.setFont(QFont(ui_font_family(), 10))
+    # Installed before any window so a Finder "open document" is never lost.
+    file_open = FileOpenRouter(app)
     icon = Path(__file__).parent / "assets/icon.png"
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
@@ -27,15 +31,17 @@ def main() -> int:
     data_dir.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(data_dir / "session.lock"))
     if not lock.tryLock(100):
-        QMessageBox.information(None, "簡譜工房已開啟", "請切回已開啟的簡譜工房，從「檔案 → 開啟」載入樂譜。")
+        QMessageBox.information(None, tr("簡譜工房已開啟"), tr("請切回已開啟的簡譜工房，從「檔案 → 開啟」載入樂譜。"))
         return 0
     # Audiveris looks here before trying to download OCR language data.
     tessdata = app_root() / "runtime/tessdata"
     if tessdata.is_dir():
         os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
-    initial_path = Path(sys.argv[1]) if not self_test and len(sys.argv) > 1 else None
+    initial_path = None if self_test else initial_path_from_args(sys.argv)
     window = MainWindow(recovery=not self_test, initial_path=initial_path)
     window.show()
+    if not self_test:
+        file_open.attach(window)
     if self_test:
         QTimer.singleShot(0, lambda: window.render_score(True))
         output = Path(sys.argv[2]).resolve()
@@ -43,7 +49,8 @@ def main() -> int:
         timer = QTimer(window)
         def capture():
             if window.result and window.pdf_document.pageCount() > 0:
-                if not window.grab().save(str(output / "windows-ui.png")):
+                screenshot = "macos-ui.png" if sys.platform == "darwin" else "windows-ui.png"
+                if not window.grab().save(str(output / screenshot)):
                     app.exit(2)
                     return
                 (output / "ui-test.txt").write_text("Frozen GUI rendered demo PDF successfully.\n", encoding="utf-8")
