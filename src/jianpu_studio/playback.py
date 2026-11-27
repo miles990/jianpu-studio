@@ -33,18 +33,34 @@ class WinMMBackend:
     def play(self, path: Path, start: float = 0.0):
         self.command(f'open "{path}" type sequencer alias jianpu_preview')
         try:
-            if start > 0:
-                self.command("set jianpu_preview time format milliseconds")
-                self.command(f"play jianpu_preview from {int(start * 1000)}")
-            else:
-                self.command("play jianpu_preview from 0")
+            # Milliseconds for both the start position and the "status ... position" query.
+            self.command("set jianpu_preview time format milliseconds")
+            self.command(f"play jianpu_preview from {int(start * 1000) if start > 0 else 0}")
         except Exception:
             self.stop()
             raise
 
+    def _status(self, item: str) -> str:
+        """``status jianpu_preview <item>`` (MCI writes the answer into a text buffer)."""
+        buffer = ctypes.create_unicode_buffer(64)
+        code = self._mci.mciSendStringW(f"status jianpu_preview {item}", buffer, len(buffer), None)
+        if code:
+            raise RuntimeError(tr("Windows MIDI 播放失敗（{code}）。請確認音訊裝置可用；也可匯出 MIDI。").format(code=code))
+        return buffer.value.strip().lower()
+
     def active(self) -> bool:
-        # Unchanged Windows behaviour: the flag stays set until stop().
-        return True
+        """MCI does not notify the end of a sequence; ask its mode ("playing" until it ends)."""
+        try:
+            return self._status("mode") != "stopped"
+        except RuntimeError:
+            return False             # the device is closed or gone: nothing is playing
+
+    def position(self) -> float:
+        """Seconds from the start of the MIDI, from the sequencer itself."""
+        value = self._status("position")
+        if not value.isdigit():
+            raise RuntimeError(tr("Windows MIDI 播放失敗（{code}）。請確認音訊裝置可用；也可匯出 MIDI。").format(code=value))
+        return int(value) / 1000.0
 
     def stop(self):
         self._mci.mciSendStringW("close jianpu_preview", None, 0, None)
@@ -199,8 +215,8 @@ class MidiPlayer:
 
     @property
     def playing(self) -> bool:
-        # macOS reports the real end of the sequence; Windows keeps the flag
-        # until stop() as before.
+        # Both backends report the real end of the sequence (macOS by its length,
+        # Windows by the MCI mode), so the transport returns to idle by itself.
         if self._playing and not self._backend.active():
             self.stop()
         return self._playing

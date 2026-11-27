@@ -123,24 +123,106 @@ def test_unsupported_platform_message(tmp_path):
     assert not player.playing
 
 
-def test_windows_backend_commands_unchanged(tmp_path):
-    class FakeMci:
-        def __init__(self):
-            self.commands = []
+class FakeMci:
+    """winmm's mciSendStringW: a sequencer that plays ``length_ms`` and then reports "stopped"."""
 
-        def mciSendStringW(self, text, *args):
-            self.commands.append(text)
-            return 0
+    def __init__(self, length_ms=4000):
+        self.commands, self.now_ms, self.length_ms, self.open = [], 0, length_ms, False
+        self.start_ms = 0
 
+    def mciSendStringW(self, text, buffer, size, hwnd):
+        self.commands.append(text)
+        if text.startswith("open "):
+            self.open = True
+        elif text.startswith("close "):
+            self.open = False
+        elif text.startswith("play jianpu_preview from "):
+            self.start_ms = int(text.rsplit(" ", 1)[1])
+        elif text.startswith("status "):
+            if not self.open:
+                return 263          # MCIERR_INVALID_DEVICE_NAME: not open
+            position = min(self.start_ms + self.now_ms, self.length_ms)
+            buffer.value = {"mode": "playing" if position < self.length_ms else "stopped",
+                            "position": str(position)}[text.split()[-1]]
+        return 0
+
+
+def test_windows_backend_commands(tmp_path):
     mci = FakeMci()
     player = playback.MidiPlayer(playback.WinMMBackend(mci))
     path = tmp_path / "score.midi"
     player.play(path)
     assert mci.commands == ["close jianpu_preview", f'open "{path}" type sequencer alias jianpu_preview',
-                            "play jianpu_preview from 0"]
-    assert player.playing  # Windows keeps the flag until stop()
+                            "set jianpu_preview time format milliseconds", "play jianpu_preview from 0"]
+    assert player.playing
     player.stop()
     assert mci.commands[-1] == "close jianpu_preview" and not player.playing
+
+
+def test_windows_transport_ends_with_the_midi(tmp_path):
+    """Review P1.12: MCI keeps no 'playing' flag for us; the end of the sequence must stop the
+    transport and the position must come from the sequencer, not the wall clock.
+    (Fake MCI: the real winmm path is unverified on this platform.)"""
+    mci = FakeMci(length_ms=4000)
+    player = playback.MidiPlayer(playback.WinMMBackend(mci))
+    player.play(tmp_path / "score.midi", 1.5)
+    assert "play jianpu_preview from 1500" in mci.commands
+    mci.now_ms = 1000
+    player._started -= 60                       # the wall clock is irrelevant now
+    assert player.playing and player.position() == pytest.approx(2.5)
+    mci.now_ms = 2600
+    assert not player.playing
+    assert mci.commands[-1] == "close jianpu_preview"
+    assert player.position() == 0.0
+
+
+def test_switching_parts_while_playing_highlights_the_sounding_note_of_the_new_part(qtbot, tmp_path, monkeypatch):
+    """Review P1.9: the old part's map gave row numbers of the wrong part after a switch."""
+    from types import SimpleNamespace
+
+    from jianpu_studio.app import MainWindow
+    from jianpu_studio.model import Note, Part, Project, Score
+    from jianpu_studio.playmap import PlayMap
+    monkeypatch.setattr(MainWindow, "render_score", lambda *a, **k: None)
+    window = MainWindow(recovery=False)
+    window.recovery_path = tmp_path / "recovery.jps"
+    window.autosave.stop()
+    qtbot.addWidget(window, before_close_func=lambda w: setattr(w, "dirty", False))
+    score = Score(parts=[Part("一", [Note(1), Note(2), Note(3), Note(4)]), Part("二", [Note(5, duration=2), Note(6, duration=2)])])
+    window.reset(Project(score))
+    quarter = 60 / score.tempo
+    clock = SimpleNamespace(seconds=0.0)
+    window.player = SimpleNamespace(playing=True, position=lambda: clock.seconds, stop=lambda: None)
+    window.play_map = PlayMap(window.project.score, 0)
+    clock.seconds = 1.5 * quarter
+    window.playback_tick()
+    assert window.notes.play_note == (0, 1)
+    window.switch_part(1)
+    for beats, row in ((1.5, 0), (2.5, 1), (3.5, 1)):
+        clock.seconds = beats * quarter
+        window.playback_tick()
+        assert window.notes.play_note == (1, row), beats
+
+
+def test_app_transport_returns_to_idle_when_windows_playback_ends(qtbot, tmp_path, monkeypatch):
+    from jianpu_studio.app import MainWindow
+    monkeypatch.setattr(MainWindow, "render_score", lambda *a, **k: None)
+    window = MainWindow(recovery=False)
+    window.recovery_path = tmp_path / "recovery.jps"
+    window.autosave.stop()
+    qtbot.addWidget(window, before_close_func=lambda w: setattr(w, "dirty", False))
+    mci = FakeMci(length_ms=2000)
+    window.player = playback.MidiPlayer(playback.WinMMBackend(mci))
+    from jianpu_studio.playmap import PlayMap
+    window.play_map = PlayMap(window.project.score)
+    window.player.play(tmp_path / "score.midi")
+    window.play_timer.start()
+    window.playback_tick()
+    assert window.player.playing and window.play_timer.isActive()
+    mci.now_ms = 2000
+    window.playback_tick()
+    assert not window.player.playing and not window.play_timer.isActive()
+    assert window.notes.play_note is None
 
 
 @pytest.mark.integration
