@@ -1055,7 +1055,8 @@ class EditActions(NotationActions):
             return False
         row, part = rows[0], self.part
         old = self.part_notes()[row].text
-        value = (old + " " + word) if old and word not in old.split() else (old or word)
+        from .text_words import contains_phrase
+        value = (old + " " + word) if old and not contains_phrase(old, word) else (old or word)
         if value == old:
             self.toast.show_text(tr("這個音上已有「{word}」。").format(word=word))
             return False

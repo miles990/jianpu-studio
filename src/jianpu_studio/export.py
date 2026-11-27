@@ -289,11 +289,10 @@ def effective_bar_items(score) -> list[tuple[tuple, tuple]]:
 
 def header_words(text: str) -> bool:
     """Text on the first note that prints in the header line (1=D 中速 稍自由 ♩=72): only
-    when every word is a tempo/expression word or a tuning; any other label stays on its note."""
-    from .text_words import TEXT_WORDS
-    known = {t for tc, sc, _ in TEXT_WORDS for w in (tc, sc) for t in w.split()}
-    words = text.split()
-    return bool(words) and all(w in known for w in words)
+    when it is made only of whole tempo/expression words and tunings; any other label -- a bow
+    section like 弓尖 included -- stays on its note."""
+    from .text_words import HEADER_PHRASES, phrases
+    return bool(phrases(text, HEADER_PHRASES))
 
 
 def implicit_repeat_start(items) -> bool:

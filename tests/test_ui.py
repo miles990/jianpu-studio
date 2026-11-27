@@ -308,6 +308,37 @@ def test_workspace_controls_reachable_at_supported_sizes(window, size):
     assert window.notes.viewport().height() >= 100
 
 
+def test_a_two_word_suggestion_is_added_once(window):
+    """Review 3 #21: 「定弦 1–5」 again on the same note is recognised as already there."""
+    from jianpu_studio.symbols_ui import TEXT_PREFIX
+    set_notes(window, [Note(1)] * 4)
+    window.notes.select_rows([0], 0)
+    for _ in range(3):
+        window.palette_apply(TEXT_PREFIX + "定弦 1–5")
+    assert window.project.score.notes[0].text == "定弦 1–5" and len(window.history) == 1
+    window.palette_apply(TEXT_PREFIX + "中速")
+    window.palette_apply(TEXT_PREFIX + "定弦 1–5")
+    assert window.project.score.notes[0].text == "定弦 1–5 中速"
+    window.notes.select_rows([1], 1)
+    window.palette_apply(TEXT_PREFIX + "1–5")                 # part of a phrase is not the phrase
+    window.palette_apply(TEXT_PREFIX + "定弦 1–5")
+    assert window.project.score.notes[1].text == "1–5 定弦 1–5"
+
+
+def test_bow_words_on_the_first_note_stay_on_the_note_on_canvas_and_print(window):
+    """Review 3 #22: only tempo/expression words and tunings join the header line."""
+    from jianpu_studio.export import header_words
+    from jianpu_studio.worker import HEAD_TEXT
+    assert header_words("中速 稍自由 定弦 1–5") and header_words("15弦") and header_words("漸慢")
+    for text in ("弓尖", "中速 弓尖", "全弓", "1–5", "定弦", "定弦 1–5 弓根"):
+        assert not header_words(text), text
+    for text, header in (("弓尖", False), ("中速 定弦 1–5", True)):
+        set_notes(window, [Note(1, text=text)] + [Note(2)] * 7)
+        assert (window.notes._header_text == text) == header
+        assert (window.notes.part_labels[0][0] is None) == header          # canvas: above the note
+        assert (HEAD_TEXT in window.project.score.to_jianpu()) == header    # print: same decision
+
+
 def test_undo_to_the_saved_state_discards_the_recovery_copy(window, qtbot, tmp_path, monkeypatch):
     """Review 3 #16: after undoing back to the saved file, a crash must not bring the undone
     title back through recovery."""
