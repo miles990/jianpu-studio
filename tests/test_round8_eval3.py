@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from jianpu_studio import storage
-from jianpu_studio.app import MainWindow
+from jianpu_studio.app import MainWindow, demo_project
 from jianpu_studio.model import Note, Project, Score
 
 
@@ -117,3 +117,23 @@ def test_modifiers_on_a_selected_rest_in_insert_mode_never_touch_other_notes(win
     qtbot.keyClick(window.notes, Qt.Key.Key_Up)              # a rest has no octave: the next note's
     assert octaves(window) == [0, 0, 0, 0] and window.next_note.octave == 1
     assert window.octave_up_button.isChecked()
+
+
+# ---------------------------------------------------------------- 7. 新建 = 空白樂譜
+def test_new_and_the_blank_template_give_the_same_score(window, qtbot):
+    window.new_from_template("blank")
+    template = (window.project.snapshot(), window.input_mode.currentData(), window.notes.selected_rows())
+    score = window.project.score
+    assert (score.key, score.meter, score.tempo, len(score.part_bars(0))) == ("D", "4/4", 72, 8)
+    assert all(n.degree == 0 for n in score.notes) and template[1] == "fill"
+
+    window.reset(demo_project())
+    qtbot.mouseClick(window.new_button, Qt.MouseButton.LeftButton)        # toolbar 「新建」
+    assert (window.project, window.input_mode.currentData(), window.notes.selected_rows()) == template
+    assert not window.dirty
+
+    window.reset(demo_project())
+    window.new_project()                                                  # File → 新建 / Ctrl+N
+    assert (window.project, window.input_mode.currentData(), window.notes.selected_rows()) == template
+    qtbot.keyClick(window.notes, "5")                                     # typing fills the first bar
+    assert window.project.score.notes[0] == Note(5) and len(window.project.score.part_bars(0)) == 8

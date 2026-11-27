@@ -669,10 +669,8 @@ class MainWindow(EditActions, QMainWindow):
             self.notes.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def new_project(self):
-        if self.guard_unsaved():
-            from .editing import NEW_SCORE_STAFF_SIZE
-            from .model import Score
-            self.reset(Project(Score(staff_size=NEW_SCORE_STAFF_SIZE)))
+        """「新建」 is the start page's 「空白樂譜」: 8 empty bars, 1=D, 4/4, ready to fill in."""
+        self.new_from_template("blank")
 
     def load_demo(self):
         if self.guard_unsaved():

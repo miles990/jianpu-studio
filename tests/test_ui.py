@@ -208,6 +208,13 @@ def test_metadata_edit_invalidates_preview_and_undo_preserves_music(window, qtbo
     assert window.project == after
 
 
+def blank_score_project():
+    """What 「新建」 and the start page's 「空白樂譜」 both give (round 6: staff size 24)."""
+    score = Score(key="D", tempo=72, staff_size=24)
+    score.parts[0].notes = [Note(0, duration=1) for _ in range(8)]
+    return Project(score)
+
+
 def test_unsaved_new_cancel_failed_save_and_discard(window, qtbot, monkeypatch):
     qtbot.keyClicks(window.notes, "123")
     window.duration.setCurrentIndex(window.duration.findData(8))
@@ -222,11 +229,13 @@ def test_unsaved_new_cancel_failed_save_and_discard(window, qtbot, monkeypatch):
     assert window.project == original
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Discard)
     window.new_project()
-    assert window.project == Project(Score(staff_size=24))     # round 6: new scores print at 24
+    # round 8: 「新建」 gives the start page's blank score (8 empty bars, 1=D, 填寫), as documented
+    assert window.project == blank_score_project()
     assert not window.dirty
-    assert window.input_mode.currentData() == "insert"
+    assert window.input_mode.currentData() == "fill"
     qtbot.keyClicks(window.notes, "1")
-    assert window.project.score.notes == [Note(1)]
+    assert window.project.score.notes[:2] == [Note(1), Note(0, duration=2, dotted=True)]
+    assert len(window.project.score.part_bars(0)) == 8
 
 
 def test_cancel_close_with_autopreview_due_keeps_project_open(window, qtbot, monkeypatch):
@@ -279,7 +288,7 @@ def test_background_render_keeps_editor_live_and_discards_stale_result(window, q
         assert window.project.score.notes[1].degree == 7
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Discard)
         window.new_project()
-        assert window.project == Project(Score(staff_size=24))     # round 6: new scores print at 24
+        assert window.project == blank_score_project()             # round 8: the blank template
     finally:
         release.set()
         qtbot.waitUntil(lambda: window.task is None)
