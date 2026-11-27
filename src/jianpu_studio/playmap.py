@@ -121,6 +121,7 @@ class PlayMap:
 
     def __init__(self, score, part: int = 0):
         from .model import TICKS_PER_QUARTER
+        self.part = part
         self.tempo = score.tempo
         self.ticks_per_quarter = TICKS_PER_QUARTER
         ranges = score.part_bars(part)

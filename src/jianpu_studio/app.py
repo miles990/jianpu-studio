@@ -954,6 +954,13 @@ class MainWindow(EditActions, QMainWindow):
             self.stop_playback()
             return
         position = self.player.position()
+        if self.play_map is not None and self.play_map.part != self.part:
+            # Switching parts while playing: the same music, but this part's notes and rows.
+            from .playmap import PlayMap
+            try:
+                self.play_map = PlayMap(self.project.score, self.part)
+            except Exception:
+                self.play_map = None
         onset = self.play_map.at(position) if self.play_map is not None else None
         if onset is not None and onset.row < len(self.project.score.parts[self.part].notes):
             note = (self.part, onset.row)
@@ -977,6 +984,7 @@ class MainWindow(EditActions, QMainWindow):
         if playing:
             pos = position if position is not None else self.player.position()
             total = self.play_map.total_seconds if self.play_map is not None else 0
+            pos = min(pos, total) if total else pos      # the synth's release tail never shows 0:53 / 0:52
             text = f"{int(pos) // 60}:{int(pos) % 60:02d}"
             if total:
                 text += f" / {int(total) // 60}:{int(total) % 60:02d}"
