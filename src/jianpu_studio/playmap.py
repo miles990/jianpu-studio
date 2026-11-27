@@ -72,11 +72,6 @@ def unfold_bars(score) -> list[int]:
                     bar = target
                     continue
         order.append(bar)
-        if returning and nav.get("nav.fine") == bar:
-            break
-        if returning and nav.get("nav.tocoda") == bar and jump is not None:
-            bar = jump + 1
-            continue
         r = by_end.get(bar)
         if r is not None and not r["voltas"]:
             done = passes.get(bar, 1)
@@ -85,6 +80,12 @@ def unfold_bars(score) -> list[int]:
                 bar = r["start"]
                 continue
             passes[bar] = 1    # a D.C./D.S. return plays the repeat again
+        # Fine/To Coda on a repeat's closing bar line act after its last pass (LilyPond).
+        if returning and nav.get("nav.fine") == bar:
+            break
+        if returning and nav.get("nav.tocoda") == bar and jump is not None:
+            bar = jump + 1
+            continue
         if bar in volta_bars:
             r, index = volta_bars[bar]
             first, last = r["voltas"][index]
@@ -96,8 +97,10 @@ def unfold_bars(score) -> list[int]:
                 continue
             if bar == last and current >= total:
                 passes[r["end"]] = 1
-                bar = r["voltas"][-1][1] + 1
-                continue
+                if not (jump is not None and bar == jump and not returning):
+                    bar = r["voltas"][-1][1] + 1
+                    continue
+                # A D.C./D.S. at the end of the last ending jumps after that ending.
         if jump is not None and bar == jump and not returning:
             returning = True
             bar = jump_target

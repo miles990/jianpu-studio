@@ -180,7 +180,7 @@ def _structure(score):
         raise ValueError(tr("連弓線或反覆段落缺少終點。請選取完整範圍重新設定，或移除記號。"))
     if volta_open:
         raise ValueError(tr("最後一房缺少「房子結束」。"))
-    _navigation(items, regions)
+    _navigation(items, regions, bool(score.pickup))
     return regions
 
 
@@ -188,7 +188,7 @@ def _last_volta_start(items, end_bar):
     return max(b for b in range(end_bar + 1) if any(s.startswith("volta.") and s[6:].isdigit() for s in items[b][0]))
 
 
-def _navigation(items, regions):
+def _navigation(items, regions, pickup=False):
     where = {}
     for bar, (starts, ends) in enumerate(items):
         for item in (*starts, *ends):
@@ -211,6 +211,16 @@ def _navigation(items, regions):
         raise ValueError(tr("Fine 須放在跳躍記號（D.C./D.S.）之前。"))
     if fine is not None and tocoda is not None:
         raise ValueError(tr("Fine 和 To Coda 不能同時使用。"))
+    if tocoda is not None and {"bar.repeat_end", "bar.repeat_both"} & set(items[tocoda][1]):
+        # Upstream writes To Coda as an alternative of the repeat that just closed (prints a
+        # volta bracket and plays the bars in the wrong order).
+        raise ValueError(tr("To Coda 不能和反覆終點（:‖）放在同一條小節線；請改放在其他小節線，或改用「僅文字」記號。"))
+    if fine is not None and jump is not None and jump != len(items) - 1:
+        # The return pass stops at Fine, so bars after the jump are never played; LilyPond
+        # would play them anyway ("found music after \fine").
+        raise ValueError(tr("有 Fine 時，D.C./D.S. 須放在最後一小節：跳回後在 Fine 結束，"
+                            "後面的第 {bar} 小節起永遠不會演奏。請刪除這些小節，或把跳躍記號移到最後一小節。").format(
+            bar=jump + 2 - pickup))
     for item, bar in where.items():
         start_item = symbols.SYMBOLS[item].bar_edge == "start"
         for first, last in regions:

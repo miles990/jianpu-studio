@@ -110,7 +110,7 @@ v1 轉成 v2 再匯出的結果，除了空弦 0 的印法，和 v1 的 `to_jian
 | 小節邊界 | `bar_start` 只能放在某小節第一個音，`bar_end` 只能放在最後一個音，而且只能在 `parts[0]` |
 | 反覆 | `bar.repeat_start` 和 `bar.repeat_end` 一對一配對，不可巢狀。`bar.repeat_end` 只放在反覆本體的結尾，**不放在房子結尾** |
 | 房子 | `volta.1` 必須緊接在 `bar.repeat_end` 那個小節之後；`volta.k` 要連號；最後一房必須有 `volta.end`；`volta.final`（結）只能和最後一房並用；k 最多 4 |
-| 導航 | 整首最多一個 DS 或 DC，不能兩者都有。Segno 要在 DS 之前。ToCoda 要在 Segno 和 DS 之間。Fine 要在跳躍點之前。ToCoda 和 Fine 不能同時存在。**導航項目不可放在反覆本體或房子內部**（tocoda_inside_repeat：LilyPond 警告 `More alternatives than repeats`）。最後一房結尾的 Fine 合法，匯出時放在 `}` 之後（dc_with_volta_fine_after ✓） |
+| 導航 | 整首最多一個 DS 或 DC，不能兩者都有。Segno 要在 DS 之前。ToCoda 要在 Segno 和 DS 之間。Fine 要在跳躍點之前。ToCoda 和 Fine 不能同時存在。**導航項目不可放在反覆本體或房子內部**（tocoda_inside_repeat：LilyPond 警告 `More alternatives than repeats`）。最後一房結尾的 Fine 合法，匯出時放在 `}` 之後（dc_with_volta_fine_after ✓）。有 Fine 時跳躍記號須在最後一小節（後面的小節永遠不會演奏，LilyPond 卻會播放）；To Coda 不可和無房子的反覆終點共用小節線（上游會把它寫成該反覆的房子） |
 | 弱起 | `pickup` 只能是單一時值或附點時值（1、2、4、8、16、32 分，可附點），而且 `0 < pickup < bar`。jianpu-ly 只支援 `4/4,8`、`3/4,4.` 這兩種寫法，例如 5 個十六分音符就不能當弱起 |
 | 最後一小節 | 有弱起時，最後一小節長度必須是 `bar - pickup`（上游規則）或完整的 `bar`。後者匯出時 worker 要設定 `j2ly_sloppy_bars=1`（f03 ✓）。「補齊休止符」要補到下一個允許的長度 |
 | 聲部 | 1–4 個聲部，**總 tick 數必須相等**，小節邊界也要一致（上游不檢查：parts_unequal 照樣編譯成功，所以只能由 app 擋）。每個聲部的 `pickup` 共用 |

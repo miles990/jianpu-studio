@@ -128,11 +128,20 @@ _OTTAVA_MIDI = {"\\jsOttavaUp": "\\transposition c''", "\\jsOttavaDown": "\\tran
                 "\\jsOttavaEnd": "\\transposition c'"}
 
 
+_SEGNO_BEFORE_KEY = re.compile(r"\\repeat segno (\d+) \{ (\\transpose \S+ \S+ \{)")
+
+
 def midi_rewrite(ly: str) -> str:
-    """Inside MIDI staves only: 8va/8vb sound transposed; sforzandi become velocity-only twins."""
+    """Inside MIDI staves only: 8va/8vb sound transposed; sforzandi become velocity-only twins.
+
+    A D.C. return starts at the first note, so upstream opens ``\\repeat segno`` before the
+    MIDI staff's key wrapper ``\\transpose c X {``; the jump's closing brace then closes the
+    key wrapper instead, and every bar after the D.C. joined the repeated body (played on
+    both passes). Opening the key wrapper first restores the nesting the braces were written for.
+    """
     twins = "|".join(sorted(symbols.midi_twins(), key=len, reverse=True))
     def fix(match):
-        text = match.group(0)
+        text = _SEGNO_BEFORE_KEY.sub(r"\2 \\repeat segno \1 {", match.group(0))
         for word, replacement in _OTTAVA_MIDI.items():
             text = text.replace(word, replacement)
         return re.sub(r"\\(" + twins + r")(?![A-Za-z])", r"\\\1Midi", text) if twins else text
