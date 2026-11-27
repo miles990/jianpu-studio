@@ -322,29 +322,34 @@ def test_grace_groups_reserve_head_space_and_keep_one_note_hit_target(qtbot):
     view.viewport().grab()
 
 
-def test_all_common_articulations_render_with_selection_and_tooltips(qtbot, monkeypatch):
-    from jianpu_studio.score_view import ARTICULATION_LABELS
+def test_every_catalog_point_mark_renders_with_selection_and_tooltips(qtbot, monkeypatch):
+    """0.4.0: every point/pre mark of the registry (not only the 0.3.x articulations) is drawn."""
+    from jianpu_studio import symbols
 
     view = NoteList()
     qtbot.addWidget(view)
     view.resize(1100, 800)
-    view.set_score(Score(notes=[Note(i%7+1, articulation=mark) for i, mark in enumerate(ARTICULATION_LABELS)]))
+    marks = [s for s in symbols.symbols(include_hidden=True) if s.storage == "marks"]
+    view.set_score(Score(notes=[Note(i % 7 + 1, marks=(s.id,)) for i, s in enumerate(marks)]))
     view.select_rows([0, 4, 10])
     painted = []
-    original = view._draw_articulation
+    original = view._draw_symbol
 
-    def record(painter, mark, *args):
-        painted.append(mark)
-        original(painter, mark, *args)
+    def record(painter, symbol, *args):
+        painted.append(symbol.id)
+        original(painter, symbol, *args)
 
-    monkeypatch.setattr(view, "_draw_articulation", record)
+    monkeypatch.setattr(view, "_draw_symbol", record)
     view.show()
     qtbot.waitExposed(view)
-    view.viewport().grab()
-    assert set(painted) == set(ARTICULATION_LABELS)
+    for row in [*range(0, len(marks), 8), len(marks) - 1]:
+        view.scrollTo(view.model().index(row, 0))
+        view.viewport().grab()
+    assert set(painted) == {s.id for s in marks}
     assert view.selected_rows() == [0, 4, 10]
-    for row, (mark, label) in enumerate(ARTICULATION_LABELS.items()):
-        assert label in view.model().index(row, 0).data(Qt.ItemDataRole.ToolTipRole)
+    for row, symbol in enumerate(marks):
+        tooltip = view.model().index(row, 0).data(Qt.ItemDataRole.ToolTipRole)
+        assert symbol.display_name in tooltip or "力度" in tooltip or "空弦" in tooltip
 
 
 def test_long_notated_score_draws_only_visible_cached_system_marks(qtbot, monkeypatch):

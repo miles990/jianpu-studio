@@ -3,9 +3,9 @@
 from dataclasses import replace
 
 import pytest
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QAbstractButton, QApplication, QComboBox, QDialogButtonBox, QTabWidget
+from PySide6.QtWidgets import QAbstractButton, QApplication, QDialogButtonBox, QLineEdit, QTabWidget
 
 from jianpu_studio.app import MainWindow
 from jianpu_studio.model import Note, Project, Score
@@ -157,35 +157,29 @@ def test_mode_switch_preserves_selection_and_next_note_inspector(layout_window, 
     assert not window.dotted.isEnabled() and not window.dotted.isChecked()
 
 
-@pytest.mark.parametrize("button_name, tab, field, value", [
-    ("expression_button", 0, "dynamic", "mf"),
-    ("connection_button", 1, "slur", "add"),
-    ("erhu_button", 2, "finger", 2),
+def click_palette_symbol(qtbot, window, symbol_id):
+    """Click the palette cell of ``symbol_id`` like a user (scrolling the grid to it first)."""
+    grid = window.palette.grid
+    entry = next(e for e in grid.entries if e.kind == "cell" and e.sid == symbol_id)
+    grid.verticalScrollBar().setValue(int(entry.rect.top()) - 10)
+    QApplication.processEvents()
+    point = entry.rect.center().toPoint() - QPoint(0, grid.verticalScrollBar().value())
+    assert grid.viewport().rect().contains(point)
+    qtbot.mouseClick(grid.viewport(), Qt.MouseButton.LeftButton, pos=point)
+
+
+@pytest.mark.parametrize("symbol_id, field, value", [
+    ("dyn.mf", "dynamic", "mf"),
+    ("line.slur", "slur", "add"),
+    ("finger.2", "finger", 2),
 ])
-def test_direct_notation_buttons_open_the_matching_tab_and_apply(layout_window, qtbot,
-                                                                button_name, tab, field, value):
+def test_palette_cells_apply_directly_to_the_selection(layout_window, qtbot, symbol_id, field, value):
+    """0.3.x opened a dialog per group; 0.4.0 applies a palette cell in one click (same intent)."""
     window = layout_window
     qtbot.mouseClick(window.edit_mode_button, Qt.MouseButton.LeftButton)
     window.notes.select_rows([0, 1])
     before = window.project.snapshot()
-
-    def apply_visible_control():
-        dialog = QApplication.activeModalWidget()
-        try:
-            assert dialog.objectName() == "notation_dialog"
-            tabs = dialog.findChild(QTabWidget)
-            assert tabs.currentIndex() == tab
-            control = dialog.findChild(QComboBox, "notation_" + field)
-            assert control.isVisible() and control.isEnabled()
-            control.setCurrentIndex(control.findData(value))
-            buttons = dialog.findChild(QDialogButtonBox)
-            qtbot.mouseClick(buttons.button(QDialogButtonBox.StandardButton.Ok), Qt.MouseButton.LeftButton)
-        except Exception:
-            dialog.reject()
-            raise
-
-    QTimer.singleShot(0, apply_visible_control)
-    qtbot.mouseClick(getattr(window, button_name), Qt.MouseButton.LeftButton)
+    click_palette_symbol(qtbot, window, symbol_id)
     notes = window.project.score.notes
     if field == "slur":
         assert notes[0].slur_start and notes[1].slur_end
@@ -193,6 +187,31 @@ def test_direct_notation_buttons_open_the_matching_tab_and_apply(layout_window, 
         assert [getattr(note, field) for note in notes[:2]] == [value, value]
     assert notes[2:] == before.score.notes[2:]
     assert sum(note.beats for note in notes) == sum(note.beats for note in before.score.notes)
+    window.undo()
+    assert window.project == before
+
+
+def test_grace_dialog_opens_from_the_inspector_and_applies(layout_window, qtbot):
+    window = layout_window
+    qtbot.mouseClick(window.edit_mode_button, Qt.MouseButton.LeftButton)
+    click_note(qtbot, window, 0)
+    before = window.project.snapshot()
+
+    def fill():
+        dialog = QApplication.activeModalWidget()
+        try:
+            assert dialog.objectName() == "notation_dialog"
+            assert dialog.findChild(QTabWidget).currentIndex() == 2
+            dialog.findChild(QLineEdit, "notation_grace_before").setText("23")
+            qtbot.mouseClick(dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.StandardButton.Ok),
+                             Qt.MouseButton.LeftButton)
+        except Exception:
+            dialog.reject()
+            raise
+
+    QTimer.singleShot(0, fill)
+    qtbot.mouseClick(window.inspector.grace_button, Qt.MouseButton.LeftButton)
+    assert window.project.score.notes[0].grace_before == "23"
     window.undo()
     assert window.project == before
 
@@ -214,16 +233,23 @@ def test_direct_triplet_button_preserves_time_and_selects_the_group(layout_windo
 
 @pytest.mark.parametrize("size", [(1000, 630), (1380, 850)])
 def test_grouped_tools_and_first_measure_are_visible_without_scrolling(layout_window, size):
+    """0.4.0 layout: settings row, note bar and palette replace the 0.3.x side panel.
+
+    Controls that the design collapses in small windows (source field, accidentals,
+    triplet, 小節 menu) must then be reachable through the visible 「⋯」/「更多」 buttons.
+    """
     window = layout_window
     window.resize(*size)
     QApplication.processEvents()
     assert (window.width(), window.height()) == size
-    for control in (window.title_field, window.composer_field, window.key_field, window.meter_field,
-                    window.tempo_field, window.insert_mode_button, window.edit_mode_button,
-                    window.fill_mode_button, window.duration, window.octave, window.accidental,
-                    window.pitch_buttons[0], window.add_bar_button, window.expression_button,
-                    window.connection_button, window.erhu_button, window.triplet_button,
-                    window.save_button, window.version_label):
+    wide = size[0] > 1300
+    controls = [window.title_field, window.key_field, window.meter_field, window.tempo_field,
+                window.pickup_field, window.insert_mode_button, window.edit_mode_button, window.fill_mode_button,
+                window.duration_buttons[4], window.octave_up_button, window.pitch_buttons[0],
+                window.palette.search, window.palette.grid, window.save_button, window.version_label]
+    controls += ([window.composer_field, window.accidental_buttons["#"], window.add_bar_button, window.triplet_button]
+                 if wide else [window.more_button, window.note_more_button])
+    for control in controls:
         assert_clickable(window, control)
     assert window.notes.verticalScrollBar().value() == 0
     first_note = window.notes.visualRect(window.notes.model().index(0, 0))

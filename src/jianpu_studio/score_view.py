@@ -1,7 +1,12 @@
-"""Measure-aware editor: one model, cached geometry, paint visible music only."""
+"""Measure-aware editor canvas: one model per edited part, cached geometry, paint visible music only.
+
+The view shows every part of the score as braced systems; the item model holds the notes
+of the part being edited (``ScoreModel.part``), so selection rows always refer to that
+part. Clicking another part's note asks the window to switch parts. Layout lives in
+``score_layout``, painting in ``score_paint``, shared mark drawing in ``glyphs``.
+"""
 from __future__ import annotations
 
-import re
 from bisect import bisect_right
 
 from PySide6.QtCore import (
@@ -10,34 +15,73 @@ from PySide6.QtCore import (
     QItemSelectionModel,
     QModelIndex,
     QPoint,
-    QPointF,
     QRect,
     Qt,
+    QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QRegion
+from PySide6.QtGui import QKeySequence, QRegion
 from PySide6.QtWidgets import QAbstractItemView, QToolTip
 
-from .i18n import N_, latin_sans_family, latin_serif_family, tr, ui_font_family
+from . import symbols, theme
+from .i18n import tr
 from .model import TICKS_PER_QUARTER, Score
+from .score_layout import LayoutMixin, grace_tokens  # noqa: F401  (grace_tokens: public helper)
+from .score_paint import PaintMixin
 
-ARTICULATION_LABELS = {
-    "staccato": N_("斷奏"), "tenuto": N_("保持音"), "accent": N_("重音"), "fermata": N_("延長記號"),
-    "trill": N_("顫音"), "mordent": N_("波音"), "breathe": N_("換氣"), "turn": N_("迴音"), "marcato": N_("強重音"),
-    "staccatissimo": N_("極短斷奏"), "harmonic": N_("泛音"),
-}  # catalog sources; show tr(value)
-GRACE_PATTERN = re.compile(r"([#b]?)([1-7])([,']{0,2})")
+# Old articulation names (0.3.x) map to registry ids for accessible descriptions.
+SELECT_NOTES, SELECT_BARS, SELECT_BARLINE = "notes", "bars", "barline"
 
 
-def grace_tokens(text):
-    return tuple((accidental, degree, -octave.count(",") if "," in octave else len(octave))
-                 for accidental, degree, octave in GRACE_PATTERN.findall(text)) if text else ()
+def describe_marks(note) -> list[str]:
+    """Readable names of a note's marks and lines, for tooltips and screen readers."""
+    marks = []
+    for mark in note.marks:
+        symbol = symbols.SYMBOLS.get(mark)
+        if symbol is None:
+            continue
+        if symbol.slot == "dyn":
+            marks.append(tr("力度 {name}").format(name=symbol.canvas_text()))
+        elif mark == "finger.0":
+            marks.append(tr("空弦"))
+        else:
+            marks.append(symbol.display_name)
+    if note.accidental == "n":
+        marks.append(tr("還原記號"))
+    if note.tuplet:
+        marks.append(tr("三連音"))
+    for sid in note.spans_start:
+        symbol = symbols.SYMBOLS[sid]
+        if symbol.family == "slur":
+            marks.append(tr("連弓起點"))
+        elif symbol.family == "hairpin":
+            marks.append(tr("漸強起點") if "cresc" in sid else tr("漸弱起點"))
+        else:
+            marks.append(tr("{name}起點").format(name=symbol.display_name))
+    for sid in note.spans_end:
+        symbol = symbols.SYMBOLS[sid]
+        if symbol.family == "slur":
+            marks.append(tr("連弓終點"))
+        elif symbol.family == "hairpin":
+            marks.append(tr("漸強弱終點"))
+        else:
+            marks.append(tr("{name}終點").format(name=symbol.display_name))
+    if note.grace_before:
+        marks.append(tr("前倚音 {notes}").format(notes=note.grace_before))
+    if note.grace_after:
+        marks.append(tr("後倚音 {notes}").format(notes=note.grace_after))
+    if note.tie:
+        marks.append(tr("延音線"))
+    for item in (*note.bar_start, *note.bar_end):
+        marks.append(symbols.SYMBOLS[item].display_name)
+    return marks
 
 
 class ScoreModel(QAbstractListModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.score = Score()
+        self.part = 0
         self.positions = []
         self.bars = []
         self.links = []
@@ -45,7 +89,7 @@ class ScoreModel(QAbstractListModel):
         self.hairpins = []
         self.total_ticks = 0
         self._notes = ()
-        self._meter = self.score.meter
+        self._meter = None
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._notes)
@@ -57,33 +101,8 @@ class ScoreModel(QAbstractListModel):
         note = self._notes[row]
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole,
                     Qt.ItemDataRole.AccessibleDescriptionRole, Qt.ItemDataRole.ToolTipRole):
-            bar = self.bar_of(self.positions[row]) + 1
-            marks = []
-            if note.finger >= 0:
-                marks.append(tr("空弦") if note.finger == 0 else tr("{n} 指").format(n=note.finger))
-            if note.bow:
-                marks.append({"upbow": tr("推弓"), "downbow": tr("拉弓")}[note.bow])
-            if note.dynamic:
-                marks.append(tr("力度 {name}").format(name=note.dynamic))
-            if note.slide:
-                marks.append(tr("上滑音") if note.slide == "up" else tr("下滑音"))
-            if note.articulation:
-                marks.append(tr(ARTICULATION_LABELS.get(note.articulation, note.articulation)))
-            if note.accidental == "n":
-                marks.append(tr("還原記號"))
-            if note.tuplet:
-                marks.append(tr("三連音"))
-            if note.hairpin:
-                marks.append(tr("漸強起點") if note.hairpin == "crescendo" else tr("漸弱起點"))
-            if note.hairpin_end:
-                marks.append(tr("漸強弱終點"))
-            if note.grace_before:
-                marks.append(tr("前倚音 {notes}").format(notes=note.grace_before))
-            if note.grace_after:
-                marks.append(tr("後倚音 {notes}").format(notes=note.grace_after))
-            marks.extend(label for field, label in (("slur_start", tr("連弓起點")), ("slur_end", tr("連弓終點")),
-                                                   ("tie", tr("延音線")), ("repeat_start", tr("反覆起點")),
-                                                   ("repeat_end", tr("反覆終點"))) if getattr(note, field))
+            bar = self.bar_of(self.positions[row]) + (0 if self.score.pickup else 1)
+            marks = describe_marks(note)
             description = "，" + "、".join(marks) if marks else ""
             return tr("第 {bar} 小節，第 {n} 個音符：{token}，{beats} 拍{description}").format(
                 bar=bar, n=row + 1, token=note.token(), beats=note.beats, description=description)
@@ -99,18 +118,21 @@ class ScoreModel(QAbstractListModel):
         """Bar index of a tick position (bar 0 is the pickup when the score has one)."""
         return self.score.bar_index(position)
 
-    def set_score(self, score):
+    def set_score(self, score, part=None):
         # The editor mutates the same Score instance. Keep an immutable snapshot
         # for change detection instead of comparing aliases of its notes list.
-        notes = tuple(score.notes)
-        changed = self._notes != notes or self._meter != (score.meter, score.pickup)
+        part = self.part if part is None else part
+        part = max(0, min(part, len(score.parts) - 1))
+        notes = tuple(score.parts[part].notes)
+        key = (score.meter, score.pickup, part)
+        changed = self._notes != notes or self._meter != key
         self.score = score
         if not changed:
             return False
         self.beginResetModel()
-        self._notes, self._meter = notes, (score.meter, score.pickup)
-        self.positions, self.bars, self.links, self.tuplets, self.hairpins = [], [], [], [], []
-        position, slur_start, tuplet_start, hairpin_start = 0, None, None, None
+        self._notes, self._meter, self.part = notes, key, part
+        self.positions, self.bars = [], []
+        position = 0
         for i, note in enumerate(notes):
             bar = self.bar_of(position)
             if not self.bars or self.bars[-1][0] != bar:
@@ -118,37 +140,12 @@ class ScoreModel(QAbstractListModel):
             self.bars[-1][1].append(i)
             self.positions.append(position)
             position += note.ticks
-            if note.slur_end and slur_start is not None:
-                self.links.append((slur_start, i, False))
-                slur_start = None
-            if note.slur_start:
-                slur_start = i
-            if note.tie and i + 1 < len(notes):
-                self.links.append((i, i + 1, True))
-            if note.tuplet_start:
-                tuplet_start = i
-            if note.tuplet_end and tuplet_start is not None:
-                self.tuplets.append((tuplet_start, i, 3))
-                tuplet_start = None
-            if note.hairpin_end and hairpin_start is not None:
-                start, direction = hairpin_start
-                self.hairpins.append((start, i, direction))
-                hairpin_start = None
-            if note.hairpin:
-                hairpin_start = i, note.hairpin
-        if slur_start is not None:
-            self.links.append((slur_start, len(notes) - 1, False))
-        if tuplet_start is not None:
-            self.tuplets.append((tuplet_start, len(notes)-1, 3))
-        if hairpin_start is not None:
-            start, direction = hairpin_start
-            self.hairpins.append((start, len(notes)-1, direction))
         self.total_ticks = position
         self.endResetModel()
         return True
 
 
-class NoteList(QAbstractItemView):
+class NoteList(LayoutMixin, PaintMixin, QAbstractItemView):
     pitch = Signal(int)
     delete = Signal()
     command = Signal(str)
@@ -156,6 +153,9 @@ class NoteList(QAbstractItemView):
     selectionEdited = Signal()
     measureClicked = Signal(int)
     measureContextRequested = Signal(int, QPoint)
+    partClicked = Signal(int, int)        # part, row: a note of another part was clicked
+    barlineClicked = Signal(int)
+    stampClicked = Signal(int)            # continuous apply: row clicked
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -164,24 +164,34 @@ class NoteList(QAbstractItemView):
         self.scale = 1.0
         self.zoom_percent = 100
         self.insertion_mode = "after"
-        self.rects = []
-        self.bar_rects = []
-        self.bar_bottoms = []
-        self.line_rects = []
-        self.line_bottoms = []
-        self.line_links = []
-        self.line_tuplets = []
-        self.line_hairpins = []
-        self.line_baselines = []
-        self.line_dynamic_offsets = []
-        self.header_rect = QRect()
-        self.header_blocks = []
+        self.colors = theme.canvas_colors(theme.LIGHT)
+        self.systems, self.rects, self.part_rects, self.part_centers = [], [], [], []
+        self.bar_rects, self.bar_bottoms, self.bar_frames = [], [], {}
+        self.line_rects, self.line_bottoms, self.line_links, self.line_tuplets = [], [], [], []
+        self.line_hairpins, self.line_spans, self.line_baselines, self.line_dynamic_offsets = [], [], [], []
+        self.part_ranges, self.part_graces, self.part_positions, self.note_graces = [], [], [], []
+        self.bar_items_cache, self.bar_onset_x = [], {}
+        self.header_rect, self.header_blocks = QRect(), []
+        self.paper_rect = QRect()
         self.empty_bar_rect = QRect()
         self.empty_button_rect = QRect()
         self.note_lines = []
-        self.note_graces = []
+        self.names_x = 0
         self.content_width = 0
         self.content_height = 0
+        self.selection_kind = SELECT_NOTES
+        self.selected_bars: list[int] = []
+        self.selected_barline = -1
+        self.hover_row = -1
+        self.flash_row = -1
+        self.play_note = None
+        self.preview_target = None
+        self.stamp = ""
+        self.problems: dict = {}           # (part, bar) -> short text
+        self.problem_bars: set = set()
+        self.problem_barlines: set = set()
+        self._arc_rows: dict = {}
+        self._keep_kind = False
         self._layout_options = None
         self._selection_anchor = -1
         self.setObjectName("notes")
@@ -197,19 +207,40 @@ class NoteList(QAbstractItemView):
         self.viewport().setMouseTracking(True)
         self.selectionModel().currentChanged.connect(lambda current, _: self.currentRowChanged.emit(current.row()))
         self.selectionModel().selectionChanged.connect(self._selection_changed)
+        self._flash = QTimer(self)
+        self._flash.setSingleShot(True)
+        self._flash.setInterval(300)
+        self._flash.timeout.connect(self._end_flash)
 
+    # ---- data
     def _selection_changed(self, *_):
+        if not self._keep_kind:
+            self.selection_kind = SELECT_NOTES
+            self.selected_bars = []
+            self.selected_barline = -1
         self.selectionEdited.emit()
         self.viewport().update()
 
-    def set_score(self, score):
-        changed = self.score_model.set_score(score)
+    def set_colors(self, colors):
+        self.colors = colors
+        self.viewport().update()
+
+    @property
+    def part(self) -> int:
+        return self.score_model.part
+
+    def set_score(self, score, part=None):
+        changed = self.score_model.set_score(score, part)
         if changed:
             self._selection_anchor = -1
-        options = (score.staff_size, score.bars_per_line, score.title, score.composer,
-                   score.key, score.meter, score.tempo)
+            self._arc_rows = {}
+        options = (score.staff_size, score.bars_per_line, score.title, score.composer, score.key, score.meter,
+                   score.tempo, score.pickup, tuple(p.name for p in score.parts),
+                   tuple(tuple(p.notes) for p in score.parts) if len(score.parts) > 1 else len(score.parts),
+                   score.print_variant)
         if changed or options != self._layout_options:
             self._layout_options = options
+            self._arc_rows = {}
             self.scale = self.zoom_percent / 100 * score.staff_size / 20
             self.relayout()
         else:
@@ -231,190 +262,16 @@ class NoteList(QAbstractItemView):
         self.relayout()
         self.scrollTo(self.currentIndex())
 
-    def relayout(self):
-        s = self.scale
-        margin, gap = max(8, int(24*s)), max(4, int(18*s))
-        available = max(1, self.viewport().width() - margin * 2)
-        rows, line, used = [], [], 0
-        notes = self.score_model._notes
-        self.note_graces = [(grace_tokens(n.grace_before), grace_tokens(n.grace_after)) for n in notes]
-        per_line = self.score_model.score.bars_per_line
-        for bar, indices in self.score_model.bars:
-            weights = [(max(62 if (notes[i].finger >= 0 or notes[i].bow or notes[i].articulation) else 40,
-                            notes[i].ticks * 40/TICKS_PER_QUARTER)
-                        + sum(14*len(group)+16 for group in self.note_graces[i] if group)) * s for i in indices]
-            grace_repeat_inset = 8*s if notes[indices[0]].grace_before and notes[indices[0]].repeat_start else 0
-            width = max(144*s, sum(weights) + 32*s+grace_repeat_inset)
-            if line and ((per_line and len(line) >= per_line) or
-                         (not per_line and used + width > available)):
-                rows.append(line)
-                line, used = [], 0
-            line.append((bar, indices, weights, width))
-            used += width
-        if line:
-            rows.append(line)
-        self.rects = [QRect() for _ in notes]
-        self.note_lines = [0] * len(notes)
-        self.bar_rects, self.bar_bottoms = [], []
-        self.line_rects, self.line_bottoms, self.line_links = [], [], [[] for _ in rows]
-        self.line_tuplets, self.line_hairpins = [[] for _ in rows], [[] for _ in rows]
-        self.line_baselines, self.line_dynamic_offsets = [], []
-        self.empty_bar_rect, self.empty_button_rect = QRect(), QRect()
-        y = self._layout_header(margin, available) + int(6*s)
-        self.content_width = self.viewport().width()
-        for line_number, line in enumerate(rows):
-            for _, indices, _, _ in line:
-                for i in indices:
-                    self.note_lines[i] = line_number
-        has_slur, has_tie = [False]*len(rows), [False]*len(rows)
-        has_tuplet, has_hairpin = [False]*len(rows), [False]*len(rows)
-        for start, end, tie in self.score_model.links:
-            for line_number in range(self.note_lines[start], self.note_lines[end]+1):
-                (has_tie if tie else has_slur)[line_number] = True
-        for spans, occupied in ((self.score_model.tuplets, has_tuplet), (self.score_model.hairpins, has_hairpin)):
-            for start, end, _ in spans:
-                for line_number in range(self.note_lines[start], self.note_lines[end]+1):
-                    occupied[line_number] = True
-        tie_offsets, hairpin_offsets = [], []
-        for line_number, line in enumerate(rows):
-            line_notes = [notes[i] for _, indices, _, _ in line for i in indices]
-            upper_marks = any(n.finger >= 0 or n.bow or n.articulation for n in line_notes)
-            upper = (86 if upper_marks else 62) if has_slur[line_number] else (72 if upper_marks else 44)
-            upper += 28 if has_tuplet[line_number] else 0
-            below = max([22] + [25+4*{8: 1, 16: 2, 32: 3}.get(n.duration, 0)+6*(abs(n.octave)-1)
-                                for n in line_notes if n.octave < 0])
-            tie_offset = below+13
-            dynamic_offset = below+(33 if has_tie[line_number] else 10)
-            lower = (dynamic_offset+24 if any(n.dynamic for n in line_notes)
-                     else tie_offset+4 if has_tie[line_number] else below)
-            hairpin_offset = lower+14
-            if has_hairpin[line_number]:
-                lower = hairpin_offset+7
-            height = max(1, int((upper+lower+12)*s))
-            self.line_baselines.append(y+upper*s)
-            self.line_dynamic_offsets.append(dynamic_offset*s)
-            tie_offsets.append(tie_offset*s)
-            hairpin_offsets.append(hairpin_offset*s)
-            extra = max(0, (available - sum(b[3] for b in line)) / len(line))
-            x = margin
-            for bar, indices, weights, base in line:
-                width = int(base + extra)
-                frame = QRect(int(x), y, width, height)
-                self.bar_rects.append((frame, bar, indices))
-                self.bar_bottoms.append(frame.bottom())
-                grace_repeat_inset = 8*s if notes[indices[0]].grace_before and notes[indices[0]].repeat_start else 0
-                left = x + 16*s+grace_repeat_inset
-                usable = width - 32*s-grace_repeat_inset
-                total = sum(weights)
-                for i, weight in zip(indices, weights):
-                    cell = usable * weight / total
-                    self.rects[i] = QRect(int(left), y + int(20*s), max(1, int(cell)), max(1, height-int(25*s)))
-                    left += cell
-                x += width
-            self.line_rects.append(QRect(margin, y, int(x) - margin, height))
-            self.line_bottoms.append(y + height - 1)
-            self.content_width = max(self.content_width, int(x) + margin)
-            y += height + gap
-        if not notes:
-            self.empty_bar_rect = QRect(margin, y, available, max(80, int(114*s)))
-            button_width = min(available-int(12*s), int(208*s))
-            self.empty_button_rect = QRect(margin+(available-button_width)//2, y+int(24*s),
-                                          max(1, button_width), max(24, int(36*s)))
-            y = self.empty_bar_rect.bottom()+gap
-        self.content_height = max(self.viewport().height(), y + margin)
-        for start, end, tie in self.score_model.links:
-            first, last = self.note_lines[start], self.note_lines[end]
-            for line_number in range(first, last + 1):
-                frame = self.line_rects[line_number]
-                x1 = self.note_center(start) + 7*s if line_number == first else frame.left() + 10*s
-                x2 = self.note_center(end) - 7*s if line_number == last else frame.right() - 10*s
-                if x2 <= x1:
-                    x2 = x1 + 12*s
-                baseline = (self.line_baselines[line_number]+tie_offsets[line_number] if tie
-                            else frame.top()+(46 if has_tuplet[line_number] else 18)*s)
-                path = QPainterPath(QPointF(x1, baseline))
-                lift = (10 if tie else 15)*s
-                path.cubicTo(x1 + (x2-x1)*0.25, baseline-lift,
-                             x1 + (x2-x1)*0.75, baseline-lift, x2, baseline)
-                self.line_links[line_number].append(path)
-        for start, end, number in self.score_model.tuplets:
-            first, last = self.note_lines[start], self.note_lines[end]
-            for line_number in range(first, last+1):
-                frame = self.line_rects[line_number]
-                x1 = self.note_center(start)-12*s if line_number == first else frame.left()+10*s
-                x2 = self.note_center(end)+12*s if line_number == last else frame.right()-10*s
-                x2 = max(x1+24*s, x2)
-                y, center = frame.top()+24*s, (x1+x2)/2
-                path = QPainterPath(QPointF(x1, y+5*s))
-                path.lineTo(x1, y)
-                path.lineTo(center-8*s, y)
-                path.moveTo(center+8*s, y)
-                path.lineTo(x2, y)
-                path.lineTo(x2, y+5*s)
-                text_rect = QRect(int(center-8*s), int(y-10*s), max(1, int(16*s)), max(1, int(20*s)))
-                self.line_tuplets[line_number].append((path, text_rect, str(number)))
-        for start, end, direction in self.score_model.hairpins:
-            first, last = self.note_lines[start], self.note_lines[end]
-            segments = []
-            for line_number in range(first, last+1):
-                frame = self.line_rects[line_number]
-                x1 = self.note_center(start)+3*s if line_number == first else frame.left()+10*s
-                x2 = self.note_center(end)-3*s if line_number == last else frame.right()-10*s
-                segments.append((line_number, x1, max(x1+12*s, x2)))
-            total = sum(x2-x1 for _, x1, x2 in segments)
-            progress = 0
-            for line_number, x1, x2 in segments:
-                first_open, last_open = progress/total, (progress+x2-x1)/total
-                if direction == "diminuendo":
-                    first_open, last_open = 1-first_open, 1-last_open
-                y = self.line_baselines[line_number]+hairpin_offsets[line_number]
-                path = QPainterPath()
-                for side in (-1, 1):
-                    path.moveTo(x1, y+side*6*s*first_open)
-                    path.lineTo(x2, y+side*6*s*last_open)
-                self.line_hairpins[line_number].append(path)
-                progress += x2-x1
-        self.updateGeometries()
+    def flash(self, row):
+        self.flash_row = row
+        self._flash.start()
         self.viewport().update()
 
-    def _layout_header(self, margin, width):
-        """Cache plain-text wrapping so header changes also reflow the music."""
-        score, s = self.score_model.score, self.scale
-        self.header_blocks = []
-        top = max(8, int(16*s))
-        y = top
-        for text, size, weight, alignment in (
-                (score.title or tr("未命名樂曲"), 19, QFont.Weight.DemiBold, Qt.AlignmentFlag.AlignHCenter),
-                (score.composer, 10, QFont.Weight.Normal, Qt.AlignmentFlag.AlignRight),
-                (f"1 = {score.key}    {score.meter}    ♩ = {score.tempo}", 11,
-                 QFont.Weight.Normal, Qt.AlignmentFlag.AlignLeft)):
-            if not text:
-                continue
-            font = QFont(ui_font_family(), max(7, int(size*s)), weight)
-            flags = alignment | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextWrapAnywhere
-            height = max(QFontMetrics(font).height(),
-                         QFontMetrics(font).boundingRect(QRect(0, 0, width, 100000), flags, text).height())
-            rect = QRect(margin, y, width, height)
-            self.header_blocks.append((rect, text, font, flags))
-            y += height+max(3, int(4*s))
-        self.header_rect = QRect(margin, top, width, y-top)
-        return y
+    def _end_flash(self):
+        self.flash_row = -1
+        self.viewport().update()
 
-    def note_center(self, row):
-        note, rect = self.score_model._notes[row], self.rects[row]
-        before = self.note_graces[row][0]
-        prefix = (14*len(before)+16)*self.scale if before else 0
-        return rect.left() + prefix + self.note_main_width(row)/(2*self.long_beats(note))
-
-    @staticmethod
-    def long_beats(note):
-        # Draw nominal quarter-note dashes, independent of tuplet performance time.
-        return (4//note.duration)*(3 if note.dotted else 2)//2 if note.duration <= 2 else 1
-
-    def note_main_width(self, row):
-        ornament_width = sum((14*len(group)+16)*self.scale for group in self.note_graces[row] if group)
-        return max(1, self.rects[row].width()-ornament_width)
-
+    # ---- geometry API used by Qt and the window
     def updateGeometries(self):
         if not hasattr(self, "content_height"):
             return
@@ -448,10 +305,13 @@ class NoteList(QAbstractItemView):
             if entry[0].right() >= self.horizontalOffset() and entry[0].left() <= self.horizontalOffset() + self.viewport().width():
                 yield entry
 
+    def _content(self, point):
+        return point + QPoint(self.horizontalOffset(), self.verticalOffset())
+
     def indexAt(self, point):
         if not self.viewport().rect().contains(point):
             return QModelIndex()
-        position = point + QPoint(self.horizontalOffset(), self.verticalOffset())
+        position = self._content(point)
         for frame, _, indices in self.visible_bars():
             if frame.contains(position):
                 for i in indices:
@@ -459,22 +319,111 @@ class NoteList(QAbstractItemView):
                         return self.model().index(i, 0)
         return QModelIndex()
 
+    def other_part_at(self, point):
+        """(part, row) of a note of another part under ``point``, else None."""
+        if not self.viewport().rect().contains(point):
+            return None
+        position = self._content(point)
+        for number in self._visible_systems():
+            system = self.systems[number]
+            if not system.rect.adjusted(-4, 0, 4, 0).contains(position):
+                continue
+            for part in system.rows:
+                if part == self.part:
+                    continue
+                ranges = self.part_ranges[part]
+                for bar in system.bars:
+                    if bar < len(ranges):
+                        a, b = ranges[bar]
+                        for r in range(a, b):
+                            if self.part_rects[part][r].contains(position):
+                                return part, r
+        return None
+
+    def part_name_at(self, point):
+        """A click on the part names left of a system switches parts (design §3.3)."""
+        position = self._content(point)
+        for number in self._visible_systems():
+            system = self.systems[number]
+            if not (self.names_x <= position.x() < system.rect.left()):
+                continue
+            for part, row in system.rows.items():
+                if row.top + 8 <= position.y() <= row.bottom:
+                    return part
+        return None
+
     def measure_at(self, point):
         """Return a zero-based measure number for a viewport position."""
         if not self.viewport().rect().contains(point):
             return None
-        position = point + QPoint(self.horizontalOffset(), self.verticalOffset())
+        position = self._content(point)
         for frame, number, _ in self.visible_bars():
             if frame.contains(position):
                 return number
         return None
 
+    def barline_at(self, point):
+        """Boundary k (between bar k-1 and k) within ±6 px of a bar line, below the number strip."""
+        if not self.viewport().rect().contains(point):
+            return None
+        position = self._content(point)
+        s = self.scale
+        for number in self._visible_systems():
+            system = self.systems[number]
+            if not (system.rect.top() + 18 * s <= position.y() <= system.rect.bottom()):
+                continue
+            for bar in system.bars:
+                frame = self.bar_frames[bar]
+                if abs(position.x() - frame.left()) <= 6:
+                    return bar
+                if abs(position.x() - frame.right()) <= 6:
+                    return bar + 1
+        return None
+
+    def reset_selection(self):
+        """Nothing selected, back to note selection (a new score or part)."""
+        self._keep_kind = True
+        try:
+            self.selectionModel().clearSelection()
+        finally:
+            self._keep_kind = False
+        self.selection_kind, self.selected_bars, self.selected_barline = SELECT_NOTES, [], -1
+        self.preview_target = None
+        self.play_note = None
+
     def select_bar(self, number, current=None):
+        return self.select_bars([number], current)
+
+    def select_bars(self, numbers, current=None):
+        rows = []
         for bar, indices in self.score_model.bars:
-            if bar == number:
-                self.select_rows(indices, current if current in indices else indices[0])
-                return True
-        return False
+            if bar in numbers:
+                rows += indices
+        if not rows:
+            return False
+        self._keep_kind = True
+        try:
+            self.select_rows(rows, current if current in rows else rows[0])
+        finally:
+            self._keep_kind = False
+        self.selection_kind = SELECT_BARS
+        self.selected_bars = sorted(set(numbers))
+        self.selected_barline = -1
+        self.selectionEdited.emit()
+        self.viewport().update()
+        return True
+
+    def select_barline(self, boundary):
+        self._keep_kind = True
+        try:
+            self.selectionModel().clearSelection()
+        finally:
+            self._keep_kind = False
+        self.selection_kind = SELECT_BARLINE
+        self.selected_barline = boundary
+        self.selected_bars = []
+        self.selectionEdited.emit()
+        self.viewport().update()
 
     def visualRect(self, index):
         if not index.isValid() or index.model() is not self.model() or not 0 <= index.row() < len(self.rects):
@@ -487,13 +436,13 @@ class NoteList(QAbstractItemView):
         rect = self.rects[index.row()]
         vertical = self.verticalScrollBar()
         if hint == self.ScrollHint.PositionAtTop:
-            vertical.setValue(rect.top() - int(30*self.scale))
+            vertical.setValue(rect.top() - int(30 * self.scale))
         elif hint == self.ScrollHint.PositionAtBottom:
-            vertical.setValue(rect.bottom() + int(12*self.scale) - self.viewport().height())
+            vertical.setValue(rect.bottom() + int(12 * self.scale) - self.viewport().height())
         elif hint == self.ScrollHint.PositionAtCenter:
             vertical.setValue(rect.center().y() - self.viewport().height() // 2)
         else:
-            start, end = rect.top() - int(30*self.scale), rect.bottom() + int(12*self.scale)
+            start, end = rect.top() - int(40 * self.scale), rect.bottom() + int(16 * self.scale)
             if start < vertical.value():
                 vertical.setValue(start)
             elif end >= vertical.value() + self.viewport().height():
@@ -503,6 +452,15 @@ class NoteList(QAbstractItemView):
             horizontal.setValue(rect.left())
         elif rect.right() >= horizontal.value() + self.viewport().width():
             horizontal.setValue(rect.right() - self.viewport().width() + 1)
+
+    def scroll_to_system(self, number):
+        """Keep a system in the upper half of the view (playback)."""
+        if not 0 <= number < len(self.systems):
+            return
+        rect = self.systems[number].rect
+        bar = self.verticalScrollBar()
+        if rect.top() < bar.value() or rect.bottom() > bar.value() + self.viewport().height() * 0.75:
+            bar.setValue(rect.top() - int(20 * self.scale))
 
     def moveCursor(self, action, modifiers):
         count = self.model().rowCount()
@@ -518,16 +476,17 @@ class NoteList(QAbstractItemView):
                 row = 0
             direction = -1 if action == self.CursorAction.MovePageUp else 1
             line = self.note_lines[row]
-            target_y = self.line_rects[line].top() + direction*self.viewport().height()
-            target_line = max(0, min(len(self.line_rects)-1, bisect_right(self.line_bottoms, target_y)))
+            target_y = self.line_rects[line].top() + direction * self.viewport().height()
+            target_line = max(0, min(len(self.line_rects) - 1, bisect_right(self.line_bottoms, target_y)))
             if target_line == line:
-                target_line = max(0, min(len(self.line_rects)-1, line + direction))
+                target_line = max(0, min(len(self.line_rects) - 1, line + direction))
             candidates = [i for _, _, indices in self.bar_rects if self.note_lines[indices[0]] == target_line for i in indices]
-            row = min(candidates, key=lambda i: abs(self.note_center(i) - self.note_center(row)))
+            if candidates:
+                row = min(candidates, key=lambda i: abs(self.note_center(i) - self.note_center(row)))
         elif action in (self.CursorAction.MoveLeft, self.CursorAction.MovePrevious, self.CursorAction.MoveUp):
             row = max(0, row - 1)
         else:
-            row = min(count-1, row+1)
+            row = min(count - 1, row + 1)
         return self.model().index(row, 0)
 
     def setSelection(self, rect, flags):
@@ -586,19 +545,51 @@ class NoteList(QAbstractItemView):
         self.selectionModel().setCurrentIndex(index, QItemSelectionModel.SelectionFlag.NoUpdate)
         self.scrollTo(index)
 
+    # ---- mouse
     def mousePressEvent(self, event):
         point = event.position().toPoint()
-        position = point + QPoint(self.horizontalOffset(), self.verticalOffset())
-        if event.button() == Qt.MouseButton.LeftButton and self.empty_button_rect.contains(position):
+        position = self._content(point)
+        left = event.button() == Qt.MouseButton.LeftButton
+        if left and self.empty_button_rect.contains(position):
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             self.command.emit("append_bar")
             event.accept()
             return
+        if left:
+            name_part = self.part_name_at(point)
+            if name_part is not None and name_part != self.part:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.partClicked.emit(name_part, -1)
+                event.accept()
+                return
+            other = self.other_part_at(point)
+            if other is not None:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.partClicked.emit(*other)
+                event.accept()
+                return
         index = self.indexAt(point)
+        if left and index.isValid() and self.stamp and not event.modifiers():
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self.select_rows([index.row()], index.row())
+            self.stampClicked.emit(index.row())
+            event.accept()
+            return
+        if left and not index.isValid():
+            boundary = self.barline_at(point)
+            if boundary is not None:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.select_barline(boundary)
+                self.barlineClicked.emit(boundary)
+                event.accept()
+                return
         bar = self.measure_at(point)
         if not index.isValid() and bar is not None and event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             self.setFocus(Qt.FocusReason.MouseFocusReason)
-            indices = next(indices for number, indices in self.score_model.bars if number == bar)
+            indices = next((indices for number, indices in self.score_model.bars if number == bar), None)
+            if indices is None:
+                event.accept()
+                return
             selected = set(self.selected_rows())
             if event.button() == Qt.MouseButton.RightButton and all(i in selected for i in indices):
                 event.accept()
@@ -608,20 +599,28 @@ class NoteList(QAbstractItemView):
                 if anchor < 0:
                     anchor = indices[0]
                 anchor_bar = self.score_model.bar_of(self.score_model.positions[anchor])
-                anchor_indices = next(rows for number, rows in self.score_model.bars if number == anchor_bar)
-                first, last = min(anchor_indices[0], indices[0]), max(anchor_indices[-1], indices[-1])
-                rows = set(range(first, last+1))
+                low, high = sorted((anchor_bar, bar))
+                bars = list(range(low, high + 1))
                 if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                    rows.update(selected)
-                self.select_rows(rows, indices[-1] if anchor <= indices[0] else indices[0])
+                    bars = sorted(set(bars) | set(self.selected_bars))
+                self.select_bars(bars, indices[-1] if anchor <= indices[0] else indices[0])
                 self._selection_anchor = anchor
             elif event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                rows = selected
+                bars = set(self.selected_bars) if self.selection_kind == SELECT_BARS else set()
+                bars ^= {bar}
+                rows = set(selected)
                 if all(i in rows for i in indices):
                     rows.difference_update(indices)
                 else:
                     rows.update(indices)
-                self.select_rows(rows, indices[0])
+                self._keep_kind = True
+                try:
+                    self.select_rows(rows, indices[0])
+                finally:
+                    self._keep_kind = False
+                self.selection_kind = SELECT_BARS
+                self.selected_bars = sorted(bars)
+                self.selectionEdited.emit()
             else:
                 self.select_bar(bar)
             if event.button() == Qt.MouseButton.LeftButton:
@@ -639,6 +638,20 @@ class NoteList(QAbstractItemView):
         if index.isValid():
             self._selection_anchor = index.row()
 
+    def mouseMoveEvent(self, event):
+        index = self.indexAt(event.position().toPoint())
+        row = index.row() if index.isValid() else -1
+        if row != self.hover_row:
+            self.hover_row = row
+            self.viewport().update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self.hover_row != -1:
+            self.hover_row = -1
+            self.viewport().update()
+        super().leaveEvent(event)
+
     def select_current_bar(self):
         row = self.currentRow()
         if row < 0:
@@ -647,10 +660,10 @@ class NoteList(QAbstractItemView):
         self.select_bar(bar, row)
 
     def mouseDoubleClickEvent(self, event):
-        position = event.position().toPoint() + QPoint(self.horizontalOffset(), self.verticalOffset())
-        for frame, _, indices in self.visible_bars():
+        position = self._content(event.position().toPoint())
+        for frame, bar, indices in self.visible_bars():
             if frame.contains(position):
-                self.select_rows(indices)
+                self.select_bar(bar)
                 return
         super().mouseDoubleClickEvent(event)
 
@@ -668,16 +681,30 @@ class NoteList(QAbstractItemView):
         if event.type() == event.Type.ToolTip:
             index = self.indexAt(event.pos())
             if index.isValid():
-                QToolTip.showText(event.globalPos(), index.data(Qt.ItemDataRole.ToolTipRole), self)
+                text = index.data(Qt.ItemDataRole.ToolTipRole)
+                note = self.score_model._notes[index.row()]
+                from .symbols_ui import silent
+                quiet = [symbols.SYMBOLS[m].display_name for m in note.marks if silent(symbols.SYMBOLS[m])]
+                if quiet:
+                    text += "\n" + tr("只印出，試聽不會表現：{names}").format(names="、".join(quiet))
+                QToolTip.showText(event.globalPos(), text, self)
             else:
+                other = self.other_part_at(event.pos())
                 bar = self.measure_at(event.pos())
-                if bar is not None:
-                    QToolTip.showText(event.globalPos(), tr("第 {bar} 小節 · 點選整小節；右鍵開啟小節操作").format(bar=bar + 1), self)
+                if other is not None:
+                    name = self.score_model.score.parts[other[0]].name or tr("第 {n} 聲部").format(n=other[0] + 1)
+                    QToolTip.showText(event.globalPos(), tr("點一下切換到「{name}」並選取這個音").format(name=name), self)
+                elif self.barline_at(event.pos()) is not None:
+                    QToolTip.showText(event.globalPos(), tr("小節線 · 點選後可加小節線、反覆或跳躍記號"), self)
+                elif bar is not None:
+                    number = bar + (0 if self.score_model.score.pickup else 1)
+                    QToolTip.showText(event.globalPos(), tr("第 {bar} 小節 · 點選整小節；右鍵開啟小節操作").format(bar=number), self)
                 else:
                     QToolTip.hideText()
             return True
         return super().viewportEvent(event)
 
+    # ---- keyboard
     def keyPressEvent(self, event):
         modifiers = event.modifiers()
         if modifiers == Qt.KeyboardModifier.ControlModifier:
@@ -689,6 +716,12 @@ class NoteList(QAbstractItemView):
         if modifiers == Qt.KeyboardModifier.NoModifier and event.key() == Qt.Key.Key_Insert:
             self.command.emit("insert_bar_before")
             return
+        if modifiers == Qt.KeyboardModifier.AltModifier and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.command.emit("part_up" if event.key() == Qt.Key.Key_Up else "part_down")
+            return
+        if modifiers & Qt.KeyboardModifier.AltModifier and Qt.Key.Key_1 <= event.key() <= Qt.Key.Key_9:
+            self.command.emit(f"favorite_{event.key() - Qt.Key.Key_0}")
+            return
         navigation = {Qt.Key.Key_Left: self.CursorAction.MoveLeft, Qt.Key.Key_Right: self.CursorAction.MoveRight,
                       Qt.Key.Key_Up: self.CursorAction.MoveUp, Qt.Key.Key_Down: self.CursorAction.MoveDown,
                       Qt.Key.Key_Home: self.CursorAction.MoveHome, Qt.Key.Key_End: self.CursorAction.MoveEnd,
@@ -699,14 +732,18 @@ class NoteList(QAbstractItemView):
                 self._extend_selection(index.row(), bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier))
             return
         for key, command in ((QKeySequence.StandardKey.Copy, "copy"), (QKeySequence.StandardKey.Cut, "cut"),
-                             (QKeySequence.StandardKey.Paste, "paste")):
+                             (QKeySequence.StandardKey.Paste, "paste"), (QKeySequence.StandardKey.Find, "search")):
             if event.matches(key):
                 self.command.emit(command)
                 return
-        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
+        if event.modifiers() in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.KeypadModifier):
             if len(event.text()) == 1 and event.text() in "01234567":
                 self.pitch.emit(int(event.text()))
                 return
+            if event.text() == "/":
+                self.command.emit("search")
+                return
+        if event.modifiers() == Qt.KeyboardModifier.NoModifier:
             if event.key() == Qt.Key.Key_M:
                 self.select_current_bar()
                 return
@@ -729,260 +766,6 @@ class NoteList(QAbstractItemView):
         if event.key() in navigation:
             self._selection_anchor = self.currentRow()
 
-    def _draw_repeat(self, painter, x, cy, start):
-        s = self.scale
-        painter.setPen(QPen(QColor("#344c59"), 2*s))
-        painter.drawLine(QPointF(x, cy-20*s), QPointF(x, cy+20*s))
-        second = x + (4 if start else -4)*s
-        painter.setPen(QPen(QColor("#344c59"), s))
-        painter.drawLine(QPointF(second, cy-20*s), QPointF(second, cy+20*s))
-        painter.setBrush(QColor("#344c59"))
-        dot_x = x + (10 if start else -10)*s
-        for dot_y in (-6, 6):
-            painter.drawEllipse(QPointF(dot_x, cy+dot_y*s), 1.7*s, 1.7*s)
-
-    def _draw_marks(self, p, note, cx, cy, color, dynamic_offset=None):
-        s = self.scale
-        p.setPen(QPen(color, 1.5*s))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        mark_y = cy - 43*s
-        if note.finger >= 0:
-            p.setFont(QFont(ui_font_family(), max(6, int(10*s))))
-            p.drawText(QRect(int(cx-9*s), int(mark_y-12*s), int(18*s), int(20*s)),
-                       Qt.AlignmentFlag.AlignCenter, "○一二三四"[note.finger])
-        if note.bow:
-            x = cx - (21*s if note.finger >= 0 else 0)
-            if note.bow == "downbow":
-                p.drawLine(QPointF(x-5*s, mark_y+4*s), QPointF(x-5*s, mark_y-6*s))
-                p.drawLine(QPointF(x-5*s, mark_y-6*s), QPointF(x+5*s, mark_y-6*s))
-                p.drawLine(QPointF(x+5*s, mark_y-6*s), QPointF(x+5*s, mark_y+4*s))
-            else:
-                p.drawLine(QPointF(x-5*s, mark_y-6*s), QPointF(x, mark_y+5*s))
-                p.drawLine(QPointF(x, mark_y+5*s), QPointF(x+5*s, mark_y-6*s))
-        if note.articulation:
-            x = cx + (21*s if note.finger >= 0 or note.bow else 0)
-            self._draw_articulation(p, note.articulation, x, mark_y, color)
-        if note.slide:
-            x, y = cx - 23*s, cy - 18*s
-            direction = -1 if note.slide == "up" else 1
-            end = QPointF(x+10*s, y+direction*9*s)
-            p.drawLine(QPointF(x, y), end)
-            p.drawLine(end, QPointF(end.x()-5*s, end.y()))
-            p.drawLine(end, QPointF(end.x(), end.y()-direction*5*s))
-        if note.dynamic:
-            font = QFont(latin_serif_family(), max(7, int(12*s)), QFont.Weight.Bold)
-            font.setItalic(True)
-            p.setFont(font)
-            offset = 47*s if dynamic_offset is None else dynamic_offset
-            p.drawText(QRect(int(cx-22*s), int(cy+offset), int(44*s), int(22*s)), Qt.AlignmentFlag.AlignCenter, note.dynamic)
-
-    def _draw_articulation(self, painter, mark, x, y, color):
-        """Use paths for common symbols so Windows font coverage cannot hide them."""
-        s = self.scale
-        painter.save()
-        painter.translate(x, y)
-        painter.scale(s, s)
-        painter.setPen(QPen(color, 1.4))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        path = QPainterPath()
-        if mark == "fermata":
-            path.moveTo(-8, 1)
-            path.cubicTo(-8, -10, 8, -10, 8, 1)
-            painter.setBrush(color)
-            painter.drawEllipse(QPointF(0, -1), 1.6, 1.6)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-        elif mark == "staccato":
-            painter.setBrush(color)
-            painter.drawEllipse(QPointF(0, -2), 2, 2)
-        elif mark == "tenuto":
-            path.moveTo(-7, -2)
-            path.lineTo(7, -2)
-        elif mark == "accent":
-            path.moveTo(-7, -7)
-            path.lineTo(7, -2)
-            path.lineTo(-7, 3)
-        elif mark == "marcato":
-            path.moveTo(-6, 3)
-            path.lineTo(0, -8)
-            path.lineTo(6, 3)
-        elif mark == "staccatissimo":
-            path.moveTo(-3, -8)
-            path.lineTo(3, -8)
-            path.lineTo(0, 3)
-            path.closeSubpath()
-            painter.setBrush(color)
-        elif mark == "harmonic":
-            path.moveTo(0, -9)
-            path.lineTo(5, -2)
-            path.lineTo(0, 5)
-            path.lineTo(-5, -2)
-            path.closeSubpath()
-        elif mark == "mordent":
-            path.moveTo(-10, 1)
-            for px, py in ((-6, -5), (-2, 1), (2, -5), (6, 1), (10, -5)):
-                path.lineTo(px, py)
-            path.moveTo(0, -9)
-            path.lineTo(0, 6)
-        elif mark == "turn":
-            path.moveTo(-10, -1)
-            path.cubicTo(-10, -9, -3, -9, 0, -1)
-            path.cubicTo(3, 7, 10, 7, 10, -1)
-            path.cubicTo(10, -5, 5, -5, 5, -1)
-            path.moveTo(-10, -1)
-            path.cubicTo(-10, 3, -5, 3, -5, -1)
-        elif mark in ("trill", "breathe"):
-            font = QFont(latin_serif_family(), 12 if mark == "trill" else 17)
-            font.setItalic(mark == "trill")
-            painter.setFont(font)
-            painter.drawText(QRect(-13, -14, 26, 25), Qt.AlignmentFlag.AlignCenter,
-                             "tr" if mark == "trill" else ",")
-        painter.drawPath(path)
-        painter.restore()
-
-    def _draw_graces(self, painter, row, cy, color):
-        s, rect = self.scale, self.rects[row]
-        before, after = self.note_graces[row]
-        painter.setPen(QPen(color, max(1, s)))
-        painter.setBrush(color)
-        for group, start in ((before, rect.left()),
-                             (after, rect.right()-(14*len(after)+16)*s+12*s)):
-            if not group:
-                continue
-            centers = []
-            for number, (accidental, degree, octave) in enumerate(group):
-                x, y = start+(7+14*number)*s, cy-7*s
-                centers.append(x)
-                painter.setFont(QFont(latin_sans_family(), max(6, int(9*s))))
-                painter.drawText(QRect(int(x-5*s), int(y-10*s), max(1, int(10*s)), max(1, int(20*s))),
-                                 Qt.AlignmentFlag.AlignCenter, degree)
-                if accidental:
-                    painter.setFont(QFont(latin_sans_family(), max(5, int(6*s))))
-                    painter.drawText(QPointF(x-10*s, y+2*s), "♯" if accidental == "#" else "♭")
-                for dot in range(abs(octave)):
-                    dot_y = y-(11+4*dot)*s if octave > 0 else y+(13+4*dot)*s
-                    painter.drawEllipse(QPointF(x, dot_y), max(.7, s), max(.7, s))
-            painter.drawLine(QPointF(centers[0]-4*s, cy+3*s), QPointF(centers[-1]+4*s, cy+3*s))
-
-    def _draw_system_marks(self, painter, line):
-        painter.setPen(QPen(QColor("#344c59"), max(1, 1.3*self.scale)))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        for path in self.line_links[line]:
-            painter.drawPath(path)
-        for path in self.line_hairpins[line]:
-            painter.drawPath(path)
-        painter.setFont(QFont(latin_serif_family(), max(7, int(11*self.scale))))
-        for path, rect, number in self.line_tuplets[line]:
-            painter.drawPath(path)
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, number)
-
-    def paintEvent(self, event):
-        p = QPainter(self.viewport())
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.fillRect(self.viewport().rect(), QColor("#edf1f3"))
-        p.translate(-self.horizontalOffset(), -self.verticalOffset())
-        s = self.scale
-        page_margin = max(3, int(7*s))
-        p.fillRect(QRect(page_margin, page_margin, self.content_width-2*page_margin,
-                        max(self.viewport().height(), self.content_height)-2*page_margin), QColor("#ffffff"))
-        if self.header_rect.bottom() >= self.verticalOffset():
-            p.setPen(QColor("#172f39"))
-            for rect, text, font, flags in self.header_blocks:
-                p.setFont(font)
-                p.drawText(rect, flags, text)
-        if not self.rects:
-            p.setBrush(QColor("#edf7f3"))
-            p.setPen(QPen(QColor("#8cb8a8"), max(1, s)))
-            p.drawRoundedRect(self.empty_button_rect, 4*s, 4*s)
-            p.setPen(QColor("#17664f"))
-            p.setFont(QFont(ui_font_family(), max(8, int(12*s))))
-            p.drawText(self.empty_button_rect, Qt.AlignmentFlag.AlignCenter, tr("＋ 新增小節"))
-            p.setPen(QColor("#63777d"))
-            p.setFont(QFont(ui_font_family(), max(7, int(10*s))))
-            hint = QRect(self.empty_bar_rect.left(), self.empty_button_rect.bottom()+int(12*s),
-                         self.empty_bar_rect.width(), int(32*s))
-            p.drawText(hint, Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap,
-                       tr("或按 1–7 加入音符，0 加入休止符"))
-            return
-        notes = self.score_model._notes
-        room = self.score_model.score.bar_room
-        visible = list(self.visible_bars())
-        for frame, bar, indices in visible:
-            overflow = any(room(self.score_model.positions[i])[0] + notes[i].ticks > room(self.score_model.positions[i])[1]
-                           for i in indices)
-            total = self.score_model.total_ticks
-            incomplete = indices[-1] == len(notes)-1 and self.score_model.score.final_bar_targets(total)[0] != total
-            line_number = self.note_lines[indices[0]]
-            cy = self.line_baselines[line_number]
-            p.setFont(QFont(ui_font_family(), max(6, int(9*s))))
-            p.setPen(QColor("#9b431f" if overflow else "#536a76"))
-            p.drawText(frame.adjusted(int(3*s), int(2*s), -int(4*s), 0), Qt.AlignmentFlag.AlignTop,
-                       f"{bar+1}" + (tr(" · 超拍") if overflow else tr(" · 待補拍") if incomplete else ""))
-            p.setPen(QPen(QColor("#c25b35" if overflow else "#60737c"), max(1, s)))
-            if frame.left() == self.line_rects[line_number].left() and not notes[indices[0]].repeat_start:
-                p.drawLine(QPointF(frame.left(), cy-20*s), QPointF(frame.left(), cy+24*s))
-            if not notes[indices[-1]].repeat_end:
-                p.drawLine(QPointF(frame.right(), cy-20*s), QPointF(frame.right(), cy+24*s))
-                if indices[-1] == len(notes)-1:
-                    p.drawLine(QPointF(frame.right()-4*s, cy-20*s), QPointF(frame.right()-4*s, cy+24*s))
-            if notes[indices[0]].repeat_start:
-                self._draw_repeat(p, frame.left()+4*s, cy, True)
-            if notes[indices[-1]].repeat_end:
-                self._draw_repeat(p, frame.right()-4*s, cy, False)
-            for i in indices:
-                note, rect = notes[i], self.rects[i]
-                selected = self.selectionModel().isSelected(self.model().index(i, 0))
-                if selected:
-                    p.setBrush(QColor("#d9efe9"))
-                    p.setPen(QPen(QColor("#147b65"), 1.5))
-                    p.drawRoundedRect(rect.adjusted(1, 0, -2, -1), 4*s, 4*s)
-                color = QColor("#10644f" if selected else "#162f40")
-                p.setPen(QPen(color, max(1, s)))
-                long_beats = self.long_beats(note)
-                cx = self.note_center(i)
-                p.setFont(QFont(latin_sans_family(), max(7, int(22*s)), QFont.Weight.DemiBold))
-                number_rect = QRect(int(cx-14*s), int(cy-22*s), int(28*s), int(40*s))
-                p.drawText(number_rect, Qt.AlignmentFlag.AlignCenter, str(note.degree))
-                p.setFont(QFont(latin_sans_family(), max(6, int(13*s))))
-                if note.accidental:
-                    p.drawText(QPointF(cx-24*s, cy+5*s), {"#": "♯", "b": "♭", "n": "♮"}[note.accidental])
-                if note.dotted and note.duration > 2:
-                    p.setBrush(color)
-                    p.drawEllipse(QPointF(cx+14*s, cy), 1.7*s, 1.7*s)
-                beams = {8: 1, 16: 2, 32: 3}.get(note.duration, 0)
-                for beam in range(beams):
-                    y = cy + (17 + beam*4)*s
-                    p.drawLine(QPointF(cx-9*s, y), QPointF(cx+9*s, y))
-                p.setBrush(color)
-                for octave in range(abs(note.octave)):
-                    y = cy - (23+6*octave)*s if note.octave > 0 else cy + (25+4*beams+6*octave)*s
-                    p.drawEllipse(QPointF(cx, y), 1.5*s, 1.5*s)
-                for beat in range(1, long_beats):
-                    x = cx + self.note_main_width(i)*beat/long_beats
-                    p.drawLine(QPointF(x-7*s, cy), QPointF(x+7*s, cy))
-                self._draw_marks(p, note, cx, cy, color, self.line_dynamic_offsets[line_number])
-                self._draw_graces(p, i, cy, color)
-        # Draw connections after all measure backgrounds so spans survive a
-        # bar boundary. Cache one path per system, including wrapped spans.
-        p.setPen(QPen(QColor("#344c59"), max(1, 1.3*s)))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        first = bisect_right(self.line_bottoms, self.verticalOffset() - 1)
-        for line in range(first, len(self.line_rects)):
-            if self.line_rects[line].top() > self.verticalOffset() + self.viewport().height():
-                break
-            self._draw_system_marks(p, line)
-        selection = self.selectionModel().selection()
-        if self.insertion_mode != "edit" and not selection.isEmpty():
-            if self.insertion_mode == "fill":
-                row = self.currentRow()
-                if row < 0 or notes[row].degree != 0:
-                    return
-            elif self.insertion_mode == "end":
-                row = len(self.rects)-1
-            elif self.insertion_mode == "before":
-                row = min(r.top() for r in selection)
-            else:
-                row = max(r.bottom() for r in selection)
-            rect = self.rects[row]
-            x = rect.left() if self.insertion_mode in ("before", "fill") else rect.right()
-            p.setPen(QPen(QColor("#147b65"), 2))
-            p.drawLine(x, rect.top()+3, x, rect.bottom()-3)
+    def set_problems(self, problems: dict, bars: set, barlines: set):
+        self.problems, self.problem_bars, self.problem_barlines = problems, bars, barlines
+        self.viewport().update()

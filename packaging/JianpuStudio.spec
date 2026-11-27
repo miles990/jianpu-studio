@@ -1,6 +1,7 @@
 # Build an inspectable, replaceable-library one-folder application (LGPL).
 # Windows: dist/JianpuStudio/. macOS: additionally dist/JianpuStudio.app
-# (scripts/build_macos.py generates the .icns and adds the engines).
+# (scripts/build_macos.py copies packaging/icon/icon.icns and adds the engines).
+# collect_data_files includes assets/icons/*.svg and assets/symbols/*.png (palette previews).
 import os
 import re
 import sys

@@ -25,20 +25,8 @@ def run(*args, **kwargs):
 
 
 def make_icns(target: Path):
-    """Generate the .icns from the 256 px PNG asset (upscaled for 512 px)."""
-    source = ROOT / "src/jianpu_studio/assets/icon.png"
-    iconset = target.with_suffix(".iconset")
-    shutil.rmtree(iconset, ignore_errors=True)
-    iconset.mkdir(parents=True)
-    for size in (16, 32, 128, 256, 512):
-        for scale in (1, 2):
-            pixels = size * scale
-            if pixels > 1024 or (size == 512 and scale == 2):
-                continue
-            name = f"icon_{size}x{size}{'@2x' if scale == 2 else ''}.png"
-            run("sips", "-z", pixels, pixels, source, "--out", iconset / name, stdout=subprocess.DEVNULL)
-    run("iconutil", "-c", "icns", iconset, "-o", target)
-    shutil.rmtree(iconset)
+    """Use the designed macOS icon (packaging/icon/icon.icns: 16–512 px at 1x and 2x)."""
+    shutil.copyfile(ROOT / "packaging/icon/icon.icns", target)
 
 
 def sign(app: Path):

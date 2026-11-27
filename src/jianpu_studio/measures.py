@@ -325,8 +325,8 @@ def _input_connections(note: Note) -> bool:
     return bool(note.tie or note.spans_start or note.spans_end or note.bar_start or note.bar_end)
 
 
-def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
-    """Fill existing consecutive rests (part 0) without moving any later beat or bar.
+def replace_rest_input(score: Score, row: int, note: Note, part_index: int = 0) -> MeasureEdit:
+    """Fill existing consecutive rests of one part without moving any later beat or bar.
 
     The replacement stays inside one measure, never consumes a pitched note,
     and may consume additional adjacent rests to obtain an exact remainder.
@@ -334,8 +334,8 @@ def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
     Marks on the replaced rest and its bar lines stay; lines through it are cut.
     """
     ranges, entries = _context(score)
-    part = entries[0]
-    notes = score.parts[0].notes
+    part = entries[part_index]
+    notes = score.parts[part_index].notes
     if type(row) is not int or not 0 <= row < len(part):
         raise ValueError(tr("請先選取要填入音符的休止符。"))
     if not isinstance(note, Note):
@@ -352,7 +352,7 @@ def replace_rest_input(score: Score, row: int, note: Note) -> MeasureEdit:
         note = replace(note, tuplet=previous.tuplet, tuplet_start=previous.tuplet_start, tuplet_end=previous.tuplet_end)
     elif note.tuplet:
         raise ValueError(tr("請先填入音符，再選取完整的三個音符設定三連音。"))
-    _, bar_end = next((start, end) for start, end in ranges[0] if start <= row < end)
+    _, bar_end = next((start, end) for start, end in ranges[part_index] if start <= row < end)
     consumed, end, remainder = 0, row, None
     while end < bar_end and notes[end].degree == 0:
         rest = notes[end]

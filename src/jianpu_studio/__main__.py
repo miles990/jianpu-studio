@@ -14,14 +14,19 @@ def main() -> int:
 
     from .app import MainWindow
     from .engine import app_root
-    from .i18n import tr, ui_font_family
+    from .i18n import tr
     from .platform_support import FileOpenRouter, initial_path_from_args
 
     app = QApplication(sys.argv)
     app.setOrganizationName("JianpuStudio")
     self_test = len(sys.argv) > 2 and sys.argv[1] == "--self-test"
     app.setApplicationName("JianpuStudioSelfTest" if self_test else "JianpuStudio")
-    app.setFont(QFont(ui_font_family(), 10))
+    font = QFont()
+    from .i18n import ui_font_stack
+    font.setFamilies(ui_font_stack())
+    font.setPixelSize(13)
+    app.setFont(font)
+    app.setStyle("Fusion")
     # Installed before any window so a Finder "open document" is never lost.
     file_open = FileOpenRouter(app)
     icon = Path(__file__).parent / "assets/icon.png"

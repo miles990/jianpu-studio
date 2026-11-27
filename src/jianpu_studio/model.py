@@ -13,6 +13,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field, fields, replace
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path
 
 from . import i18n, migrate, symbols
@@ -227,6 +228,13 @@ def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
     return ranges
 
 
+@lru_cache(maxsize=32)
+def _bar_ticks(meter: str) -> int:
+    """Ticks per bar (hot: every bar-boundary test asks), exact integer arithmetic."""
+    numerator, denominator = meter.split("/")
+    return int(numerator) * 4 * TICKS_PER_QUARTER // int(denominator)
+
+
 def pickup_choices(bar_ticks: int) -> list[int]:
     """Pickup lengths upstream can write (``4/4,8`` / ``3/4,4.``): one plain or dotted value."""
     out = []
@@ -323,7 +331,7 @@ class Score:
 
     @property
     def bar_ticks(self) -> int:
-        return int(self.bar_length * TICKS_PER_QUARTER)
+        return _bar_ticks(self.meter)
 
     @property
     def first_bar_ticks(self) -> int:

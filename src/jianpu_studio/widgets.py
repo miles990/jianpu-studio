@@ -1,47 +1,108 @@
-"""Shared appearance for the compact desktop workspace."""
-from . import i18n
+"""Shared appearance helpers; every colour comes from ``theme`` tokens."""
+from __future__ import annotations
 
-_TEMPLATE = """
-QMainWindow, QDialog { background: #f5f7f6; color: #172f39; }
-QWidget { font-family: @FAMILY@; font-size: 13px; color: #172f39; }
-QLabel#brand { font-size: 19px; font-weight: 700; color: #172f39; }
-QLabel#muted { color: #75858a; }
-QLabel#section { font-size: 16px; font-weight: 700; }
-QLabel#notice { background: #fff5db; color: #745619; padding: 10px; border-radius: 6px; }
-QPushButton, QToolButton { background: #ffffff; border: 1px solid #dbe3e0; border-radius: 5px; padding: 5px 8px; }
-QPushButton:hover, QToolButton:hover { background: #edf5f1; border-color: #78b3a4; }
-QPushButton:checked { background: #e1f3ed; border-color: #197e69; }
-QPushButton:pressed { background: #d4eae2; }
-QPushButton:disabled, QToolButton:disabled { color: #a1adaa; background: #edf0ee; }
-QPushButton#primary { background: #197e69; color: #ffffff; border: 1px solid #197e69; font-weight: 700; }
-QPushButton#primary:hover { background: #126651; }
-QPushButton#pitch { min-width: 24px; min-height: 24px; font-family: @SANS@; font-size: 21px; font-weight: 600; }
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit { border: 1px solid #d6dfdc; border-radius: 5px; padding: 4px; background: white; selection-background-color: #197e69; }
-QLineEdit:focus, QPlainTextEdit:focus { border: 1px solid #197e69; }
-QAbstractItemView#notes { background: #edf1f3; border: 1px solid #d5dde2; border-radius: 6px; }
-QTabWidget::pane { border: 1px solid #dbe3e0; background: #ffffff; border-radius: 6px; }
-QTabBar::tab { padding: 7px 10px; background: #edf1ef; border: 0; }
-QTabBar::tab:selected { background: #ffffff; color: #197e69; border-bottom: 2px solid #197e69; }
-QGroupBox { border: 1px solid #dbe3e0; border-radius: 6px; margin-top: 10px; padding-top: 14px; }
-QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
-QGroupBox#score_settings, QGroupBox#note_tools, QGroupBox#measure_tools { background: #ffffff; margin-top: 9px; padding-top: 9px; }
-QGroupBox#score_settings::title, QGroupBox#note_tools::title, QGroupBox#measure_tools::title { color: #17664f; font-weight: 600; }
-QWidget#tool_panel QPushButton, QWidget#tool_panel QToolButton { padding: 2px 5px; }
-QWidget#tool_panel QComboBox, QWidget#tool_panel QSpinBox { padding: 2px 4px; }
-QWidget#tool_panel QPushButton#pitch { padding: 3px; min-width: 24px; min-height: 24px; font-size: 19px; }
-QStatusBar { background: #eaf0ed; }
-QSplitter::handle { background: #e1e7e4; width: 2px; }
-QProgressBar { border: none; background: #e1e7e4; height: 4px; }
-QProgressBar::chunk { background: #197e69; }
-QMenuBar, QMenu { background: #ffffff; }
-QMenu::item:selected { background: #e1f3ed; }
-"""
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QToolButton
+
+from . import i18n, icons, theme
 
 
-def stylesheet(language: str = "zh_TW") -> str:
-    """The workspace stylesheet with the CJK font stack of the interface language."""
-    cjk, sans = i18n.ui_font_family(language), i18n.latin_sans_family()
-    return _TEMPLATE.replace("@FAMILY@", f"'{cjk}', '{sans}'").replace("@SANS@", f"'{sans}'")
+def stylesheet(language: str = "zh_TW", scheme: str = "light") -> str:
+    """The application style sheet for an interface language (CJK font stack) and scheme."""
+    return theme.build_qss(theme.tokens(scheme), language)
 
 
-STYLE = stylesheet("zh_TW")
+def label(text: str, name: str = "", wrap: bool = False, role: str = "") -> QLabel:
+    item = QLabel(text)
+    item.setObjectName(name)
+    item.setWordWrap(wrap)
+    item.setTextFormat(Qt.TextFormat.PlainText)
+    if role:
+        item.setProperty("role", role)
+    return item
+
+
+def tool(text: str = "", icon_name: str = "", tip: str = "", kind: str = "", fn=None, *,
+         name: str = "", checkable: bool = False, text_beside: bool = True, icon_role: str = "text",
+         size: int = 18) -> QToolButton:
+    """A tool button with an optional themed icon; tooltip text should name the shortcut."""
+    button = QToolButton()
+    if text:
+        button.setText(text)
+    if icon_name:
+        icons.attach(button, icon_name, icon_role, size)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon if text and text_beside and icon_name
+                              else Qt.ToolButtonStyle.ToolButtonIconOnly if icon_name and not text
+                              else Qt.ToolButtonStyle.ToolButtonTextOnly)
+    if tip:
+        button.setToolTip(tip)
+        if not text:
+            button.setAccessibleName(tip)
+    if kind:
+        button.setProperty("kind", kind)
+    if name:
+        button.setObjectName(name)
+    button.setCheckable(checkable)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    if fn is not None:
+        button.clicked.connect(fn)
+    return button
+
+
+def push(text: str, fn=None, kind: str = "", name: str = "") -> QPushButton:
+    button = QPushButton(text)
+    if kind:
+        button.setProperty("kind", kind)
+    if name:
+        button.setObjectName(name)
+    if fn is not None:
+        button.clicked.connect(fn)
+    return button
+
+
+def rule(vertical: bool = False) -> QFrame:
+    line = QFrame()
+    line.setObjectName("vrule" if vertical else "rule")
+    return line
+
+
+def segment(buttons) -> None:
+    """Join buttons into one segmented control (rounded only at the ends)."""
+    buttons = list(buttons)
+    for index, button in enumerate(buttons):
+        position = "first" if index == 0 else "last" if index == len(buttons) - 1 else "middle"
+        button.setProperty("position", position if len(buttons) > 1 else "")
+
+
+class ElidedLabel(QLabel):
+    """A label that ends with … instead of being cut, with the full text as tooltip."""
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setMinimumWidth(40)
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(40)
+        return hint
+
+    def paintEvent(self, event):
+        from PySide6.QtGui import QPainter
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.setFont(self.font())
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        painter.drawText(self.rect(), int(self.alignment()) | int(Qt.AlignmentFlag.AlignVCenter), text)
+        painter.end()
+
+
+def repolish(widget) -> None:
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
+STYLE = None  # 0.3.x name; the style sheet now depends on the theme (see theme.ThemeManager)
+__all__ = ["stylesheet", "label", "tool", "push", "rule", "segment", "repolish", "i18n"]

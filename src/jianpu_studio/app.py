@@ -7,8 +7,19 @@ import tempfile
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QIODevice, QSettings, QStandardPaths, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QPixmap
+from PySide6.QtCore import (
+    QBuffer,
+    QIODevice,
+    QPoint,
+    QSettings,
+    QStandardPaths,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
     QApplication,
@@ -25,7 +36,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import __version__, i18n, migrate
+from . import __version__, i18n, icons, migrate, theme
 from .editing import EditActions
 from .engine import Cancelled, find_tool, recognize, render
 from .i18n import tr
@@ -40,7 +51,6 @@ from .model import (
 from .musicxml import read_xml, visual_import
 from .photo import PhotoDialog
 from .playback import MidiPlayer
-from .widgets import stylesheet
 from .workspace import build_workspace
 
 
@@ -57,6 +67,17 @@ def button(text: str, fn, name: str = "") -> QPushButton:
     item.setObjectName(name)
     item.clicked.connect(fn)
     return item
+
+
+def symbols_text_marks(score):
+    """Technique marks printed as Chinese text (their script follows the score, not the UI)."""
+    from . import symbols
+    for part in score.parts:
+        for note in part.notes:
+            for mark in note.marks:
+                symbol = symbols.SYMBOLS[mark]
+                if symbol.canvas_text("tc") != symbol.canvas_text("sc"):
+                    yield mark
 
 
 class Task(QThread):
@@ -77,12 +98,21 @@ class Task(QThread):
 class MainWindow(EditActions, QMainWindow):
     def __init__(self, recovery: bool = True, initial_path: Path | None = None):
         super().__init__()
-        self.setMinimumSize(860, 560)
+        self.setMinimumSize(960, 600)
         self.resize(1380, 850)
         self.settings = QSettings("JianpuStudio", "JianpuStudio")
         i18n.init_language(self.settings)
         i18n.on_change(self.retranslate)
-        self.setStyleSheet(stylesheet(i18n.current_language()))
+        self.theme = theme.ThemeManager(self.settings, self)
+        self.theme.apply(i18n.current_language())
+        self.theme.changed.connect(self.theme_changed)
+        self.problem_list = []
+        self.play_map = None
+        self.play_timer = QTimer(self)
+        self.play_timer.setInterval(50)
+        self.play_timer.timeout.connect(self.playback_tick)
+        self.panel_collapsed = False
+        self.shortcuts_dialog = None
         self.project = demo_project()
         self.path: Path | None = None
         self.dirty = False
@@ -124,8 +154,17 @@ class MainWindow(EditActions, QMainWindow):
         self.autopreview.timeout.connect(lambda: self.render_score(False))
         self.build_ui()
         self.build_menus()
+        self.build_shortcuts()
+        self.theme_changed()
         self.sync()
         self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
+        self.language_buttons[i18n.current_language()].setChecked(True)
+        launches = int(self.settings.value("guide/launches", 0) or 0)
+        self.settings.setValue("guide/launches", launches + 1)
+        self.guide.setVisible(self.guide.should_show())
+        self.start_page.refresh(self.recent_files())
+        if recovery and initial_path is None and not self.recent_files() and not self.recovery_path.is_file():
+            self.editor_stack.setCurrentIndex(1)
         self.autosave = QTimer(self)
         self.autosave.setInterval(15000)
         self.autosave.timeout.connect(self.write_recovery)
@@ -144,38 +183,95 @@ class MainWindow(EditActions, QMainWindow):
             self.open_file(path=initial_path)
 
     def build_ui(self):
-        build_workspace(self, label, button)
+        build_workspace(self)
+        self.apply_responsive()
 
     def build_menus(self):
-        def action(menu, text, fn, shortcut=None):
+        def action(menu, text, fn, shortcut=None, icon_name=""):
             a = QAction(text, self)
             a.triggered.connect(fn)
             if shortcut:
                 a.setShortcut(shortcut)
+            if icon_name:
+                a.setIcon(icons.icon(icon_name))
             menu.addAction(a)
             return a
         file_menu = self.menuBar().addMenu(tr("檔案"))
-        action(file_menu, tr("新建"), self.new_project, QKeySequence.StandardKey.New)
-        action(file_menu, tr("開啟…"), self.open_file, QKeySequence.StandardKey.Open)
-        action(file_menu, tr("開啟「小星星」範例"), self.load_demo)
-        action(file_menu, tr("儲存"), self.save, QKeySequence.StandardKey.Save)
+        action(file_menu, tr("新建"), self.new_project, QKeySequence.StandardKey.New, "doc-new")
+        action(file_menu, tr("開始頁"), self.show_start_page, None, "template-blank")
+        action(file_menu, tr("開啟…"), self.open_file, QKeySequence.StandardKey.Open, "folder-open")
+        self.recent_menu = file_menu.addMenu(tr("最近開啟"))
+        self.recent_menu.aboutToShow.connect(self.fill_recent_menu)
+        action(file_menu, tr("開啟「小星星」範例"), self.load_demo, None, "example")
+        action(file_menu, tr("開啟「晨光二重奏」範例"), lambda: self.open_example("duet"), None, "example")
+        action(file_menu, tr("儲存"), self.save, QKeySequence.StandardKey.Save, "save")
         action(file_menu, tr("另存新檔…"), self.save_as, QKeySequence.StandardKey.SaveAs)
         file_menu.addSeparator()
         action(file_menu, tr("匯入 MusicXML…"), self.import_musicxml)
-        action(file_menu, tr("匯出 PDF…"), lambda: self.export("pdf"), "Ctrl+E")
+        action(file_menu, tr("匯出 PDF…"), lambda: self.export("pdf"), "Ctrl+E", "file-pdf")
+        action(file_menu, tr("匯出 MIDI…"), lambda: self.export("midi"), None, "file-midi")
+        action(file_menu, tr("列印預覽"), self.show_print_preview, "F5", "print")
+        file_menu.addSeparator()
         action(file_menu, tr("離開"), self.close, QKeySequence.StandardKey.Quit).setMenuRole(QAction.MenuRole.QuitRole)
         edit = self.menuBar().addMenu(tr("編輯"))
-        self.undo_action = action(edit, tr("復原"), self.undo, QKeySequence.StandardKey.Undo)
-        self.redo_action = action(edit, tr("重做"), self.redo, QKeySequence.StandardKey.Redo)
+        self.undo_action = action(edit, tr("復原"), self.undo, QKeySequence.StandardKey.Undo, "undo")
+        self.redo_action = action(edit, tr("重做"), self.redo, QKeySequence.StandardKey.Redo, "redo")
+        edit.addSeparator()
+        for text, command in ((tr("剪下"), "cut"), (tr("複製"), "copy"), (tr("貼上"), "paste"),
+                              (tr("重複"), "duplicate"), (tr("刪除音符"), "delete")):
+            action(edit, text, lambda checked=False, c=command: self.note_command(c))
+        edit.addSeparator()
+        position_menu = edit.addMenu(tr("新增音符的位置"))
+        self.position_group = QActionGroup(self)
+        for index, text in enumerate((tr("插在選取後"), tr("插在選取前"), tr("加到曲尾"))):
+            item = QAction(text, self)
+            item.setCheckable(True)
+            item.setChecked(index == 0)
+            item.triggered.connect(lambda checked=False, i=index: self.insert_position.setCurrentIndex(i))
+            self.position_group.addAction(item)
+            position_menu.addAction(item)
         measures = self.menuBar().addMenu(tr("小節"))
         measures.aboutToShow.connect(lambda: (measures.clear(), self.add_measure_menu(measures)))
         notation = self.notation_menu()
         notation.setTitle(tr("記號"))
+        notation.insertSeparator(notation.actions()[0])
+        search = QAction(tr("搜尋記號…"), self)
+        search.setShortcut(QKeySequence.StandardKey.Find)
+        search.triggered.connect(lambda: self.palette.focus_search())
+        notation.insertAction(notation.actions()[0], search)
+        continuous = QAction(tr("結束連續套用"), self)
+        continuous.triggered.connect(lambda: self.set_continuous(""))
+        notation.addAction(continuous)
         self.menuBar().addMenu(notation)
         view = self.menuBar().addMenu(tr("檢視"))
         action(view, tr("編輯樂譜"), lambda: self.change_workspace(0))
+        self.panel_action = action(view, tr("記號面板"), self.toggle_panel, "F4", "panel-right")
+        self.panel_action.setCheckable(True)
+        self.panel_action.setChecked(True)
+        appearance = view.addMenu(tr("外觀"))
+        self.appearance_group = QActionGroup(self)
+        self.appearance_actions = {}
+        for key, text in (("system", tr("跟隨系統")), ("light", tr("淺色")), ("dark", tr("深色"))):
+            item = QAction(text, self)
+            item.setCheckable(True)
+            item.triggered.connect(lambda checked=False, k=key: self.theme.set_appearance(k))
+            self.appearance_group.addAction(item)
+            appearance.addAction(item)
+            self.appearance_actions[key] = item
+        appearance.addSeparator()
+        self.white_paper_action = QAction(tr("深色時譜紙仍用白色"), self)
+        self.white_paper_action.setCheckable(True)
+        self.white_paper_action.setChecked(self.theme.white_paper)
+        self.white_paper_action.triggered.connect(self.theme.set_white_paper)
+        appearance.addAction(self.white_paper_action)
+        zoom = view.addMenu(tr("縮放"))
+        action(zoom, tr("放大"), lambda: self.step_zoom(1), "Ctrl+=")
+        action(zoom, tr("縮小"), lambda: self.step_zoom(-1), "Ctrl+-")
+        action(zoom, tr("實際大小（100%）"), lambda: self.score_zoom.setCurrentIndex(1), "Ctrl+0")
+        self.hidden_action = action(view, tr("顯示待老師確認的記號"), lambda checked: self.palette.set_show_hidden(checked))
+        self.hidden_action.setCheckable(True)
+        self.palette.showHiddenChanged.connect(self.hidden_action.setChecked)
         tools_menu = self.menuBar().addMenu(tr("工具"))
-        action(tools_menu, tr("列印預覽"), self.show_print_preview, "F5")
         action(tools_menu, tr("作業訊息"), self.show_work_log)
         action(tools_menu, tr("工具與環境設定"), self.tool_settings).setMenuRole(QAction.MenuRole.PreferencesRole)
         self.language_menu = self.menuBar().addMenu(i18n.LANGUAGE_MENU_TITLE)
@@ -191,9 +287,162 @@ class MainWindow(EditActions, QMainWindow):
             self.language_actions[code] = item
         self.language_actions[i18n.current_language()].setChecked(True)
         help_menu = self.menuBar().addMenu(tr("說明"))
-        action(help_menu, tr("操作說明"), self.show_help, "F1")
-        action(help_menu, tr("檢查更新…"), self.check_updates)
+        action(help_menu, tr("操作說明"), self.show_help, "F1", "keyboard")
+        action(help_menu, tr("開始寫譜引導"), self.show_guide, None, "lightbulb")
+        action(help_menu, tr("檢查更新…"), self.check_updates, None, "update")
         action(help_menu, tr("關於"), self.show_about).setMenuRole(QAction.MenuRole.AboutRole)
+
+    def build_shortcuts(self):
+        """Window-wide keys that must work wherever the focus is."""
+        def key(sequence, fn):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(fn)
+            return shortcut
+        key("F6", lambda: self.cycle_focus(1))
+        key("Shift+F6", lambda: self.cycle_focus(-1))
+
+    def cycle_focus(self, step):
+        """F6: score → palette → inspector → score bar (design §2.7)."""
+        stops = [self.notes, self.palette.search, self.inspector, self.title_field]
+        focus = QApplication.focusWidget()
+        index = next((i for i, w in enumerate(stops) if w is focus or (focus is not None and w.isAncestorOf(focus))), -1)
+        target = stops[(index + step) % len(stops)]
+        if target is self.inspector:
+            chips = [chip.remove for chip in self.inspector.chip_widgets]
+            buttons = [b for b in self.inspector.measure_buttons.values() if b.isVisible()]
+            target = (chips or buttons or [self.inspector.grace_button if self.inspector.grace_button.isVisible()
+                                           else self.title_field])[0]
+        target.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def toggle_panel(self):
+        """F4 / 檢視 → 記號面板: collapse the side panel to give the score the width."""
+        self.panel_collapsed = not self.panel_collapsed
+        self.side_panel.setVisible(not self.panel_collapsed and not self.print_preview_active)
+        self.panel_action.setChecked(not self.panel_collapsed)
+
+    def show_guide(self):
+        self.settings.setValue("guide/hidden", False)
+        self.settings.setValue("guide/launches", 0)
+        self.guide.dismissed_now = False
+        self.guide.done.clear()
+        self.guide.refresh()
+        self.apply_responsive()
+
+    def show_guide_popup(self):
+        """Short windows: the status-bar 「開始寫譜 2/5 ›」 lists the steps."""
+        from PySide6.QtWidgets import QMenu
+
+        from .startpage import GUIDE_STEPS
+        menu = QMenu(self)
+        for index, text in enumerate(GUIDE_STEPS, 1):
+            menu.addAction(("✓ " if index in self.guide.done else f"{index}. ") + tr(text)).setEnabled(False)
+        menu.addSeparator()
+        menu.addAction(tr("不再顯示 ×"), self.guide.dismiss)
+        menu.exec(self.guide_status.mapToGlobal(self.guide_status.rect().topLeft()) - QPoint(0, menu.sizeHint().height()))
+
+    def show_start_page(self):
+        self.start_page.refresh(self.recent_files())
+        self.editor_stack.setCurrentIndex(1)
+
+    def recent_files(self):
+        raw = self.settings.value("recent_files", [])
+        values = [raw] if isinstance(raw, str) else list(raw or [])
+        return [v for v in values if v]
+
+    def remember_recent(self, path):
+        files = [str(path)] + [p for p in self.recent_files() if p != str(path)]
+        self.settings.setValue("recent_files", files[:10])
+
+    def fill_recent_menu(self):
+        self.recent_menu.clear()
+        files = self.recent_files()
+        if not files:
+            self.recent_menu.addAction(tr("還沒有開過樂譜")).setEnabled(False)
+        for path in files:
+            self.recent_menu.addAction(Path(path).name, lambda p=path: self.open_file(path=Path(p))).setToolTip(path)
+
+    def theme_changed(self):
+        colors = self.theme.colors
+        self.notes.set_colors(colors)
+        self.palette.set_colors(colors)
+        self.inspector.colors = colors
+        appearance = self.theme.appearance
+        if hasattr(self, "appearance_actions"):
+            self.appearance_actions[appearance].setChecked(True)
+        icons.attach(self.theme_button, {"light": "sun", "dark": "moon", "system": "theme-auto"}[appearance], "text2", 16)
+        self.theme_button.setToolTip({"light": tr("外觀：淺色（點一下換深色）"), "dark": tr("外觀：深色（點一下換成跟隨系統）"),
+                                      "system": tr("外觀：跟隨系統（點一下換淺色）")}[appearance])
+        self.refresh_inspector()
+
+    def cycle_theme(self):
+        self.theme.cycle()
+
+    def step_zoom(self, step):
+        index = max(0, min(self.score_zoom.count() - 1, self.score_zoom.currentIndex() + step))
+        self.score_zoom.setCurrentIndex(index)
+
+    def status_message_changed(self, message):
+        """Temporary status messages show in the middle of the status bar, then the hint returns."""
+        if message:
+            self.selection_label.setText(message)
+            self.selection_label.setToolTip(message)
+        else:
+            self.selection_label.setToolTip("")
+            self.update_selection()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.apply_responsive()
+
+    def apply_responsive(self):
+        """Collapse order of design §1.3 (each step was screenshot-checked)."""
+        if not hasattr(self, "side_panel"):
+            return
+        width, height = self.width(), self.height()
+        self.parts_label.setVisible(width > 1300 and len(self.project.score.parts) > 1)
+        self.composer_label.setVisible(width > 1300)
+        self.composer_field.setVisible(width > 1300)
+        self.composer_rule.setVisible(width > 1300)
+        icon_only = width <= 1240
+        for button in self.file_buttons:
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly if icon_only
+                                      else Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.preview_button_top.setText(tr("預覽") if icon_only else tr("列印預覽"))
+        narrow = width <= 1180
+        panel = 276 if narrow else 328
+        self.side_panel.setFixedWidth(panel)
+        if not self.print_preview_active:
+            self.split.setSizes([max(1, width - panel - 1), 0, panel])
+        self.palette.grid.compact = narrow
+        self.palette.grid.relayout()
+        self.palette.detail.set_compact(narrow or height <= 700)
+        tight = width <= 1120
+        self.extra_host.setVisible(not tight)
+        self.add_bar_button.setVisible(not tight)
+        self.note_more_button.setVisible(tight)
+        self.layout_button.setVisible(not tight)
+        self.layout_rule.setVisible(not tight)
+        smallest = width <= 1040
+        self.inspector.set_compact(smallest)
+        for button in self.pitch_buttons:
+            button.setFixedSize(26 if smallest else 30, 30)
+        for button in self.duration_buttons.values():
+            button.setFixedSize(28 if smallest else 32, 30)
+        for button in (self.dot_button, self.octave_up_button, self.octave_down_button):
+            button.setFixedSize(28 if smallest else 30, 30)
+        self.note_tools.layout().setSpacing(2 if smallest else 3)
+        for button in self.input_mode_buttons.values():
+            button.setMinimumWidth(40 if smallest else 48)
+        self.palette.set_narrow(narrow)
+        # Short windows: the guide shrinks into the status bar (design §1.3).
+        guide_wanted = self.guide.should_show() and not self.guide.dismissed_now
+        compact_guide = height <= 700 or width <= 1100
+        self.guide.setVisible(guide_wanted and not compact_guide)
+        self.guide_status.setVisible(guide_wanted and compact_guide)
+        self.guide_status.setText(tr("開始寫譜 {done}/5 ›").format(done=len(self.guide.done)))
+        self.counts_label.setVisible(width > 1100)
+        self.update_transport()
 
     def show_about(self):
         QMessageBox.about(self, tr("關於簡譜工房"), tr(
@@ -208,11 +457,15 @@ class MainWindow(EditActions, QMainWindow):
         self.settings.setValue(i18n.SETTINGS_KEY, language)
         i18n.set_language(language)
         self.language_actions[language].setChecked(True)
+        self.language_buttons[language].setChecked(True)
 
     def retranslate(self, new, old):
         """Convert every visible text in place (no widget is rebuilt or reconnected)."""
-        self.setStyleSheet(stylesheet(new))
+        self.theme.apply(new)
         self.language_actions[new].setChecked(True)
+        self.language_buttons[new].setChecked(True)
+        for code, button in self.language_buttons.items():
+            button.setChecked(code == new)
         message = self.statusBar().currentMessage()
         i18n.translate_tree(self, new, old)
         log = self.log.toPlainText()
@@ -220,9 +473,18 @@ class MainWindow(EditActions, QMainWindow):
         if converted != log:
             self.log.setPlainText(converted)
         self.notes.refresh_language()
+        self.palette.retranslate()
+        self.guide.retranslate()
+        if self.shortcuts_dialog is not None:
+            i18n.translate_tree(self.shortcuts_dialog, new, old)
         self.sync()
+        self.apply_responsive()
         if message:
             self.statusBar().showMessage(i18n.convert(message, new, old), 5000)
+        if self.project.score.print_variant != ("sc" if new == i18n.SIMPLIFIED else "tc") and any(
+                symbols_text_marks(self.project.score)):
+            self.toast.show_text(tr("這份樂譜印出的技法字仍是{script}（在「紙張與排版」可改）").format(
+                script=tr("繁體") if self.project.score.print_variant == "tc" else tr("簡體")))
 
     def current_tool(self, name):
         return find_tool(name, str(self.settings.value(name, "")))
@@ -271,8 +533,12 @@ class MainWindow(EditActions, QMainWindow):
         self.render_cancelled = False
         self.play_after_render = False
         self.output_request = None
-        self.player.stop()
+        self.stop_playback()
+        self.set_continuous("")
         self.project, self.path, self.dirty = project, path, dirty
+        self.editor_stack.setCurrentIndex(0)
+        self.notes.reset_selection()
+        self.notes.set_score(project.score, 0)
         self.next_note = Note()
         self.loading = True
         self.input_mode.setCurrentIndex(0)
@@ -320,6 +586,8 @@ class MainWindow(EditActions, QMainWindow):
                 raise ValueError(tr("請開啟 .jps 樂譜專案；MusicXML 請用「檔案 → 匯入 MusicXML」。本版不提供文字樂譜編輯。"))
             self.reset(load_project(path), path)
             self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
+            if path.parent.name != "examples":
+                self.remember_recent(path)
         except Exception as exc:
             self.error(tr("無法開啟樂譜"), exc)
 
@@ -329,6 +597,7 @@ class MainWindow(EditActions, QMainWindow):
             return self.save_as()
         try:
             save_project(self.path, self.project)
+            self.remember_recent(self.path)
             self.dirty = False
             self.clear_recovery()
             self.sync()
@@ -633,23 +902,92 @@ class MainWindow(EditActions, QMainWindow):
 
     def play_midi(self):
         if self.player.playing:
-            self.player.stop()
+            self.stop_playback()
             return
         if self.play_after_render:
             self.play_after_render = False
             self.statusBar().showMessage(tr("已取消排版完成後的試聽。"), 4000)
+            self.update_transport()
             return
         self.capture_fields()
         if not self.result or self.rendered_revision != self.revision:
             self.play_after_render = True
+            self.update_transport()
             self.render_score(True, create_pdf=False)
             return
         result = self.result
         if result and result.midi:
+            from .playmap import PlayMap
             try:
-                self.player.play(result.midi)
+                self.play_map = PlayMap(self.project.score, self.part)
+            except Exception:
+                self.play_map = None   # position display is optional: never block playback
+            start = 0.0
+            bars = self.selected_measures()
+            if bars and self.play_map is not None:
+                start = self.play_map.first_time_of_bar(bars[0]) or 0.0
+            try:
+                self.player.play(result.midi, start) if start else self.player.play(result.midi)
             except RuntimeError as exc:
                 self.error(tr("無法播放 MIDI"), exc)
+                return
+            self.guide.mark(4)
+            self.play_timer.start()
+            self.update_transport()
+
+    def stop_playback(self):
+        self.player.stop()
+        self.play_timer.stop()
+        if self.notes.play_note is not None:
+            self.notes.play_note = None
+            self.notes.viewport().update()
+        self.update_transport()
+
+    def playback_tick(self):
+        if not self.player.playing:
+            self.stop_playback()
+            return
+        position = self.player.position()
+        onset = self.play_map.at(position) if self.play_map is not None else None
+        if onset is not None and onset.row < len(self.project.score.parts[self.part].notes):
+            note = (self.part, onset.row)
+            if note != self.notes.play_note:
+                self.notes.play_note = note
+                line = self.notes.note_line(*note)
+                if line is not None:
+                    self.notes.scroll_to_system(line)
+                self.notes.viewport().update()
+        self.update_transport(position, onset)
+
+    def update_transport(self, position=None, onset=None):
+        """Idle: 試聽 · 從第 7 小節; playing: 0:24 / 0:52 · 第 6 小節 (design §1.2)."""
+        if not hasattr(self, "transport_label"):
+            return
+        playing = self.player.playing
+        icons.attach(self.play_button, "stop" if playing else "play", "onaccent", 14)
+        self.play_button.setToolTip(tr("停止（Enter）") if playing else tr("Enter 試聽 / 停止（音符區內）"))
+        score = self.project.score
+        compact = self.width() <= 1240
+        if playing:
+            pos = position if position is not None else self.player.position()
+            total = self.play_map.total_seconds if self.play_map is not None else 0
+            text = f"{int(pos) // 60}:{int(pos) % 60:02d}"
+            if total:
+                text += f" / {int(total) // 60}:{int(total) % 60:02d}"
+            if onset is not None:
+                from .notation_edit import bar_number
+                text += " · " + tr("第 {bar} 小節").format(bar=bar_number(score, onset.bar))
+        elif self.play_after_render:
+            text = tr("準備試聽…")
+        else:
+            bars = self.selected_measures() if hasattr(self, "notes") else []
+            if bars:
+                from .notation_edit import bar_number
+                where = tr("從第 {bar} 小節").format(bar=bar_number(score, bars[0]))
+            else:
+                where = tr("從頭")
+            text = where if compact else tr("試聽 · {where}").format(where=where)
+        self.transport_label.setText(text)
 
     def fit_pdf(self):
         self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
@@ -768,23 +1106,13 @@ class MainWindow(EditActions, QMainWindow):
             self.error(tr("無法開啟 Audiveris"), exc)
 
     def show_help(self):
-        QMessageBox.information(self, tr("快速上手 / 快捷鍵"), (
-            tr("上方樂譜設定：直接修改曲名、調號、拍號與速度。") + "\n" +
-            tr("左側音符工具：按「新增音符」「修改音符」或「填寫小節」，再選音高、時值、八度、升降與附點。") + "\n" +
-            tr("填寫小節會取代休止空位，不推移後面的音樂。修改音符只改動選取音符的指定屬性。") + "\n" +
-            tr("左側小節工具：點小節號選取，再新增、重複、清空或刪除。清空保留拍數，刪除會移除整節。") + "\n" +
-            tr("力度／演奏、連線／反覆、倚音／二胡：三個按鈕直接開啟對應設定。") + "\n\n" +
-            tr("音符區快捷鍵：") + "\n" +
-            tr("0–7 輸入；Space 切換新增／修改；Enter 試聽／停止。") + "\n" +
-            tr("Q W E R A S：全、二分、四分、八分、十六分、三十二分。") + "\n" +
-            tr("↑ ↓ 八度；. 附點；[ ] 縮短／延長。") + "\n" +
-            tr("Shift 連選、Ctrl 加選、Ctrl+A 全選、M 選小節。") + "\n" +
-            tr("Ctrl+C / X / V 複製／剪下／貼上；Ctrl+D 重複；Delete 刪除音符。") + "\n" +
-            tr("Insert 前插小節；Ctrl+Insert 批次新增；Ctrl+B 曲尾新增；Ctrl+Delete 刪除小節。") + "\n" +
-            tr("Ctrl+Z 復原；Ctrl+Y 重做；Ctrl+S 儲存；F5 列印預覽。") + "\n\n" +
-            tr("三連音：選一個未附點音符或休止符，用音符工具「三連音」拆成三份，總拍數不變。") + "\n" +
-            tr("PDF 只在列印／匯出時產生，平常直接在主譜面閱讀與編輯。") + "\n" +
-            tr("每 15 秒保留本機復原暫存。MIDI 使用系統內建音色。")))
+        """F1: the searchable shortcut list, non-modal so it can stay open while writing."""
+        from .shortcuts import ShortcutsDialog
+        if self.shortcuts_dialog is None:
+            self.shortcuts_dialog = ShortcutsDialog(self)
+        self.shortcuts_dialog.show()
+        self.shortcuts_dialog.raise_()
+        self.shortcuts_dialog.activateWindow()
 
     def check_updates(self):
         from .update_dialog import UpdateDialog
@@ -823,7 +1151,7 @@ class MainWindow(EditActions, QMainWindow):
             return
         i18n.off_change(self.retranslate)
         self.autosave.stop()
-        self.player.stop()
+        self.stop_playback()
         self.autopreview.stop()
         self.clear_recovery()
         self.clear_pdf_preview()

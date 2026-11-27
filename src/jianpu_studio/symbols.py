@@ -15,10 +15,9 @@ palette but are not stored as ids.
 from __future__ import annotations
 
 import re
-import unicodedata
 from dataclasses import dataclass, field
 
-from .i18n import N_, catalog, tr
+from .i18n import N_, tr
 from .symbols_data import ROWS
 
 # ``\name`` words accepted in 0.3.x sources; the registry adds to this set.
@@ -147,21 +146,14 @@ def symbols(*, include_hidden: bool = False, category: str | None = None, group:
             and (category is None or s.category == category) and (group is None or s.group == group)]
 
 
-def _fold(text: str) -> str:
-    return unicodedata.normalize("NFKC", text).casefold()
+def search(query: str, *, include_hidden: bool = False, instrument: str = "all") -> list[Symbol]:
+    """Ranked palette search: names in both scripts, pinyin by whole syllable, English id/keys.
 
-
-def search(query: str, *, include_hidden: bool = False) -> list[Symbol]:
-    """Match every query word against the names in both scripts, the id and the search keys."""
-    words = _fold(query).split()
-    simplified = catalog()
-    found = []
-    for symbol in symbols(include_hidden=include_hidden):
-        haystack = _fold(" ".join((symbol.name, simplified.get(symbol.name, ""), symbol.id, symbol.keys,
-                                  symbol.canvas_text("tc"), symbol.canvas_text("sc"))))
-        if all(word in haystack for word in words):
-            found.append(symbol)
-    return found
+    Pinyin matches whole syllables only (``hua`` finds 上滑音 but not 雙小節線 *shuang*);
+    see ``symbols_ui.search`` for the ranking (wow/design.md §2.4).
+    """
+    from .symbols_ui import search as ranked
+    return ranked(query, instrument=instrument, include_hidden=include_hidden)
 
 
 def sort_ids(ids) -> tuple[str, ...]:

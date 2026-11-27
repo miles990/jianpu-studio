@@ -28,11 +28,15 @@ CJK = re.compile("[一-鿿]")
 # Files whose user-visible Chinese must all go through tr()/N_(). Extend this list
 # as the remaining modules (engine, updates, ...) are converted.
 OWNED = ["app.py", "editing.py", "measures.py", "model.py", "musicxml.py", "notation_actions.py",
-         "photo.py", "score_view.py", "widgets.py", "workspace.py"]
+         "photo.py", "score_view.py", "widgets.py", "workspace.py",
+         # 0.4.0 workspace modules
+         "palette.py", "inspector.py", "startpage.py", "shortcuts.py", "symbols_ui.py", "notation_edit.py",
+         "glyphs.py", "score_layout.py", "score_paint.py", "theme.py", "icons.py", "playmap.py"]
 # Chinese literals that are not interface text: (file, exact literal).
 NOT_UI = {
     ("score_view.py", "○一二三四"),                   # finger numerals drawn on the staff, same in both scripts
     ("editing.py", r"第\s*(\d+)\s*[個个]音符"),       # parses "note N" out of a validation message
+    ("glyphs.py", "結"), ("glyphs.py", "结"),          # 「結」 of a final volta, printed in the score's script
 }
 
 
@@ -288,17 +292,20 @@ def test_switching_to_simplified_converts_every_visible_text(window):
     assert menu_action(window, "文件", "保存").text() == "保存"
     assert menu_action(window, "编辑", "撤销").text() == "撤销"
     assert window.save_button.text() == "保存"
-    assert window.export_button.text() == "导出 / 打印"
+    # 0.4.0 layout: export is one primary button; the group boxes became a toolbar,
+    # a score bar and a note bar whose controls carry their own texts.
+    assert window.export_button.text() == "导出"
     assert window.play_button.toolTip() == "Enter 试听 / 停止（在音符区内）"
-    assert window.note_tools.title() == "音符工具"
-    assert window.measure_tools.title() == "小节工具"
-    assert window.score_settings.title() == "乐谱设置"
-    assert window.title_field.placeholderText() == "曲名"
+    assert window.insert_mode_button.text() == "添加"
+    assert window.inspector.heading.text() == "选中"
+    assert window.palette.search.placeholderText().startswith("搜索记号")
+    assert window.title_field.placeholderText() == "未命名乐曲"
     assert window.lyrics.placeholderText() == "歌词（选填；纯器乐可留空）"
     assert window.duration.itemText(1) == "二分 · 2 拍"
     assert window.octave.itemText(0) == "低两个八度"
     assert window.accidental.itemText(0) == "无升降号"
     assert window.rhythm_label.text().endswith("拍数完整")
+    assert window.palette.categories.item(0).text() == "常用"
     assert window.statusBar().currentMessage() == "就绪 · 离线编辑"
     assert window.notes.accessibleName() == "简谱编辑谱面"
     assert window.version_label.accessibleName().startswith("当前版本")
@@ -350,16 +357,18 @@ def test_dynamic_texts_and_open_selection_follow_the_switch(window):
     window.preview_status.setText("樂譜已修改，等待更新排版。")
     window.statusBar().showMessage("請先選取要標記的音符。", 60000)
     window.language_actions["zh_CN"].trigger()
-    assert window.selection_label.text().startswith("修改所选的 1 个音符")
     assert window.preview_status.text() == "乐谱已修改，等待更新排版。"
     assert window.statusBar().currentMessage() == "请先选中要标记的音符。"
-    assert window.measure_selection.text() == "第 1 小节"
+    assert window.selection_label.text() == "请先选中要标记的音符。"   # 0.4.0: messages show mid status bar
+    window.statusBar().clearMessage()
+    assert window.selection_label.text().startswith("修改所选 1 个音符")
+    assert window.inspector.title.text() == "第 1 小节第 1 音"        # 0.3.x: measure_selection label
     assert window.degree.currentData() == 1           # combo selection is kept, only its text changes
     assert window.notes.model().data(window.notes.model().index(0), 0).startswith("第 1 小节，第 1 个音符")
     window.language_actions["zh_TW"].trigger()
-    assert window.selection_label.text().startswith("修改所選 1 音符")
+    assert window.selection_label.text().startswith("修改所選 1 個音符")
     assert window.preview_status.text() == "樂譜已修改，等待更新排版。"
-    assert window.measure_selection.text() == "第 1 小節"
+    assert window.inspector.title.text() == "第 1 小節第 1 音"
 
 
 def test_dialogs_opened_after_the_switch_use_the_new_language(window, monkeypatch):
@@ -412,14 +421,14 @@ def test_language_menu_names_each_language_in_its_own_script_with_a_checkmark(wi
 
 
 @pytest.mark.parametrize("platform, tw, cn", [
-    ("win32", "Microsoft JhengHei", "Microsoft YaHei"),
+    ("win32", "Microsoft JhengHei UI", "Microsoft YaHei UI"),     # 0.4.0: narrower UI faces first
     ("darwin", "PingFang TC", "PingFang SC"),
     ("linux", "Noto Sans CJK TC", "Noto Sans CJK SC"),
 ])
 def test_fonts_are_per_platform_and_per_language(monkeypatch, platform, tw, cn):
     from jianpu_studio.widgets import stylesheet
     monkeypatch.setattr("sys.platform", platform)
-    assert (i18n.ui_font_family("zh_TW"), i18n.ui_font_family("zh_CN")) == (tw, cn)
+    assert (i18n.ui_font_stack("zh_TW")[0], i18n.ui_font_stack("zh_CN")[0]) == (tw, cn)
     assert stylesheet("zh_TW").count(f"'{tw}'") >= 1 and cn not in stylesheet("zh_TW")
     assert f"font-family: '{cn}'" in stylesheet("zh_CN")
     sans, serif = i18n.latin_sans_family(), i18n.latin_serif_family()

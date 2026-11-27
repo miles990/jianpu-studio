@@ -30,10 +30,14 @@ class WinMMBackend:
         if code:
             raise RuntimeError(tr("Windows MIDI 播放失敗（{code}）。請確認音訊裝置可用；也可匯出 MIDI。").format(code=code))
 
-    def play(self, path: Path):
+    def play(self, path: Path, start: float = 0.0):
         self.command(f'open "{path}" type sequencer alias jianpu_preview')
         try:
-            self.command("play jianpu_preview from 0")
+            if start > 0:
+                self.command("set jianpu_preview time format milliseconds")
+                self.command(f"play jianpu_preview from {int(start * 1000)}")
+            else:
+                self.command("play jianpu_preview from 0")
         except Exception:
             self.stop()
             raise
@@ -76,6 +80,8 @@ def load_audiotoolbox():
         "MusicPlayerStart": [vp],
         "MusicPlayerStop": [vp],
         "MusicPlayerGetTime": [vp, ctypes.POINTER(f64)],
+        "MusicPlayerSetTime": [vp, f64],
+        "MusicSequenceGetBeatsForSeconds": [vp, f64, ctypes.POINTER(f64)],
     }
     for name, argtypes in signatures.items():
         function = getattr(at, name)
@@ -104,7 +110,7 @@ class AudioToolboxBackend:
         self._check(self._at.MusicSequenceGetSecondsForBeats(self._sequence, beats, ctypes.byref(seconds)))
         return seconds.value
 
-    def play(self, path: Path):
+    def play(self, path: Path, start: float = 0.0):
         at = self._at
         try:
             sequence = ctypes.c_void_p()
@@ -133,6 +139,10 @@ class AudioToolboxBackend:
             self._check(at.NewMusicPlayer(ctypes.byref(player)))
             self._player = player
             self._check(at.MusicPlayerSetSequence(player, sequence))
+            if start > 0:
+                beats_at = ctypes.c_double()
+                self._check(at.MusicSequenceGetBeatsForSeconds(sequence, float(start), ctypes.byref(beats_at)))
+                self._check(at.MusicPlayerSetTime(player, beats_at.value))
             self._check(at.MusicPlayerPreroll(player))
             self._check(at.MusicPlayerStart(player))
         except Exception:
@@ -184,6 +194,8 @@ class MidiPlayer:
     def __init__(self, backend=None):
         self._backend = backend if backend is not None else default_backend()
         self._playing = False
+        self._started = 0.0
+        self._start = 0.0
 
     @property
     def playing(self) -> bool:
@@ -193,12 +205,32 @@ class MidiPlayer:
             self.stop()
         return self._playing
 
-    def play(self, path: Path):
+    def play(self, path: Path, start: float = 0.0):
+        """Play from ``start`` seconds (0 = the beginning)."""
+        import time
         self.stop()
         if self._backend is None:
             raise RuntimeError(tr(UNSUPPORTED))
-        self._backend.play(Path(path))
+        if start > 0:
+            self._backend.play(Path(path), start)
+        else:
+            self._backend.play(Path(path))
         self._playing = True
+        self._started = time.monotonic()
+        self._start = start
+
+    def position(self) -> float:
+        """Seconds from the start of the MIDI: the synthesizer's clock on macOS, else wall time."""
+        import time
+        if not self._playing:
+            return 0.0
+        backend_position = getattr(self._backend, "position", None)
+        if backend_position is not None:
+            try:
+                return backend_position()
+            except RuntimeError:
+                pass
+        return self._start + time.monotonic() - self._started
 
     def stop(self):
         if self._backend is not None:

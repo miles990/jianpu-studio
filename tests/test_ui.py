@@ -279,8 +279,10 @@ def test_workspace_controls_reachable_at_supported_sizes(window, size):
     window.resize(*size)
     QApplication.processEvents()
     assert (window.width(), window.height()) == size
-    for control in (window.notes, window.pitch_buttons[0], window.duration,
-                    window.staff, window.notation_button, window.version_label, window.save_button):
+    # 0.4.0: duration is a row of keys, marks come from the palette search, staff/lyrics moved
+    # into the score-information popup (the always-visible score bar has the pickup instead).
+    for control in (window.notes, window.pitch_buttons[0], window.duration_buttons[4],
+                    window.pickup_field, window.palette.search, window.version_label, window.save_button):
         for scroll in window.findChildren(QScrollArea):
             if scroll.widget() and scroll.widget().isAncestorOf(control):
                 scroll.ensureWidgetVisible(control)

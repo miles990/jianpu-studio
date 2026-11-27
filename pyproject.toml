@@ -22,7 +22,7 @@ jianpu-studio = "jianpu_studio.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-jianpu_studio = ["vendor/LICENSE*", "assets/*"]
+jianpu_studio = ["vendor/LICENSE*", "assets/*", "assets/icons/*.svg", "assets/symbols/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

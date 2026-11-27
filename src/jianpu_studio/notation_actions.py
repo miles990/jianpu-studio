@@ -14,13 +14,13 @@ from PySide6.QtWidgets import (
 )
 
 from .i18n import tr
-from .model import TICKS_PER_QUARTER, tuplet_ranges
+from .model import tuplet_ranges
 
 
 class NotationActions:
     def require_complete_tuplets(self, rows):
         selected = set(rows)
-        for start, end in tuplet_ranges(self.project.score.notes):
+        for start, end in tuplet_ranges(self.part_notes()):
             members = set(range(start, end))
             if selected & members and not members <= selected:
                 self.error(tr("請選取整組三連音"), tr("複製、刪除或重複時，請選取完整的三個音符。音高及演奏記號仍可逐個修改。"))
@@ -36,7 +36,8 @@ class NotationActions:
             return
         try:
             self.capture_fields()
-            notes = self.project.score.notes
+            notes = self.part_notes()
+            part_index = self.part
             if collapse:
                 groups = [(a, b) for a, b in tuplet_ranges(notes) if any(a <= row < b for row in rows)]
                 if len(groups) != 1 or any(not groups[0][0] <= row < groups[0][1] for row in rows):
@@ -82,7 +83,7 @@ class NotationActions:
             if sum(n.ticks for n in replacement) != sum(n.ticks for n in notes[start:end]):
                 raise ValueError(tr("三連音的總拍數不一致，未修改原譜。"))
             def update(project):
-                project.score.notes[start:end] = replacement
+                project.score.parts[part_index].notes[start:end] = replacement
                 if error := project.score.notation_error():
                     raise ValueError(error)
             if self.mutate(update, selection=range(start, start + len(replacement)), current=start):
@@ -146,27 +147,30 @@ class NotationActions:
         if not rows:
             self.statusBar().showMessage(tr("請先選取要標記的音符。"), 5000)
             return False
+        part = self.part
+
         def update(project):
+            notes = project.score.parts[part].notes
             for row in rows:
-                project.score.notes[row] = self.replace_note(project.score.notes[row], changes)
+                notes[row] = self.replace_note(notes[row], changes)
             for name, action in ranges.items():
                 if action == "keep":
                     continue
                 if action != "remove" and (rows != list(range(rows[0], rows[-1] + 1))
                                            or (name != "repeat" and len(rows) < 2)):
                     raise ValueError(tr("連音、延音與漸強弱需選至少兩個連續音符；反覆需選完整的連續小節。"))
-                self.clear_range_marks(project.score.notes, rows, name, keep_adjacent=action != "remove")
+                self.clear_range_marks(notes, rows, name, keep_adjacent=action != "remove")
                 if action == "remove":
                     continue
                 if name == "tie":
                     for row in rows[:-1]:
-                        project.score.notes[row] = replace(project.score.notes[row], tie=True)
+                        notes[row] = replace(notes[row], tie=True)
                 else:
                     start_field, end_field = {"slur": ("slur_start", "slur_end"),
                                               "repeat": ("repeat_start", "repeat_end"),
                                               "hairpin": ("hairpin", "hairpin_end")}[name]
-                    project.score.notes[rows[0]] = replace(project.score.notes[rows[0]], **{start_field: action if name == "hairpin" else True})
-                    project.score.notes[rows[-1]] = replace(project.score.notes[rows[-1]], **{end_field: True})
+                    notes[rows[0]] = replace(notes[rows[0]], **{start_field: action if name == "hairpin" else True})
+                    notes[rows[-1]] = replace(notes[rows[-1]], **{end_field: True})
             if any(action not in ("keep", "remove") for action in ranges.values()):
                 if error := project.score.notation_error():
                     raise ValueError(error)
@@ -288,13 +292,15 @@ class NotationActions:
 
     @staticmethod
     def validate_tuplet_edit(score):
-        groups = tuplet_ranges(score.notes)
-        if not groups:
-            return
-        starts = {start: end for start, end in groups}
-        position = 0
-        bar_ticks = int(score.bar_length * TICKS_PER_QUARTER)
-        for row, note in enumerate(score.notes):
-            if row in starts and position % bar_ticks + sum(n.ticks for n in score.notes[row:starts[row]]) > bar_ticks:
-                raise ValueError(tr("修改會讓三連音跨越小節。請改用整小節操作，或先合併三連音再調整。"))
-            position += note.ticks
+        for part in score.parts:
+            groups = tuplet_ranges(part.notes)
+            if not groups:
+                continue
+            starts = {start: end for start, end in groups}
+            position = 0
+            for row, note in enumerate(part.notes):
+                if row in starts:
+                    offset, length = score.bar_room(position)
+                    if offset + sum(n.ticks for n in part.notes[row:starts[row]]) > length:
+                        raise ValueError(tr("修改會讓三連音跨越小節。請改用整小節操作，或先合併三連音再調整。"))
+                position += note.ticks

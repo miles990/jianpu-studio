@@ -227,7 +227,8 @@ def test_measure_number_selection_survives_zoom_and_wrapping(measure_window, qtb
 def test_score_and_explicit_print_preview_are_reachable(measure_window, size):
     window = measure_window
     load_score(window, [Note(1)] * 12)
-    window.notes.select_rows([4, 5, 6, 7], current=5)
+    # 0.4.0: measure actions appear in the 「選取」 inspector once a whole bar is selected.
+    window.notes.select_bar(1, current=5)
     before = window.project.snapshot()
     window.resize(*size)
     QApplication.processEvents()
@@ -254,7 +255,7 @@ def test_score_and_explicit_print_preview_are_reachable(measure_window, size):
     assert window.notes.selected_rows() == [4, 5, 6, 7]
     assert window.notes.currentRow() == 5
     controls = [window.save_button, window.notes, window.edit_mode_button,
-                window.duration, window.staff, *window.measure_controls]
+                window.duration_buttons[4], window.pickup_field, *window.measure_controls]
     for control in controls:
         for scroll in window.findChildren(QScrollArea):
             if scroll.widget() and scroll.widget().isAncestorOf(control):

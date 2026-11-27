@@ -22,6 +22,7 @@ TRADITIONAL = "zh_TW"
 SIMPLIFIED = "zh_CN"
 LANGUAGES = (TRADITIONAL, SIMPLIFIED)
 LANGUAGE_NAMES = {TRADITIONAL: "繁體中文", SIMPLIFIED: "简体中文"}
+LANGUAGE_SHORT = {TRADITIONAL: "繁", SIMPLIFIED: "简"}   # status-bar switch, never translated
 LANGUAGE_MENU_TITLE = "語言 / 语言"
 SETTINGS_KEY = "language"
 
@@ -164,6 +165,21 @@ def ui_font_family(language: str | None = None) -> str:
     if sys.platform == "win32":
         return "Microsoft YaHei" if simplified else "Microsoft JhengHei"
     return "Noto Sans CJK SC" if simplified else "Noto Sans CJK TC"
+
+
+def ui_font_stack(language: str | None = None) -> list[str]:
+    """Interface font families in fallback order (wow/design.md §4.3).
+
+    Windows prefers the narrower "UI" faces of JhengHei / YaHei; macOS uses PingFang.
+    The first family that carries the language's glyph forms always comes first.
+    """
+    simplified = (language or _language) == SIMPLIFIED
+    if sys.platform == "win32":
+        base = "Microsoft YaHei" if simplified else "Microsoft JhengHei"
+        return [base + " UI", base, "Segoe UI"]
+    if sys.platform == "darwin":
+        return [ui_font_family(language), "Helvetica Neue"]
+    return [ui_font_family(language), "DejaVu Sans"]
 
 
 def latin_sans_family() -> str:
