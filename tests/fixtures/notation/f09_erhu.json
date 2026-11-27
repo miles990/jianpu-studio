@@ -1,0 +1,134 @@
+{
+ "format": "jianpu-studio",
+ "version": 2,
+ "score": {
+  "title": "Fixture",
+  "composer": "",
+  "key": "D",
+  "meter": "4/4",
+  "tempo": 80,
+  "with_staff": false,
+  "paper_size": "a4",
+  "staff_size": 20,
+  "bars_per_line": 0,
+  "pickup": 0,
+  "print_variant": "tc",
+  "parts": [
+   {
+    "name": "",
+    "lyrics": "",
+    "notes": [
+     {
+      "degree": 5,
+      "marks": [
+       "finger.1",
+       "bow.down",
+       "erhu.inner",
+       "dyn.mp",
+       "art.accent"
+      ]
+     },
+     {
+      "degree": 6,
+      "marks": [
+       "finger.2",
+       "bow.up",
+       "art.staccato"
+      ]
+     },
+     {
+      "degree": 1,
+      "octave": 1,
+      "marks": [
+       "finger.3",
+       "slide.up",
+       "erhu.vibrato"
+      ]
+     },
+     {
+      "degree": 6,
+      "marks": [
+       "finger.0",
+       "slide.down",
+       "erhu.outer",
+       "art.staccato_hollow"
+      ]
+     },
+     {
+      "degree": 5,
+      "grace_before": "56",
+      "marks": [
+       "erhu.dun"
+      ],
+      "spans_start": [
+       "line.slur"
+      ]
+     },
+     {
+      "degree": 3,
+      "spans_end": [
+       "line.slur"
+      ],
+      "marks": [
+       "finger.4"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "erhu.pizz_left"
+      ],
+      "tie": true
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "harmonic"
+      ]
+     },
+     {
+      "degree": 5,
+      "duration": 8,
+      "tuplet": 3,
+      "tuplet_start": true,
+      "marks": [
+       "erhu.pao"
+      ]
+     },
+     {
+      "degree": 6,
+      "duration": 8,
+      "tuplet": 3
+     },
+     {
+      "degree": 5,
+      "duration": 8,
+      "tuplet": 3,
+      "tuplet_end": true,
+      "marks": [
+       "breath.v"
+      ]
+     },
+     {
+      "degree": 0,
+      "marks": [
+       "art.fermata"
+      ]
+     },
+     {
+      "degree": 3,
+      "marks": [
+       "erhu.trem_bow"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "tempo.rit"
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

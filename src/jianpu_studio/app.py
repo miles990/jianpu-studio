@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import __version__, i18n
+from . import __version__, i18n, migrate
 from .editing import EditActions
 from .engine import Cancelled, find_tool, recognize, render
 from .i18n import tr
@@ -234,7 +234,9 @@ class MainWindow(EditActions, QMainWindow):
         if project.mode == "visual":
             return project
         try:
-            unchanged = project.source.strip() == project.score.to_jianpu().strip()
+            exported = project.score.to_jianpu()
+            unchanged = (project.source.strip() == exported.strip()
+                         or migrate.same_music_text(project.source, exported))
         except ValueError:
             unchanged = False
         if unchanged:

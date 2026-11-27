@@ -1,0 +1,16 @@
+title=二重奏範例
+composer=
+NoIndent
+instrument=二胡一
+1=G 4/4 4=66
+R{ \bar ".|:" q5 Fr=1 ( q6 c1' ) c#4 Fr=3 c5
+\jsCodaSign c6 \mf q5 q3 2 - }
+c3 ( cb7, Fr=2 q6, q5, ) c6,
+5, \fermata - - - \jsFineText
+NextPart
+instrument=二胡二
+1=G 4/4
+R{ \bar ".|:" c1 \jsFingerZero q1 q2 3 -
+c4 \mp c3 2 - }
+c1 ( q3, q5, ) 6, -
+3, \fermata - - -

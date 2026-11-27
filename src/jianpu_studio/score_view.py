@@ -57,7 +57,7 @@ class ScoreModel(QAbstractListModel):
         note = self._notes[row]
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole,
                     Qt.ItemDataRole.AccessibleDescriptionRole, Qt.ItemDataRole.ToolTipRole):
-            bar = self.positions[row] // self.bar_ticks + 1
+            bar = self.bar_of(self.positions[row]) + 1
             marks = []
             if note.finger >= 0:
                 marks.append(tr("空弦") if note.finger == 0 else tr("{n} 指").format(n=note.finger))
@@ -95,21 +95,24 @@ class ScoreModel(QAbstractListModel):
     def bar_ticks(self):
         return int(self.score.bar_length * TICKS_PER_QUARTER)
 
+    def bar_of(self, position):
+        """Bar index of a tick position (bar 0 is the pickup when the score has one)."""
+        return self.score.bar_index(position)
+
     def set_score(self, score):
         # The editor mutates the same Score instance. Keep an immutable snapshot
         # for change detection instead of comparing aliases of its notes list.
         notes = tuple(score.notes)
-        changed = self._notes != notes or self._meter != score.meter
+        changed = self._notes != notes or self._meter != (score.meter, score.pickup)
         self.score = score
         if not changed:
             return False
         self.beginResetModel()
-        self._notes, self._meter = notes, score.meter
+        self._notes, self._meter = notes, (score.meter, score.pickup)
         self.positions, self.bars, self.links, self.tuplets, self.hairpins = [], [], [], [], []
         position, slur_start, tuplet_start, hairpin_start = 0, None, None, None
-        bar_ticks = self.bar_ticks
         for i, note in enumerate(notes):
-            bar = position // bar_ticks
+            bar = self.bar_of(position)
             if not self.bars or self.bars[-1][0] != bar:
                 self.bars.append((bar, []))
             self.bars[-1][1].append(i)
@@ -604,7 +607,7 @@ class NoteList(QAbstractItemView):
                 anchor = self._selection_anchor if self._selection_anchor >= 0 else self.currentRow()
                 if anchor < 0:
                     anchor = indices[0]
-                anchor_bar = self.score_model.positions[anchor] // self.score_model.bar_ticks
+                anchor_bar = self.score_model.bar_of(self.score_model.positions[anchor])
                 anchor_indices = next(rows for number, rows in self.score_model.bars if number == anchor_bar)
                 first, last = min(anchor_indices[0], indices[0]), max(anchor_indices[-1], indices[-1])
                 rows = set(range(first, last+1))
@@ -640,7 +643,7 @@ class NoteList(QAbstractItemView):
         row = self.currentRow()
         if row < 0:
             return
-        bar = self.score_model.positions[row] // self.score_model.bar_ticks
+        bar = self.score_model.bar_of(self.score_model.positions[row])
         self.select_bar(bar, row)
 
     def mouseDoubleClickEvent(self, event):
@@ -901,11 +904,13 @@ class NoteList(QAbstractItemView):
                        tr("或按 1–7 加入音符，0 加入休止符"))
             return
         notes = self.score_model._notes
-        bar_ticks = self.score_model.bar_ticks
+        room = self.score_model.score.bar_room
         visible = list(self.visible_bars())
         for frame, bar, indices in visible:
-            overflow = any(self.score_model.positions[i] % bar_ticks + notes[i].ticks > bar_ticks for i in indices)
-            incomplete = indices[-1] == len(notes)-1 and self.score_model.total_ticks % bar_ticks != 0
+            overflow = any(room(self.score_model.positions[i])[0] + notes[i].ticks > room(self.score_model.positions[i])[1]
+                           for i in indices)
+            total = self.score_model.total_ticks
+            incomplete = indices[-1] == len(notes)-1 and self.score_model.score.final_bar_targets(total)[0] != total
             line_number = self.note_lines[indices[0]]
             cy = self.line_baselines[line_number]
             p.setFont(QFont(ui_font_family(), max(6, int(9*s))))

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, replace
+from dataclasses import replace
 
 from PySide6.QtCore import QMimeData, Qt
 from PySide6.QtWidgets import (
@@ -20,9 +20,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import __version__
+from . import __version__, symbols
 from .i18n import tr
-from .model import DURATIONS, TICKS_PER_QUARTER, Note
+from .measures import clean_pasted
+from .migrate import LEGACY_FIELDS
+from .model import DURATIONS, Note
 from .notation_actions import NotationActions
 
 NOTE_MIME = "application/x-jianpu-studio-notes"
@@ -106,7 +108,8 @@ class EditActions(NotationActions):
             self.notes.set_score(score)
             self.notes.select_rows(selection, current)
             error = score.rhythm_error() or score.notation_error()
-            bars = max(1, (sum(n.ticks for n in score.notes) + int(score.bar_length*TICKS_PER_QUARTER)-1) // int(score.bar_length*TICKS_PER_QUARTER))
+            total = sum(n.ticks for n in score.notes)
+            bars = score.bar_index(total - 1) + 1 if total else 1
             self.bar_jump.setMaximum(bars)
             self.rhythm_label.setText(error or tr("{notes} 個音符 · {bars} 小節 · 拍數完整").format(notes=len(score.notes), bars=bars))
             self.problem_button.setVisible(bool(error))
@@ -192,7 +195,13 @@ class EditActions(NotationActions):
     def replace_note(note, changes):
         changes = dict(changes)
         if changes.get("degree", note.degree) == 0:
-            changes.update(octave=0, accidental="", finger=-1, bow="", slide="", slur_start=False, slur_end=False, tie=False, grace_before="", grace_after="")
+            # A rest keeps only marks that make sense on a rest (dynamics, fermata, breath...).
+            changes.update(octave=0, accidental="", tie=False, grace_before="", grace_after="")
+            note = replace(note, **changes)
+            return replace(note, marks=tuple(m for m in note.marks if symbols.SYMBOLS[m].on_rest
+                                             or m in symbols.LEGACY_REST_MARKS),
+                           spans_start=tuple(s for s in note.spans_start if symbols.SYMBOLS[s].on_rest),
+                           spans_end=tuple(s for s in note.spans_end if symbols.SYMBOLS[s].on_rest))
         return replace(note, **changes)
 
     def edit_property(self, name, value):
@@ -258,7 +267,7 @@ class EditActions(NotationActions):
         if not notes:
             return False
         mime = QMimeData()
-        mime.setData(NOTE_MIME, json.dumps([asdict(n) for n in notes]).encode("utf-8"))
+        mime.setData(NOTE_MIME, json.dumps([n.to_dict() for n in notes]).encode("utf-8"))
         mime.setText(" ".join(n.notation_token() for n in notes))
         QApplication.clipboard().setMimeData(mime)
         return True
@@ -275,13 +284,16 @@ class EditActions(NotationActions):
             raw = json.loads(payload)
             if not isinstance(raw, list) or len(raw) > 10000:
                 raise ValueError(tr("剪貼簿音符格式不正確。"))
-            notes = [Note(**item) for item in raw]
+            notes = [Note.from_dict(item) if not set(item) & set(LEGACY_FIELDS) else Note(**item) for item in raw]
             for note in notes:
                 note.validate()
-        except (TypeError, ValueError) as exc:
+            notes, removed = clean_pasted(notes)
+        except (TypeError, ValueError, AttributeError) as exc:
             self.error(tr("無法貼上音符"), exc)
             return
         self.insert_notes(notes)
+        if removed:
+            self.statusBar().showMessage(tr("已貼上；移除 {count} 個不完整的連線或小節記號。").format(count=removed), 8000)
 
     def note_command(self, command):
         if command == "toggle_mode":
@@ -353,8 +365,8 @@ class EditActions(NotationActions):
 
     def selected_measures(self):
         positions = self.notes.score_model.positions
-        ticks = self.notes.score_model.bar_ticks
-        return sorted({positions[row] // ticks for row in self.notes.selected_rows() if row < len(positions)})
+        bar_of = self.notes.score_model.bar_of
+        return sorted({bar_of(positions[row]) for row in self.notes.selected_rows() if row < len(positions)})
 
     def measure_ready(self):
         if self.project.mode != "visual":
@@ -366,7 +378,7 @@ class EditActions(NotationActions):
         selection, current = result.selection, result.current
         if fill and selection:
             selection, current = (selection[0],), selection[0]
-        changed = self.mutate(lambda project: setattr(project.score, "notes", result.notes), selection=selection, current=current)
+        changed = self.mutate(result.apply_to_project, selection=selection, current=current)
         if not changed:
             if result.notes != self.project.score.notes:
                 return False
@@ -477,7 +489,7 @@ class EditActions(NotationActions):
     def current_bar(self):
         row = self.notes.currentRow()
         positions = self.notes.score_model.positions
-        return positions[row] // self.notes.score_model.bar_ticks + 1 if 0 <= row < len(positions) else 1
+        return self.notes.score_model.bar_of(positions[row]) + 1 if 0 <= row < len(positions) else 1
 
     def jump_bar(self):
         bar = self.bar_jump.value()-1

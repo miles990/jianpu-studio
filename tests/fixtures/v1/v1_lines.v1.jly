@@ -1,0 +1,12 @@
+title=v1 連線
+composer=
+NoIndent
+OctavesBefore
+WithStaff
+1=G 3/4 4=100
+R{ c1 \< ( c2 c3 \f \! )
+c3 ~ c3 ( c4 ) }
+\break
+3[ g[6] q5 q6 q5 ] g[#'45] c4 \> c3 \p \!
+c2 [34]g \breathe 1 -
+\break

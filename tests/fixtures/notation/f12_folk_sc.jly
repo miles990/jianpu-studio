@@ -1,0 +1,8 @@
+title=Fixture
+composer=
+NoIndent
+1=D 4/4 4=80
+c5 \jsGzTuo c6 \jsGzGou c1' \jsStrokeYao c6 \jsGzGuaUp
+c5 \jsPipaTiao c3 \jsStrokeLun c2 \jsPipaYin c1 \jsPipaTui
+\jsOttavaDown c5 \jsDiziTuTwo c6 \jsDiziHuashe c5 \jsDiziDie c3 \jsBreathVBold \jsOttavaEnd
+c2 \sustainOn \jsRitSpan c1 c6, c5, \sustainOff \stopTextSpan

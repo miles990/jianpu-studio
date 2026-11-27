@@ -1,0 +1,16 @@
+title=Fixture
+composer=
+NoIndent
+instrument=高音
+1=D 4/4,4 4=80
+c5
+c1 c2 c3 c3
+c2 c1 c2
+H: 一 二三四五 六七八
+NextPart
+instrument=低音
+1=D 4/4,4
+c0
+1 - 5, -
+c5, c5, c5,
+H: 甲乙丙丁戊

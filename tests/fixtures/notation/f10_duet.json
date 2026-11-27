@@ -1,0 +1,194 @@
+{
+ "format": "jianpu-studio",
+ "version": 2,
+ "score": {
+  "title": "二重奏範例",
+  "composer": "",
+  "key": "G",
+  "meter": "4/4",
+  "tempo": 66,
+  "with_staff": false,
+  "paper_size": "a4",
+  "staff_size": 20,
+  "bars_per_line": 0,
+  "pickup": 0,
+  "print_variant": "tc",
+  "parts": [
+   {
+    "name": "二胡一",
+    "lyrics": "",
+    "notes": [
+     {
+      "degree": 5,
+      "duration": 8,
+      "bar_start": [
+       "bar.repeat_start"
+      ],
+      "spans_start": [
+       "line.slur"
+      ],
+      "marks": [
+       "finger.1"
+      ]
+     },
+     {
+      "degree": 6,
+      "duration": 8
+     },
+     {
+      "degree": 1,
+      "octave": 1,
+      "spans_end": [
+       "line.slur"
+      ]
+     },
+     {
+      "degree": 4,
+      "accidental": "#",
+      "marks": [
+       "finger.3"
+      ]
+     },
+     {
+      "degree": 5
+     },
+     {
+      "degree": 6,
+      "bar_start": [
+       "nav.coda_sign"
+      ],
+      "marks": [
+       "dyn.mf"
+      ]
+     },
+     {
+      "degree": 5,
+      "duration": 8
+     },
+     {
+      "degree": 3,
+      "duration": 8
+     },
+     {
+      "degree": 2,
+      "duration": 2,
+      "bar_end": [
+       "bar.repeat_end"
+      ]
+     },
+     {
+      "degree": 3,
+      "spans_start": [
+       "line.slur"
+      ]
+     },
+     {
+      "degree": 7,
+      "accidental": "b",
+      "octave": -1,
+      "marks": [
+       "finger.2"
+      ]
+     },
+     {
+      "degree": 6,
+      "octave": -1,
+      "duration": 8
+     },
+     {
+      "degree": 5,
+      "octave": -1,
+      "duration": 8,
+      "spans_end": [
+       "line.slur"
+      ]
+     },
+     {
+      "degree": 6,
+      "octave": -1
+     },
+     {
+      "degree": 5,
+      "octave": -1,
+      "duration": 1,
+      "bar_end": [
+       "nav.fine"
+      ],
+      "marks": [
+       "art.fermata"
+      ]
+     }
+    ]
+   },
+   {
+    "name": "二胡二",
+    "lyrics": "",
+    "notes": [
+     {
+      "degree": 1,
+      "marks": [
+       "finger.0"
+      ]
+     },
+     {
+      "degree": 1,
+      "duration": 8
+     },
+     {
+      "degree": 2,
+      "duration": 8
+     },
+     {
+      "degree": 3,
+      "duration": 2
+     },
+     {
+      "degree": 4,
+      "marks": [
+       "dyn.mp"
+      ]
+     },
+     {
+      "degree": 3
+     },
+     {
+      "degree": 2,
+      "duration": 2
+     },
+     {
+      "degree": 1,
+      "spans_start": [
+       "line.slur"
+      ]
+     },
+     {
+      "degree": 3,
+      "octave": -1,
+      "duration": 8
+     },
+     {
+      "degree": 5,
+      "octave": -1,
+      "duration": 8,
+      "spans_end": [
+       "line.slur"
+      ]
+     },
+     {
+      "degree": 6,
+      "octave": -1,
+      "duration": 2
+     },
+     {
+      "degree": 3,
+      "octave": -1,
+      "duration": 1,
+      "marks": [
+       "art.fermata"
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

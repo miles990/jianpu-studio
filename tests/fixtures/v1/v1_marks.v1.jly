@@ -1,0 +1,9 @@
+title=v1 記號
+composer=測試
+NoIndent
+1=D 4/4 4=72
+c5 Fr=0 \downbow \mp \accent c6 Fr=1 \upbow \staccato slideUp c1' Fr=2 \tenuto slideDown cb7 Fr=3 \trill
+c#4 Fr=4 \mordent c3 \turn c2 \sfz \marcato c1 \fff \staccatissimo
+c5, \flageolet c6,, \breathe c0 \p \fermata c4
+q1 q2. s3 5 - q0
+H: 一 二 三

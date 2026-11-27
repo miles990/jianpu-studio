@@ -45,18 +45,16 @@ class NotationActions:
                 first, middle, last = notes[start:end]
                 if first.grace_after:
                     raise ValueError(tr("首音有獨立後倚音，請先移除或移到整組終點，再合併三連音。"))
-                if (middle.slur_start or middle.slur_end or middle.hairpin or middle.hairpin_end
-                        or first.slur_end or first.hairpin_end or last.slur_start or last.hairpin):
+                if (middle.spans_start or middle.spans_end or first.spans_end or last.spans_start
+                        or middle.bar_start or middle.bar_end or last.bar_start or first.bar_end):
                     raise ValueError(tr("三連音內有連線或漸強弱端點，請先移除這些範圍記號再合併。"))
                 # Do not silently drop a separately marked inner note.
                 for note in (middle, last):
-                    if (note.finger >= 0 or note.bow or note.dynamic or note.articulation
-                            or note.slide or note.grace_before or (note is middle and note.grace_after)):
+                    if note.marks or note.grace_before or (note is middle and note.grace_after):
                         raise ValueError(tr("組內後兩音有獨立演奏記號，請先移除這些記號再合併；合併會保留首音音高。"))
                 merged = replace(first, duration=first.duration // 2, tuplet=0, tuplet_start=False,
-                                 tuplet_end=False, slur_end=last.slur_end, tie=last.tie,
-                                 repeat_end=last.repeat_end, hairpin_end=last.hairpin_end,
-                                 grace_after=last.grace_after)
+                                 tuplet_end=False, spans_end=last.spans_end, tie=last.tie,
+                                 bar_end=last.bar_end, grace_after=last.grace_after)
                 replacement = [merged]
             else:
                 if len(rows) != 1:
@@ -67,21 +65,17 @@ class NotationActions:
                     raise ValueError(tr("請選未附點的二分、四分、八分或十六分音符／休止符；已是三連音可先合併。"))
                 replacement = []
                 for part in range(3):
+                    # Marks, line starts and bar-start items stay on the first note; line ends,
+                    # the tie and bar-end items move to the last one.
                     replacement.append(replace(
                         original, duration=original.duration * 2, tuplet=3,
                         tuplet_start=part == 0, tuplet_end=part == 2,
-                        finger=original.finger if part == 0 else -1,
-                        bow=original.bow if part == 0 else "",
-                        dynamic=original.dynamic if part == 0 else "",
-                        articulation=original.articulation if part == 0 else "",
-                        slide=original.slide if part == 0 else "",
-                        slur_start=original.slur_start and part == 0,
-                        slur_end=original.slur_end and part == 2,
+                        marks=original.marks if part == 0 else (),
+                        spans_start=original.spans_start if part == 0 else (),
+                        spans_end=original.spans_end if part == 2 else (),
+                        bar_start=original.bar_start if part == 0 else (),
+                        bar_end=original.bar_end if part == 2 else (),
                         tie=original.tie and part == 2,
-                        repeat_start=original.repeat_start and part == 0,
-                        repeat_end=original.repeat_end and part == 2,
-                        hairpin=original.hairpin if part == 0 else "",
-                        hairpin_end=original.hairpin_end and part == 2,
                         grace_before=original.grace_before if part == 0 else "",
                         grace_after=original.grace_after if part == 2 else "",
                     ))

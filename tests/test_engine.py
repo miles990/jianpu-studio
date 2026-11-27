@@ -229,7 +229,10 @@ def test_cjk_fingering_and_marks_have_real_glyphs(tmp_path):
         Note(5, finger=4, duration=1),
     ])
     result = render(score.to_jianpu(), (tmp_path / "指法 字形").resolve(), tool.resolve())
-    for mark in ("宀", "一", "二", "三", "四", "▼"):
-        assert mark in result.lilypond.read_text(encoding="utf-8")
+    lilypond_text = result.lilypond.read_text(encoding="utf-8")
+    for mark in ("一", "二", "三", "四", "▼"):
+        assert mark in lilypond_text
+    # v2 prints the open string as a bold 0 (JP-Word form) instead of upstream's 宀 (tech.md §1.4).
+    assert "c1 \\jsFingerZero" in lilypond_text and "宀" not in lilypond_text
     assert "no glyph for character" not in result.log
     assert "warning:" not in result.log.lower(), result.log

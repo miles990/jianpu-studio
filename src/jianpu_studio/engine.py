@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import symbols
 from .i18n import tr
 from .model import atomic_write
 
@@ -154,14 +155,15 @@ def validate_source(source: str) -> None:
     """
     if not source.strip() or len(source) > 4 * 1024 * 1024:
         raise ValueError(tr("樂譜是空白或超過 4 MB。"))
-    permitted = {"p", "pp", "ppp", "mp", "mf", "f", "ff", "fff", "sfz", "fermata", "bar",
-                 "break", "noBreak", "pageBreak", "noPageBreak", "breathe", "accent", "staccato",
-                 "tenuto", "marcato", "staccatissimo", "flageolet", "trill", "prall", "mordent", "turn",
-                 "upbow", "downbow"}
+    # Single \\words only: the registry's export words and app prelude names (never MIDI twins).
+    permitted = symbols.source_words()
     for line in source.splitlines():
         line = line.split("%", 1)[0]
         if re.search(r"\bLPH?:|#\s*[({]|\$|[\x00-\x08]", line):
             raise ValueError(tr("為安全起見，不支援內嵌 LilyPond／Scheme 程式碼（LP:、LPH:）。"))
+        if re.match(r"\s*(slide|Fr)=", line):
+            # Upstream treats such a line as a header and silently drops it (tech.md P4).
+            raise ValueError(tr("一行不能以 slide= 或 Fr= 開頭（會被當成標題而整行遺失）；請接在前一個音符後面。"))
         if re.match(r"\s*(chords|frets)\s*=", line):
             raise ValueError(tr("此版本的原始碼模式不接受 chords= 或 frets=。"))
         if re.match(r"\s*[A-Za-z]+\s*=", line):

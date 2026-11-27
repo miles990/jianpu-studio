@@ -1,11 +1,13 @@
 """CLI worker also available in the frozen executables (Windows/macOS)."""
 
+import os
 import re
 import sys
 from pathlib import Path
 
+from . import symbols
 from .engine import validate_source
-from .model import atomic_write
+from .model import DIRECTIVE, atomic_write
 from .musicxml import read_xml
 from .vendor import jianpu_ly
 
@@ -44,11 +46,6 @@ def _remove_legacy_fonts(text: str) -> str:
 def adapt_output(result: str, minor_version: int, paper_size: str) -> str:
     """Make jianpu-ly's LilyPond text valid for the selected LilyPond version."""
     result = _remove_legacy_fonts(result)
-    # jianpu-ly writes erhu fingering (一二三四, 宀 for the open string, ▼) as
-    # \finger \markup. Fingering uses the music font (fetaText encoding), and
-    # LilyPond 2.25+ no longer falls back to a text font for missing glyphs,
-    # so route these markups through the CJK text fonts configured below.
-    result = result.replace("\\finger \\markup { ", "\\finger \\markup { \\override #'(font-encoding . latin1) ")
     if minor_version >= 25:
         # 2.25+ expects an exact rational number of whole notes per minute
         # rather than a moment; 84 quarter notes = 21 whole notes. Without
@@ -59,6 +56,87 @@ def adapt_output(result: str, minor_version: int, paper_size: str) -> str:
     result += ('\\paper {\n  property-defaults.fonts.serif = "' + SERIF_FONTS + '"\n'
                '  property-defaults.fonts.sans = "' + SANS_FONTS + '"\n}\n')
     return result
+
+
+def read_options(source: str) -> dict:
+    """Print options a visual score writes as its first line (``% jianpu-studio: print=sc sloppy-bars``)."""
+    first = source.lstrip("\ufeff").split("\n", 1)[0]
+    if not first.startswith(DIRECTIVE):
+        return {}
+    options = {}
+    for word in first[len(DIRECTIVE):].split():
+        key, _, value = word.partition("=")
+        options[key] = value or True
+    return {"variant": "sc" if options.get("print") == "sc" else "tc", "sloppy": options.get("sloppy-bars") is True}
+
+
+def part_count(source: str) -> int:
+    """Number of parts, split exactly like upstream (``\\sNextPart\\s``), ignoring comments."""
+    text = "\n".join(line.split("%", 1)[0] for line in source.splitlines())
+    return len(re.findall(r"(?<=\s)NextPart(?=\s)", " " + text + " ")) + 1
+
+
+def insert_prelude(ly: str, variant: str = "tc", parts: int = 1) -> str:
+    """App-owned macro definitions before the first \\score (tech.md §3.2a/d)."""
+    index = ly.index("\\score {")
+    return ly[:index] + symbols.prelude(variant, parts) + "\n" + ly[index:]
+
+
+_FINE = "\\volta 2 \\fine \\volta 1"
+
+
+def fix_fine(ly: str) -> str:
+    """Brace the music after upstream's ``Fine`` (tech.md P2).
+
+    jianpu-ly writes Fine as ``\\volta 2 \\fine \\volta 1`` followed by the rest of the
+    block WITHOUT braces, so ``\\volta 1`` covers one note only: unfolded MIDI plays past
+    Fine and LilyPond warns "found music after \\fine". Wrap the rest of the enclosing block,
+    skipping strings and comments while counting braces.
+    """
+    position = 0
+    while (index := ly.find(_FINE, position)) >= 0:
+        start = index + len(_FINE)
+        depth, k = 0, start
+        while k < len(ly):
+            if ly.startswith("%{", k):
+                k = ly.index("%}", k) + 2
+                continue
+            c = ly[k]
+            if c == '"':
+                k = ly.index('"', k + 1) + 1
+                continue
+            if c == "%":
+                k = ly.index("\n", k)
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                if depth == 0:
+                    break
+                depth -= 1
+            k += 1
+        ly = ly[:start] + " {" + ly[start:k] + "} " + ly[k:]
+        position = start
+    return ly
+
+
+_OTTAVA_MIDI = {"\\jsOttavaUp": "\\transpose c c' {", "\\jsOttavaDown": "\\transpose c c, {", "\\jsOttavaEnd": "}"}
+
+
+def midi_rewrite(ly: str) -> str:
+    """Inside MIDI staves only: 8va/8vb sound transposed; sforzandi become velocity-only twins."""
+    twins = "|".join(sorted(symbols.midi_twins(), key=len, reverse=True))
+    def fix(match):
+        text = match.group(0)
+        for word, replacement in _OTTAVA_MIDI.items():
+            text = text.replace(word, replacement)
+        return re.sub(r"\\(" + twins + r")(?![A-Za-z])", r"\\\1Midi", text) if twins else text
+    return re.sub(r"(?s)% === BEGIN MIDI STAFF ===.*?% === END MIDI STAFF ===", fix, ly)
+
+
+def finish_output(ly: str, variant: str = "tc", parts: int = 1) -> str:
+    """tech.md §3.2 a–d, after ``adapt_output``."""
+    return midi_rewrite(fix_fine(insert_prelude(ly, variant, parts)))
 
 
 def run(args: list[str]) -> int:
@@ -74,7 +152,18 @@ def run(args: list[str]) -> int:
             if paper_size not in ("a4", "letter") or not 16 <= staff_size <= 30:
                 raise ValueError("Unsupported page or staff size")
             jianpu_ly.staff_size = jianpu_ly.lyric_size = staff_size
-            result = adapt_output(jianpu_ly.process_input(data), minor, paper_size)
+            options = read_options(data)
+            # Upstream reads this variable while converting: a pickup with a full last bar (§3.2e).
+            previous = os.environ.pop("j2ly_sloppy_bars", None)
+            if options.get("sloppy"):
+                os.environ["j2ly_sloppy_bars"] = "1"
+            try:
+                result = adapt_output(jianpu_ly.process_input(data), minor, paper_size)
+            finally:
+                os.environ.pop("j2ly_sloppy_bars", None)
+                if previous is not None:
+                    os.environ["j2ly_sloppy_bars"] = previous
+            result = finish_output(result, options.get("variant", "tc"), part_count(data))
         elif operation == "import":
             result = jianpu_ly.xml2jianpu(read_xml(Path(source)))
         else:

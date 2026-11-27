@@ -53,7 +53,9 @@ def test_fraction_precision():
 @pytest.mark.parametrize("mutation", [
     lambda d: d.update(version=999),
     lambda d: d["score"].update(tempo="fast"),
-    lambda d: d["score"]["notes"][0].update(degree=12),
+    lambda d: d["score"]["parts"][0]["notes"][0].update(degree=12),
+    lambda d: d["score"]["parts"][0]["notes"][0].update(marks=["finger.1", "finger.2"]),
+    lambda d: d["score"]["parts"][0]["notes"][0].update(finger=1),   # v1 field names are not v2 file fields
     lambda d: d["score"].update(title="bad\nLP: text"),
     lambda d: d.update(mode="bad"),
 ])
@@ -107,7 +109,8 @@ def test_invalid_performance_marks_are_rejected(changes):
 
 def test_long_note_marks_attach_to_number_and_tie_follows_dashes():
     note = Note(2, duration=2, finger=3, bow="downbow", dynamic="mf", slide="up", slur_start=True, tie=True)
-    assert note.notation_token() == r"slideUp 2 Fr=3 \downbow \mf ( - ~"
+    # v2 orders post marks by the registry (fingering first, dynamics before bowing): tech.md §1.4
+    assert note.notation_token() == r"slideUp 2 Fr=3 \mf \downbow ( - ~"
     assert Note(3, duration=2, slur_end=True, repeat_end=True).notation_token() == "3 ) - }"
 
 
@@ -118,7 +121,8 @@ def test_complete_erhu_marks_and_page_settings_roundtrip():
                          Note(3, tie=True), Note(3, repeat_end=True)],
                   paper_size="letter", staff_size=24, bars_per_line=2)
     assert score.notation_error() is None
-    assert "R{ slideUp c1 Fr=0" in score.to_jianpu()
+    # v2: a repeat at bar 0 prints its |: (P6) and the open string prints as bold 0 (tech.md §1.4)
+    assert 'R{ \\bar ".|:" slideUp c1 \\jsFingerZero' in score.to_jianpu()
     project = Project(score)
     assert Project.from_dict(project.to_dict()) == project
 

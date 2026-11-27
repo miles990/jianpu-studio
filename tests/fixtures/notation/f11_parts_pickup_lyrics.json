@@ -1,0 +1,79 @@
+{
+ "format": "jianpu-studio",
+ "version": 2,
+ "score": {
+  "title": "Fixture",
+  "composer": "",
+  "key": "D",
+  "meter": "4/4",
+  "tempo": 80,
+  "with_staff": false,
+  "paper_size": "a4",
+  "staff_size": 20,
+  "bars_per_line": 0,
+  "pickup": 48,
+  "print_variant": "tc",
+  "parts": [
+   {
+    "name": "高音",
+    "lyrics": "一 二三四五 六七八",
+    "notes": [
+     {
+      "degree": 5
+     },
+     {
+      "degree": 1
+     },
+     {
+      "degree": 2
+     },
+     {
+      "degree": 3
+     },
+     {
+      "degree": 3
+     },
+     {
+      "degree": 2
+     },
+     {
+      "degree": 1
+     },
+     {
+      "degree": 2
+     }
+    ]
+   },
+   {
+    "name": "低音",
+    "lyrics": "甲乙丙丁戊",
+    "notes": [
+     {
+      "degree": 0
+     },
+     {
+      "degree": 1,
+      "duration": 2
+     },
+     {
+      "degree": 5,
+      "octave": -1,
+      "duration": 2
+     },
+     {
+      "degree": 5,
+      "octave": -1
+     },
+     {
+      "degree": 5,
+      "octave": -1
+     },
+     {
+      "degree": 5,
+      "octave": -1
+     }
+    ]
+   }
+  ]
+ }
+}

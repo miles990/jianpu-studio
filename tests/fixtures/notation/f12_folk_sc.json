@@ -1,0 +1,130 @@
+{
+ "format": "jianpu-studio",
+ "version": 2,
+ "score": {
+  "title": "Fixture",
+  "composer": "",
+  "key": "D",
+  "meter": "4/4",
+  "tempo": 80,
+  "with_staff": false,
+  "paper_size": "a4",
+  "staff_size": 20,
+  "bars_per_line": 0,
+  "pickup": 0,
+  "print_variant": "sc",
+  "parts": [
+   {
+    "name": "",
+    "lyrics": "",
+    "notes": [
+     {
+      "degree": 5,
+      "marks": [
+       "gz.tuo"
+      ]
+     },
+     {
+      "degree": 6,
+      "marks": [
+       "gz.gou"
+      ]
+     },
+     {
+      "degree": 1,
+      "octave": 1,
+      "marks": [
+       "stroke.yao"
+      ]
+     },
+     {
+      "degree": 6,
+      "marks": [
+       "gz.gua_up"
+      ]
+     },
+     {
+      "degree": 5,
+      "marks": [
+       "pipa.tiao"
+      ]
+     },
+     {
+      "degree": 3,
+      "marks": [
+       "stroke.lun"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "pipa.yin"
+      ]
+     },
+     {
+      "degree": 1,
+      "marks": [
+       "pipa.tui"
+      ]
+     },
+     {
+      "degree": 5,
+      "marks": [
+       "dizi.tu2"
+      ],
+      "spans_start": [
+       "line.8vb"
+      ]
+     },
+     {
+      "degree": 6,
+      "marks": [
+       "dizi.huashe"
+      ]
+     },
+     {
+      "degree": 5,
+      "marks": [
+       "dizi.die"
+      ]
+     },
+     {
+      "degree": 3,
+      "marks": [
+       "breath.v_bold"
+      ],
+      "spans_end": [
+       "line.8vb"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "pedal.on"
+      ],
+      "spans_start": [
+       "tempo.rit_span"
+      ]
+     },
+     {
+      "degree": 1
+     },
+     {
+      "degree": 6,
+      "octave": -1
+     },
+     {
+      "degree": 5,
+      "octave": -1,
+      "marks": [
+       "pedal.off"
+      ],
+      "spans_end": [
+       "tempo.rit_span"
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

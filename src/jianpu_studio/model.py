@@ -1,4 +1,9 @@
-"""Editable single-voice score. Fractions avoid rhythm rounding errors."""
+"""Editable score (project file v2): notes carry registry marks; a score has parts and a pickup.
+
+Fractions avoid rhythm rounding errors. Notes are immutable and hashable, so undo history
+can share them. The 0.3.x note fields (finger, bow, ...) remain as read-only views and as
+keyword arguments of ``Note``/``dataclasses.replace``; see ``migrate.py``.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,11 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from fractions import Fraction
 from pathlib import Path
 
+from . import i18n, migrate, symbols
 from .i18n import N_, tr
 
 KEYS = ("C", "G", "D", "A", "E", "B", "F#", "F", "Bb", "Eb", "Ab", "Db", "Gb")
@@ -17,51 +23,76 @@ METERS = ("4/4", "3/4", "2/4", "6/8", "3/8", "2/2", "9/8", "12/8")
 DURATIONS = {1: N_("全音符 · 4 拍"), 2: N_("二分 · 2 拍"), 4: N_("四分 · 1 拍"), 8: N_("八分 · ½ 拍"),
              16: N_("十六分 · ¼ 拍"), 32: N_("三十二分 · ⅛ 拍")}  # values are catalog sources; show tr(value)
 MAX_FILE_BYTES = 4 * 1024 * 1024
+MAX_NOTES = 10000
+MAX_PARTS = 4
+FORMAT_VERSION = 2
 TICKS_PER_QUARTER = 48
 GRACE_PATTERN = r"(?:[#b]?[1-7](?:'{1,2}|,{1,2})?)"
-
-
-def _grace_source(value: str) -> str:
-    """Translate the UI's octave suffixes to unambiguous upstream prefixes.
-
-    Upstream's suffix normalization can move the next note's accidental to
-    the previous pitch (e.g. 1#2'). Prefixes with OctavesBefore avoid that path.
-    """
-    return "".join(accidental + octave + degree for accidental, degree, octave
-                   in re.findall(r"([#b]?)([1-7])('{1,2}|,{1,2})?", value))
+PRINT_VARIANTS = ("tc", "sc")
+ID_FIELDS = ("marks", "spans_start", "spans_end", "bar_start", "bar_end")
 
 
 def text_value(value: object, name: str, limit: int = 200) -> str:
     if (not isinstance(value, str) or len(value) > limit
-            or any(ord(c) < 32 or c in "\x85\u2028\u2029" for c in value)):
+            or any(ord(c) < 32 or c in "\x85  " for c in value)):
         raise ValueError(tr("{name}須為單行文字，最多 {limit} 字。").format(name=name, limit=limit))
     return value
 
 
-@dataclass(frozen=True)
+def _ids(value):
+    return symbols.sort_ids(value) if isinstance(value, (list, tuple)) else value
+
+
+@dataclass(frozen=True, init=False)
 class Note:
     degree: int = 1
     octave: int = 0
     duration: int = 4
     dotted: bool = False
     accidental: str = ""
-    finger: int = -1
-    bow: str = ""
-    dynamic: str = ""
-    articulation: str = ""
-    slide: str = ""
-    slur_start: bool = False
-    slur_end: bool = False
-    tie: bool = False
-    repeat_start: bool = False
-    repeat_end: bool = False
+    tie: bool = False                    # structural: same pitch follows; MIDI merges the notes
     tuplet: int = 0
     tuplet_start: bool = False
     tuplet_end: bool = False
-    hairpin: str = ""
-    hairpin_end: bool = False
     grace_before: str = ""
     grace_after: str = ""
+    marks: tuple[str, ...] = ()          # point/pre symbol ids, registry order, unique
+    spans_start: tuple[str, ...] = ()    # line ids starting on this note
+    spans_end: tuple[str, ...] = ()      # line ids ending on this note (paired by family)
+    bar_start: tuple[str, ...] = ()      # bar items, parts[0] only, first note of a bar
+    bar_end: tuple[str, ...] = ()        # bar items, parts[0] only, last note of a bar
+
+    def __init__(self, degree=1, octave=0, duration=4, dotted=False, accidental="", *, tie=False, tuplet=0,
+                 tuplet_start=False, tuplet_end=False, grace_before="", grace_after="", marks=(), spans_start=(),
+                 spans_end=(), bar_start=(), bar_end=(), **legacy):
+        values = dict(degree=degree, octave=octave, duration=duration, dotted=dotted, accidental=accidental, tie=tie,
+                      tuplet=tuplet, tuplet_start=tuplet_start, tuplet_end=tuplet_end, grace_before=grace_before,
+                      grace_after=grace_after, marks=_ids(marks), spans_start=_ids(spans_start),
+                      spans_end=_ids(spans_end), bar_start=_ids(bar_start), bar_end=_ids(bar_end))
+        if legacy:
+            for name in ID_FIELDS:
+                if not isinstance(values[name], tuple):
+                    raise ValueError(tr("記號資料格式不正確。"))
+            migrate.apply_legacy(values, legacy)
+        for name, value in values.items():
+            object.__setattr__(self, name, value)
+
+    # ---- 0.3.x read-only views (writes go through Note(...)/replace(note, finger=...))
+    finger = property(lambda self: migrate.legacy_value(self, "finger"))
+    bow = property(lambda self: migrate.legacy_value(self, "bow"))
+    dynamic = property(lambda self: migrate.legacy_value(self, "dynamic"))
+    articulation = property(lambda self: migrate.legacy_value(self, "articulation"))
+    slide = property(lambda self: migrate.legacy_value(self, "slide"))
+    slur_start = property(lambda self: migrate.legacy_value(self, "slur_start"))
+    slur_end = property(lambda self: migrate.legacy_value(self, "slur_end"))
+    repeat_start = property(lambda self: migrate.legacy_value(self, "repeat_start"))
+    repeat_end = property(lambda self: migrate.legacy_value(self, "repeat_end"))
+    hairpin = property(lambda self: migrate.legacy_value(self, "hairpin"))
+    hairpin_end = property(lambda self: migrate.legacy_value(self, "hairpin_end"))
+
+    @property
+    def has_marks(self) -> bool:
+        return any(getattr(self, name) for name in ID_FIELDS)
 
     def validate(self) -> None:
         if type(self.degree) is not int or not 0 <= self.degree <= 7:
@@ -74,17 +105,7 @@ class Note:
             raise ValueError(tr("無效的附點或升降記號。"))
         if self.degree == 0 and (self.octave or self.accidental):
             raise ValueError(tr("休止符沒有八度或升降記號。"))
-        if type(self.finger) is not int or self.finger not in range(-1, 5):
-            raise ValueError(tr("二胡指法須為空弦 0 到 4 指。"))
-        if self.bow not in ("", "upbow", "downbow") or self.slide not in ("", "up", "down"):
-            raise ValueError(tr("不支援的弓法或滑音。"))
-        if self.dynamic not in ("", "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz"):
-            raise ValueError(tr("不支援的力度。"))
-        if self.articulation not in ("", "staccato", "tenuto", "accent", "fermata", "trill", "mordent",
-                                     "breathe", "turn", "marcato", "staccatissimo", "harmonic"):
-            raise ValueError(tr("不支援的演奏記號。"))
-        if any(type(getattr(self, name)) is not bool for name in ("slur_start", "slur_end", "tie", "repeat_start", "repeat_end",
-                                                                 "tuplet_start", "tuplet_end", "hairpin_end")):
+        if any(type(getattr(self, name)) is not bool for name in ("tie", "tuplet_start", "tuplet_end")):
             raise ValueError(tr("連線或反覆格式不正確。"))
         if type(self.tuplet) is not int or self.tuplet not in (0, 3):
             raise ValueError(tr("目前支援三連音，每組三個等時值音符。"))
@@ -92,23 +113,51 @@ class Note:
             raise ValueError(tr("三連音支援未附點的四分、八分、十六分或三十二分音符。"))
         if not self.tuplet and (self.tuplet_start or self.tuplet_end):
             raise ValueError(tr("三連音起終點須屬於三連音群組。"))
-        if self.hairpin not in ("", "crescendo", "diminuendo"):
-            raise ValueError(tr("不支援的漸強或漸弱記號。"))
         for grace in (self.grace_before, self.grace_after):
             if not isinstance(grace, str) or (grace and re.fullmatch(GRACE_PATTERN + "{1,8}", grace) is None):
                 raise ValueError(tr("倚音須為 1–8 個音（1–7），可加 #、b 及最多兩個八度後綴，例如 23 或 #4'5。"))
-        if self.degree == 0 and (self.finger >= 0 or self.bow or self.slide or self.slur_start or self.slur_end or self.tie):
+        self._validate_ids()
+        rest = self.degree == 0
+        if rest and (self.tie or any(not symbols.SYMBOLS[m].on_rest and m not in symbols.LEGACY_REST_MARKS
+                                     for m in self.marks)
+                     or any(symbols.SYMBOLS[s].family not in ("hairpin", "ottava", "text")
+                            for s in self.spans_start + self.spans_end)):
             raise ValueError(tr("休止符不能加指法、弓法、滑音或連線。"))
-        if self.degree == 0 and (self.grace_before or self.grace_after):
+        if rest and (self.grace_before or self.grace_after):
             raise ValueError(tr("休止符不能加倚音。"))
-        if self.grace_after and (self.finger >= 0 or self.bow or self.dynamic
-                                 or self.articulation not in ("", "breathe")
-                                 or self.slur_start or self.slur_end or self.tie or self.hairpin or self.hairpin_end):
+        if self.grace_after and (self.tie or self.spans_start or self.spans_end
+                                 or any(symbols.SYMBOLS[m].slot not in ("breath", "slide") for m in self.marks)):
             # Upstream places these post-events outside afterGrace's main
             # note, or moves a tie onto the last ornament. Refuse that precise
             # combination instead of printing detached marks or wrong MIDI.
             raise ValueError(tr("後倚音目前不能與同一主音的指法、弓法、力度、演奏記號或連線端點並用；"
                                 "這個組合尚不支援，請分開設定或保留原譜。換氣記號可並用。"))
+
+    def _validate_ids(self) -> None:
+        for name in ID_FIELDS:
+            value = getattr(self, name)
+            if not isinstance(value, tuple) or any(not isinstance(i, str) for i in value) or len(set(value)) != len(value):
+                raise ValueError(tr("記號資料格式不正確。"))
+            for ident in value:
+                symbol = symbols.SYMBOLS.get(ident)
+                fits = symbol is not None and (
+                    (name == "marks" and symbol.kind in ("point", "pre") and symbol.storage == "marks")
+                    or (name.startswith("spans") and symbol.storage == "spans")
+                    or (name == "bar_start" and symbol.bar_edge == "start")
+                    or (name == "bar_end" and symbol.bar_edge == "end"))
+                if not fits:
+                    raise ValueError(tr("不支援的記號或放錯位置：{id}").format(id=ident))
+        slots = {}
+        for mark in self.marks:
+            slot = symbols.SYMBOLS[mark].slot
+            if slot and slot in slots:
+                raise ValueError(tr("「{a}」與「{b}」不能同時加在一個音符上。").format(
+                    a=symbols.SYMBOLS[slots[slot]].display_name, b=symbols.SYMBOLS[mark].display_name))
+            slots[slot] = mark
+        for name in ("spans_start", "spans_end"):
+            families = [symbols.SYMBOLS[s].family for s in getattr(self, name)]
+            if len(set(families)) != len(families):
+                raise ValueError(tr("同一個音符不能有兩條同類的線條起點或終點。"))
 
     @property
     def beats(self) -> Fraction:
@@ -133,45 +182,24 @@ class Note:
         return {4: "c", 8: "q", 16: "s", 32: "d"}[self.duration] + pitch + ("." if self.dotted else "")
 
     def notation_token(self) -> str:
-        parts = []
-        if self.repeat_start:
-            parts.append("R{")
-        if self.tuplet_start:
-            parts.append("3[")
-        if self.grace_before:
-            parts.append("g[" + _grace_source(self.grace_before) + "]")
-        if self.slide:
-            parts.append("slideUp" if self.slide == "up" else "slideDown")
-        # A long note is a numbered head followed by quarter-note dashes.
-        # Attach expressive marks and slurs to its head, not its last dash.
-        head, *continuation = self.token().split()
-        parts.append(head)
-        if self.finger >= 0:
-            parts.append(f"Fr={self.finger}")
-        articulation = "flageolet" if self.articulation == "harmonic" else self.articulation
-        for mark in (self.bow, self.dynamic, "" if articulation == "breathe" else articulation):
-            if mark:
-                parts.append("\\" + mark)
-        if self.hairpin_end:
-            parts.append(r"\!")
-        if self.hairpin:
-            parts.append(r"\<" if self.hairpin == "crescendo" else r"\>")
-        if self.slur_end:
-            parts.append(")")
-        if self.slur_start:
-            parts.append("(")
-        parts.extend(continuation)
-        if self.grace_after:
-            parts.append("[" + _grace_source(self.grace_after) + "]g")
-        if self.tie:
-            parts.append("~")
-        if articulation == "breathe":
-            parts.append(r"\breathe")
-        if self.tuplet_end:
-            parts.append("]")
-        if self.repeat_end:
-            parts.append("}")
-        return " ".join(parts)
+        """This note's jianpu-ly words on their own (no bar context), e.g. for the clipboard text."""
+        from .export import note_words
+        return " ".join(note_words(self, {}))
+
+    def to_dict(self) -> dict:
+        """Compact form: the pitch, then only fields that differ from the defaults."""
+        out = {}
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if value != f.default or f.name == "degree":
+                out[f.name] = list(value) if isinstance(value, tuple) else value
+        return out
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Note:
+        if not isinstance(data, dict) or set(data) - {f.name for f in fields(cls)}:
+            raise TypeError("unexpected note fields")
+        return cls(**data)
 
 
 def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
@@ -199,123 +227,221 @@ def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
     return ranges
 
 
-@dataclass
-class Score:
-    title: str = field(default_factory=lambda: tr("未命名樂曲"))
-    composer: str = ""
-    key: str = "C"
-    meter: str = "4/4"
-    tempo: int = 96
-    lyrics: str = ""
-    with_staff: bool = False
-    notes: list[Note] = field(default_factory=list)
-    paper_size: str = "a4"
-    staff_size: int = 20
-    bars_per_line: int = 0
+def pickup_choices(bar_ticks: int) -> list[int]:
+    """Pickup lengths upstream can write (``4/4,8`` / ``3/4,4.``): one plain or dotted value."""
+    out = []
+    for duration in DURATIONS:
+        base = 4 * TICKS_PER_QUARTER // duration
+        out += [t for t in (base, base * 3 // 2) if 0 < t < bar_ticks]
+    return sorted(set(out))
 
+
+def rest_fill(ticks: int) -> list[Note]:
+    """Shortest exact rest decomposition (longest first), including odd dotted-32nd ticks."""
+    choices = [Note(0, duration=d, dotted=dot) for d in DURATIONS for dot in (True, False)]
+    fills: list[list[Note] | None] = [[]] + [None] * ticks
+    for length in range(1, ticks + 1):
+        candidates = [fills[length - n.ticks] + [n] for n in choices
+                      if n.ticks <= length and fills[length - n.ticks] is not None]
+        if candidates:
+            fills[length] = min(candidates, key=len)
+    if fills[ticks] is None:
+        raise ValueError(tr("剩餘拍數無法用目前支援的休止符補齊，請調整附點三十二分音符。"))
+    return list(reversed(fills[ticks]))
+
+
+@dataclass
+class Part:
+    name: str = ""
+    notes: list[Note] = field(default_factory=list)
+    lyrics: str = ""
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "lyrics": self.lyrics, "notes": [n.to_dict() for n in self.notes]}
+
+
+def _default_variant() -> str:
+    return "sc" if i18n.current_language() == i18n.SIMPLIFIED else "tc"
+
+
+@dataclass(init=False)
+class Score:
+    title: str
+    composer: str
+    key: str
+    meter: str
+    tempo: int
+    with_staff: bool
+    paper_size: str
+    staff_size: int
+    bars_per_line: int
+    pickup: int                # pickup length in ticks (48 per quarter); 0 = none
+    print_variant: str         # technique text printed in Traditional ("tc") or Simplified ("sc")
+    parts: list[Part]
+
+    def __init__(self, title=None, composer="", key="C", meter="4/4", tempo=96, with_staff=False, paper_size="a4",
+                 staff_size=20, bars_per_line=0, pickup=0, print_variant=None, parts=None, *, notes=None, lyrics=None):
+        self.title = tr("未命名樂曲") if title is None else title
+        self.composer, self.key, self.meter, self.tempo = composer, key, meter, tempo
+        self.with_staff, self.paper_size, self.staff_size = with_staff, paper_size, staff_size
+        self.bars_per_line, self.pickup = bars_per_line, pickup
+        self.print_variant = _default_variant() if print_variant is None else print_variant
+        # New Part objects (sharing note lists, like 0.3.x replace()) so a changed copy
+        # never edits the original's parts.
+        self.parts = [replace(p) if isinstance(p, Part) else p for p in parts] if parts else [Part()]
+        if notes is not None:
+            self.parts[0] = replace(self.parts[0], notes=notes)
+        if lyrics is not None:
+            self.parts[0] = replace(self.parts[0], lyrics=lyrics)
+
+    # ---- part 0 as the 0.3.x single voice
+    @property
+    def notes(self) -> list[Note]:
+        return self.parts[0].notes
+
+    @notes.setter
+    def notes(self, value: list[Note]) -> None:
+        self.parts[0].notes = value
+
+    @property
+    def lyrics(self) -> str:
+        return self.parts[0].lyrics
+
+    @lyrics.setter
+    def lyrics(self, value: str) -> None:
+        self.parts[0].lyrics = value
+
+    def copy(self) -> Score:
+        """Independent part/note lists; notes themselves are immutable and shared."""
+        return replace(self, parts=[replace(p, notes=list(p.notes)) for p in self.parts])
+
+    # ---- bars
     @property
     def bar_length(self) -> Fraction:
         numerator, denominator = self.meter.split("/")
         return Fraction(int(numerator) * 4, int(denominator))
 
+    @property
+    def bar_ticks(self) -> int:
+        return int(self.bar_length * TICKS_PER_QUARTER)
+
+    @property
+    def first_bar_ticks(self) -> int:
+        return self.pickup or self.bar_ticks
+
+    def bar_index(self, position: int) -> int:
+        """Zero-based bar holding the tick ``position`` (bar 0 is the pickup when there is one)."""
+        first = self.first_bar_ticks
+        return 0 if position < first else 1 + (position - first) // self.bar_ticks
+
+    def bar_room(self, position: int) -> tuple[int, int]:
+        """(offset inside its bar, length of that bar) for a tick position."""
+        first = self.first_bar_ticks
+        return (position, first) if position < first else ((position - first) % self.bar_ticks, self.bar_ticks)
+
+    def is_boundary(self, position: int) -> bool:
+        return self.bar_room(position)[0] == 0
+
+    def part_bars(self, index: int = 0) -> list[tuple[int, int]]:
+        """Note ranges (start, end-exclusive) of each bar of one part; an unfinished last bar counts."""
+        ranges, start, position = [], 0, 0
+        notes = self.parts[index].notes
+        for row, note in enumerate(notes):
+            position += note.ticks
+            if self.is_boundary(position):
+                ranges.append((start, row + 1))
+                start = row + 1
+        if start < len(notes):
+            ranges.append((start, len(notes)))
+        return ranges
+
+    def final_bar_targets(self, total: int) -> list[int]:
+        """Allowed end positions >= total for the last bar (pickup: bar - pickup, or a full bar)."""
+        if not self.pickup:
+            return [total + (-total) % self.bar_ticks]
+        if total <= self.pickup:
+            return [self.pickup + self.bar_ticks - self.pickup]
+        offset = (total - self.pickup) % self.bar_ticks
+        base = total - offset
+        short = base + self.bar_ticks - self.pickup
+        return sorted({t for t in (short, base + self.bar_ticks) if t >= total} | ({total} if offset == 0 else set()))
+
+    # ---- validation
     def validate(self) -> None:
         text_value(self.title, tr("曲名"))
         text_value(self.composer, tr("作曲者"))
-        text_value(self.lyrics, tr("歌詞"), 20000)
         if self.key not in KEYS or self.meter not in METERS:
             raise ValueError(tr("不支援此調號或拍號。"))
         if type(self.tempo) is not int or not 20 <= self.tempo <= 300:
             raise ValueError(tr("速度須介於每分鐘 20 到 300 拍。"))
-        if type(self.with_staff) is not bool or not isinstance(self.notes, list) or len(self.notes) > 10000:
+        if type(self.with_staff) is not bool:
             raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
         if self.paper_size not in ("a4", "letter") or type(self.staff_size) is not int or not 16 <= self.staff_size <= 30:
             raise ValueError(tr("紙張須為 A4 / Letter，譜字大小須為 16–30。"))
         if type(self.bars_per_line) is not int or not 0 <= self.bars_per_line <= 8:
             raise ValueError(tr("每行小節數須為自動（0）到 8。"))
-        for note in self.notes:
-            if not isinstance(note, Note):
-                raise ValueError(tr("樂譜音符格式不正確。"))
-            note.validate()
-        tuplet_ranges(self.notes)
+        if type(self.pickup) is not int or (self.pickup and self.pickup not in pickup_choices(self.bar_ticks)):
+            raise ValueError(tr("弱起長度須為單一時值或附點時值，且短於一小節。"))
+        if self.print_variant not in PRINT_VARIANTS:
+            raise ValueError(tr("譜面文字須為繁體或簡體。"))
+        if (not isinstance(self.parts, list) or not 1 <= len(self.parts) <= MAX_PARTS
+                or any(not isinstance(p, Part) for p in self.parts)):
+            raise ValueError(tr("樂譜須有 1 到 4 個聲部。"))
+        if (any(not isinstance(p.notes, list) for p in self.parts)
+                or sum(len(p.notes) for p in self.parts) > MAX_NOTES):
+            raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
+        for index, part in enumerate(self.parts):
+            text_value(part.name, tr("聲部名稱"), 40)
+            text_value(part.lyrics, tr("歌詞"), 20000)
+            for note in part.notes:
+                if not isinstance(note, Note):
+                    raise ValueError(tr("樂譜音符格式不正確。"))
+                note.validate()
+                if index and (note.bar_start or note.bar_end):
+                    raise ValueError(tr("小節線、反覆與跳躍記號只能放在第一聲部。"))
+            tuplet_ranges(part.notes)
 
     def rhythm_error(self) -> str | None:
-        position = 0
-        bar_ticks = int(self.bar_length * TICKS_PER_QUARTER)
-        for i, note in enumerate(self.notes):
-            offset = position % bar_ticks
-            if offset + note.ticks > bar_ticks:
-                return tr("第 {n} 個音符超出第 {bar} 小節。請縮短時值，跨小節長音可拆成音符再加延音線。").format(n=i + 1, bar=position // bar_ticks + 1)
-            position += note.ticks
-        if self.notes and position % bar_ticks:
-            return tr("最後一小節還缺 {beats} 拍。按「補齊休止符」即可完成。").format(beats=Fraction(bar_ticks - position % bar_ticks, TICKS_PER_QUARTER))
-        return None
+        from .notation_rules import rhythm_error
+        return rhythm_error(self)
 
     def notation_error(self) -> str | None:
-        slur = repeat = hairpin = False
-        position = 0
-        bar_ticks = int(self.bar_length * TICKS_PER_QUARTER)
-        try:
-            groups = {start: end for start, end in tuplet_ranges(self.notes)}
-        except ValueError as exc:
-            return str(exc)
-        for i, note in enumerate(self.notes):
-            if i in groups and position % bar_ticks + sum(n.ticks for n in self.notes[i:groups[i]]) > bar_ticks:
-                return tr("第 {n} 個音符的三連音跨越小節；請將整組移到同一小節內。").format(n=i + 1)
-            if note.hairpin_end:
-                if not hairpin:
-                    return tr("第 {n} 個音符的漸強或漸弱線缺少起點。").format(n=i + 1)
-                hairpin = False
-            elif hairpin and note.dynamic:
-                return tr("第 {n} 個音符的力度會中斷漸強或漸弱線；請把力度放在起終點，或拆成兩段。").format(n=i + 1)
-            if note.hairpin:
-                if hairpin:
-                    return tr("第 {n} 個音符有重疊的漸強或漸弱線，請先結束前一段。").format(n=i + 1)
-                hairpin = True
-            if note.slur_end:
-                if not slur:
-                    return tr("第 {n} 個音符的連弓線缺少起點。").format(n=i + 1)
-                slur = False
-            if note.slur_start:
-                if slur:
-                    return tr("第 {n} 個音符有重疊連弓線，請先移除舊連線。").format(n=i + 1)
-                slur = True
-            if note.tie and (not note.degree or i+1 == len(self.notes) or
-                             (note.degree, note.octave, "" if note.accidental == "n" else note.accidental) !=
-                             (self.notes[i+1].degree, self.notes[i+1].octave,
-                              "" if self.notes[i+1].accidental == "n" else self.notes[i+1].accidental)):
-                return tr("第 {n} 個音符的延音線須接到下一個相同音高的音符。").format(n=i + 1)
-            if note.repeat_start:
-                if repeat or position % bar_ticks:
-                    return tr("第 {n} 個音符的反覆起點須在小節開頭，且不能重疊。").format(n=i + 1)
-                repeat = True
-            position += note.ticks
-            if note.repeat_end:
-                if not repeat or position % bar_ticks:
-                    return tr("第 {n} 個音符的反覆終點須在完整小節末，且需要起點。").format(n=i + 1)
-                repeat = False
-        if slur or repeat:
-            return tr("連弓線或反覆段落缺少終點。請選取完整範圍重新設定，或移除記號。")
-        if hairpin:
-            return tr("漸強或漸弱線缺少終點；請選取完整範圍重新設定，或移除記號。")
-        return None
+        from .notation_rules import notation_error
+        return notation_error(self)
+
+    def export_warnings(self) -> list[str]:
+        """Things the export silently adjusts (shown to the user; the PDF is still correct)."""
+        from .export import export_warnings
+        return export_warnings(self)
+
+    def needs_sloppy_final_bar(self) -> bool:
+        """A pickup with a full final bar: upstream needs j2ly_sloppy_bars (tech.md §3.2e)."""
+        if not self.pickup or not self.notes:
+            return False
+        total = sum(n.ticks for n in self.notes)
+        return total > self.pickup and (total - self.pickup) % self.bar_ticks == 0
 
     def fill_last_bar(self) -> None:
-        tuplet_ranges(self.notes)
-        remainder = (-sum(n.ticks for n in self.notes)) % int(self.bar_length * TICKS_PER_QUARTER)
-        choices = [Note(0, duration=d, dotted=dot) for d in DURATIONS for dot in (True, False)]
-        # A greedy decomposition can leave a single unrepresentable tick after
-        # dotted 32nds. Find the shortest exact fill before mutating the score.
-        fills: list[list[Note] | None] = [[]] + [None] * remainder
-        for ticks in range(1, remainder + 1):
-            candidates = [fills[ticks - n.ticks] + [n] for n in choices
-                          if n.ticks <= ticks and fills[ticks - n.ticks] is not None]
-            if candidates:
-                fills[ticks] = min(candidates, key=len)
-        if fills[remainder] is None:
-            raise ValueError(tr("剩餘拍數無法用目前支援的休止符補齊，請調整附點三十二分音符。"))
-        if len(self.notes) + len(fills[remainder]) > 10000:
+        """Complete the last bar of every part with rests (to the next allowed length)."""
+        for part in self.parts:
+            tuplet_ranges(part.notes)
+        totals = [sum(n.ticks for n in p.notes) for p in self.parts]
+        target = max(self.final_bar_targets(t)[0] for t in totals)
+        fills = [self.rests_between(total, target) for total in totals]
+        if sum(len(p.notes) for p in self.parts) + sum(map(len, fills)) > MAX_NOTES:
             raise ValueError(tr("音符太多（上限 10,000）。"))
-        self.notes.extend(reversed(fills[remainder]))
+        for part, fill in zip(self.parts, fills):
+            part.notes.extend(fill)
+
+    def rests_between(self, start: int, end: int) -> list[Note]:
+        """Rests from tick ``start`` to ``end``, split at bar lines."""
+        out, position = [], start
+        while position < end:
+            offset, length = self.bar_room(position)
+            step = min(end, position - offset + length) - position
+            out += rest_fill(step)
+            position += step
+        return out
 
     def to_jianpu(self) -> str:
         self.validate()
@@ -325,30 +451,32 @@ class Score:
             raise ValueError(error)
         if error := self.notation_error():
             raise ValueError(error)
-        # These text fields are literal, never raw LilyPond/Scheme.
-        def literal(s: str) -> str:
-            return s.replace('"', "' ").replace("\\", "/").replace("%", "％").replace("{", "｛").replace("}", "｝")
-        lines = [f"title={literal(self.title)}", f"composer={literal(self.composer)}", "NoIndent"]
-        if any(note.grace_before or note.grace_after for note in self.notes):
-            # Only grace/chord parsing consults this upstream option; ordinary
-            # single notes keep their existing octave suffix syntax unchanged.
-            lines.append("OctavesBefore")
-        if self.with_staff:
-            lines.append("WithStaff")
-        lines.append(f"1={self.key} {self.meter} 4={self.tempo}")
-        bar, position = [], 0
-        bar_ticks = int(self.bar_length * TICKS_PER_QUARTER)
-        for note in self.notes:
-            bar.append(note.notation_token())
-            position += note.ticks
-            if position % bar_ticks == 0:
-                lines.append(" ".join(bar))
-                if self.bars_per_line and position // bar_ticks % self.bars_per_line == 0:
-                    lines.append("\\break")
-                bar = []
-        if self.lyrics.strip():
-            lines.append("H: " + literal(self.lyrics))
-        return "\n".join(lines) + "\n"
+        from .export import to_jianpu
+        return to_jianpu(self)
+
+    def to_dict(self) -> dict:
+        from .notation_rules import normalized_parts
+        data = {f.name: getattr(self, f.name) for f in fields(self) if f.name != "parts"}
+        data["parts"] = [p.to_dict() for p in normalized_parts(self)]
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> Score:
+        allowed = {f.name for f in fields(cls)}
+        if not isinstance(raw, dict) or set(raw) - allowed or not isinstance(raw.get("parts"), list):
+            raise TypeError("unexpected score fields")
+        values = dict(raw)
+        if len(values["parts"]) > MAX_PARTS or sum(len(p.get("notes", [])) if isinstance(p, dict) else 0
+                                                   for p in values["parts"]) > MAX_NOTES:
+            raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
+        parts = []
+        for item in values["parts"]:
+            if not isinstance(item, dict) or set(item) - {"name", "notes", "lyrics"} or not isinstance(item.get("notes", []), list):
+                raise TypeError("unexpected part fields")
+            parts.append(Part(item.get("name", ""), [Note.from_dict(n) for n in item.get("notes", [])], item.get("lyrics", "")))
+        values["parts"] = parts
+        values.setdefault("print_variant", "tc")
+        return cls(**values)
 
 
 @dataclass
@@ -358,33 +486,60 @@ class Project:
     source: str = ""
 
     def snapshot(self) -> Project:
-        # Notes are immutable: history shares notes, never mutable score lists.
-        return replace(self, score=replace(self.score, notes=list(self.score.notes)))
+        # Notes are immutable: history shares notes, never mutable part lists.
+        return replace(self, score=self.score.copy())
 
     def to_dict(self) -> dict:
-        return {"format": "jianpu-studio", "version": 1, **asdict(self)}
+        return {"format": "jianpu-studio", "version": FORMAT_VERSION, "mode": self.mode, "source": self.source,
+                "score": self.score.to_dict()}
 
     @classmethod
     def from_dict(cls, data: dict) -> Project:
         if (not isinstance(data, dict) or data.get("format") != "jianpu-studio"
-                or type(data.get("version")) is not int or data.get("version") != 1):
-            raise ValueError(tr("不是支援的簡譜工房專案（需要格式版本 1）。"))
+                or type(data.get("version")) is not int or data.get("version") not in (1, FORMAT_VERSION)):
+            raise ValueError(tr("不是支援的簡譜工房專案（需要格式版本 1 或 2）。"))
+        if set(data) - {"format", "version", "mode", "source", "score"}:
+            raise ValueError(tr("專案資料不完整或欄位格式錯誤。"))
         try:
-            raw = dict(data["score"])
-            if not isinstance(raw.get("notes"), list) or len(raw["notes"]) > 10000:
-                raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
-            raw["notes"] = [Note(**n) for n in raw["notes"]]
-            score = Score(**raw)
+            raw = data["score"]
+            if data["version"] == 1:
+                if not isinstance(raw, dict) or not isinstance(raw.get("notes"), list) or len(raw["notes"]) > MAX_NOTES:
+                    raise ValueError(tr("樂譜格式不正確或音符太多（上限 10,000）。"))
+                raw = migrate.v1_score_to_v2(raw)
+            score = Score.from_dict(raw)
             score.validate()
             mode, source = data.get("mode", "visual"), data.get("source", "")
             if mode not in ("visual", "source") or not isinstance(source, str) or len(source) > MAX_FILE_BYTES:
                 raise ValueError(tr("專案模式或原始碼不正確。"))
             return cls(score, mode, source)
-        except (KeyError, TypeError) as exc:
+        except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(tr("專案資料不完整或欄位格式錯誤。")) from exc
 
     def notation(self) -> str:
-        return self.score.to_jianpu() if self.mode == "visual" else self.source
+        """jianpu-ly text for the engine; visual scores carry their print options in a comment."""
+        if self.mode != "visual":
+            return self.source
+        text = self.score.to_jianpu()
+        options = render_options(self.score)
+        return (directive(options) + text) if options else text
+
+
+# ``% jianpu-studio: print=sc sloppy-bars`` — read by worker.py; harmless to upstream (a comment).
+DIRECTIVE = "% jianpu-studio:"
+
+
+def render_options(score: Score) -> dict:
+    options = {}
+    if score.print_variant == "sc":
+        options["print"] = "sc"
+    if score.needs_sloppy_final_bar():
+        options["sloppy-bars"] = True
+    return options
+
+
+def directive(options: dict) -> str:
+    words = [f"{k}={v}" if v is not True else k for k, v in options.items()]
+    return DIRECTIVE + " " + " ".join(words) + "\n"
 
 
 def atomic_write(path: Path, text: str | bytes) -> None:

@@ -1,0 +1,113 @@
+{
+ "format": "jianpu-studio",
+ "version": 2,
+ "score": {
+  "title": "Fixture",
+  "composer": "",
+  "key": "D",
+  "meter": "4/4",
+  "tempo": 80,
+  "with_staff": false,
+  "paper_size": "a4",
+  "staff_size": 20,
+  "bars_per_line": 0,
+  "pickup": 0,
+  "print_variant": "tc",
+  "parts": [
+   {
+    "name": "",
+    "lyrics": "",
+    "notes": [
+     {
+      "degree": 5,
+      "marks": [
+       "orn.prall"
+      ]
+     },
+     {
+      "degree": 6,
+      "marks": [
+       "orn.mordent_sharp"
+      ]
+     },
+     {
+      "degree": 5,
+      "marks": [
+       "orn.prallprall"
+      ]
+     },
+     {
+      "degree": 3,
+      "marks": [
+       "orn.trill_flat"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "trem.1"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "trem.2"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "trem.3"
+      ]
+     },
+     {
+      "degree": 2,
+      "marks": [
+       "trem.4"
+      ]
+     },
+     {
+      "degree": 5,
+      "spans_start": [
+       "line.8va"
+      ]
+     },
+     {
+      "degree": 6
+     },
+     {
+      "degree": 1,
+      "octave": 1
+     },
+     {
+      "degree": 2,
+      "octave": 1,
+      "spans_end": [
+       "line.8va"
+      ]
+     },
+     {
+      "degree": 3,
+      "duration": 2,
+      "spans_start": [
+       "orn.trill_span"
+      ]
+     },
+     {
+      "degree": 2,
+      "spans_end": [
+       "orn.trill_span"
+      ]
+     },
+     {
+      "degree": 1,
+      "marks": [
+       "arp.up",
+       "art.fermata"
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}
