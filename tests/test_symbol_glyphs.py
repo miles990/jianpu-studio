@@ -106,13 +106,38 @@ def test_mo_and_tan_are_drawn_strokes_not_the_dot_like_glyph(qapp):
     assert not symbols.SYMBOLS["pipa.tan"].hidden
 
 
-def test_tenuto_and_finger_one_are_distinguishable(qapp):
+def no_fonts(monkeypatch):
+    """Fail any attempt to typeset text, as on a machine whose font database lacks the face."""
+    def refuse(*args, **kwargs):
+        raise AssertionError(f"typeset text {args[1]!r}: depends on the platform font")
+    monkeypatch.setattr(glyphs, "_text", refuse)
+
+
+def test_tenuto_and_finger_one_are_distinguishable(qapp, monkeypatch):
     tenuto, finger = symbols.SYMBOLS["art.tenuto"], symbols.SYMBOLS["finger.1"]
     assert tenuto.canvas != finger.canvas and finger.export == "post:Fr=1"
     assert macro(tenuto) and "\\tenuto" in macro(tenuto) and "setlinewidth" in macro(tenuto)
-    t_width, t_height, _ = ink(draw("art.tenuto"))
-    f_width, f_height, _ = ink(draw("finger.1"))
+    no_fonts(monkeypatch)              # both are drawn strokes: the comparison cannot depend on the CI fonts
+    t_width, t_height, t_ink = ink(draw("art.tenuto"))
+    f_width, f_height, f_ink = ink(draw("finger.1"))
     assert t_width < f_width * 0.8 and t_height >= 4          # short and thick vs the long thin 一
+    assert f_height < t_height and f_ink / f_width < 0.7 * t_ink / t_width
+
+
+def test_erhu_fingers_one_to_three_are_drawn_strokes_without_fonts(qapp, monkeypatch):
+    no_fonts(monkeypatch)
+    for count in (1, 2, 3):
+        assert symbols.SYMBOLS[f"finger.{count}"].canvas == "text:" + "一二三"[count - 1]
+        image = draw(f"finger.{count}")
+        width, _, _ = ink(image)
+        assert 18 <= width <= 24                                  # one CJK em at 11.5 px × 2
+        lines = 0
+        inside = False
+        for y in range(image.height()):
+            dark = image.pixelColor(image.width() // 2, y).alpha() > 128
+            lines += dark and not inside
+            inside = dark
+        assert lines == count                                     # 一 二 三: one, two, three strokes
 
 
 @pytest.mark.parametrize("sid, count", [("trem.1", 1), ("trem.2", 2), ("trem.3", 3), ("trem.4", 4),

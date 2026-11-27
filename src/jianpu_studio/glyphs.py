@@ -234,10 +234,29 @@ _SHAPE_TEXT = {"↗": "slide_up", "↘": "slide_down", "～": "tilde", "▼": "t
                "∟∟(stacked)": "double_tuo"}
 
 
+# Erhu fingers 一二三 (canvas text of finger.1–3) are drawn as strokes in the proportions of a Hei face at 11.5 px (em ≈ 11.5 s):
+# (y offset, width) per stroke. Drawn rather than typeset so 一 always reads as a long *thin* line,
+# clearly unlike the short thick tenuto bar, whatever CJK font the system has (or lacks).
+FINGER_STROKE_WIDTH = 1.15
+FINGER_STROKES = {"finger.1": ((0.0, 10.5),),
+                  "finger.2": ((-3.2, 7.5), (3.2, 10.5)),
+                  "finger.3": ((-4.0, 8.5), (-0.3, 7.0), (4.0, 10.5))}
+
+
+def _finger_strokes(p, sid, x, y, s, color):
+    _pen(p, color, FINGER_STROKE_WIDTH, s)
+    for dy, width in FINGER_STROKES[sid]:
+        half = (width - FINGER_STROKE_WIDTH) / 2 * s        # round caps add half a stroke each end
+        p.drawLine(QPointF(x - half, y + dy * s), QPointF(x + half, y + dy * s))
+
+
 def _text_mark(p, symbol, x, y, s, color, variant):
     text = symbol.canvas_text(variant)
     if text in _SHAPE_TEXT:
         _shape(p, _SHAPE_TEXT[text], symbol, x, y, s, color, variant)
+        return
+    if symbol.id in FINGER_STROKES:
+        _finger_strokes(p, symbol.id, x, y, s, color)
         return
     if is_dynamic(symbol):
         _text(p, text, x, y, font("dynamic", 15 * s), color)
