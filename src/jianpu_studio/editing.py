@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -257,7 +258,12 @@ class EditActions(NotationActions):
         self.rhythm_label.style().unpolish(self.rhythm_label)
         self.rhythm_label.style().polish(self.rhythm_label)
         self.problem_button.setVisible(bool(error or found))
-        self.fill_button.setVisible(bool(found) and any(bar == len(score.part_bars(p)) - 1 for p, bar, _ in found))
+        fix = getattr(error, "fix", None) if error else None
+        fill = (bool(found) and any(bar == len(score.part_bars(p)) - 1 for p, bar, _ in found)) or (fix and fix[0] == "fill")
+        self.fill_button.setText(tr("補齊休止符") if fill or not fix else tr("移除孤立記號"))
+        self.fill_button.setToolTip(tr("把最後一小節補滿休止符") if fill or not fix else
+                                    tr("移除這個沒有另一端的記號（可復原）：{problem}").format(problem=error))
+        self.fill_button.setVisible(bool(fill or fix))
 
     def capture_fields(self, *_):
         if self.loading or (self.task and self.task_blocks_edit):
@@ -271,12 +277,18 @@ class EditActions(NotationActions):
         if all(getattr(score, name) == value for name, value in values.items()) and score.parts[part].lyrics == lyrics:
             return
 
+        from .notation_rules import crossing
+        was_whole = crossing(score) is None
+
         def update(project):
             for name, value in values.items():
                 setattr(project.score, name, value)
             project.score.parts[part] = replace(project.score.parts[part], lyrics=lyrics)
             if project.score.pickup and project.score.pickup not in pickup_choices(project.score.bar_ticks):
                 project.score.pickup = 0
+            if was_whole and (problem := crossing(project.score)):
+                raise ValueError(tr("改成 {meter} 拍後小節線會移到別的位置，{where}的音會跨過小節線，所以沒有修改。"
+                                    "請先調整這些音的時值，或新增一份樂譜。").format(meter=project.score.meter, where=problem))
         self.mutate(update)
 
     def change_pickup(self, *_):
@@ -286,8 +298,14 @@ class EditActions(NotationActions):
         if ticks is None or ticks == self.project.score.pickup:
             return
 
+        from .notation_rules import crossing
+        was_whole = crossing(self.project.score) is None
+
         def update(project):
             project.score.pickup = ticks
+            if was_whole and (problem := crossing(project.score)):
+                raise ValueError(tr("改變弱起長度會讓後面的小節線全部移動，{where}的音會跨過小節線，所以沒有修改。"
+                                    "請先在曲首補上或刪去相同長度的音。").format(where=problem))
         if not self.mutate(update):
             self.sync()
 
@@ -395,7 +413,9 @@ class EditActions(NotationActions):
             self.update_selection()
             return
         rows = self.notes.selected_rows()
-        if rows:
+        if rows and name in ("duration", "dotted"):
+            self.rhythm_change(rows, lambda note: self.replace_note(note, {name: value}))
+        elif rows:
             part = self.part
 
             def update(project):
@@ -403,6 +423,73 @@ class EditActions(NotationActions):
                 for row in rows:
                     notes[row] = self.replace_note(notes[row], {name: value})
             self.mutate(update)
+
+    # ---------------------------------------------------------------- local rhythm edits
+    def choose_rhythm_option(self, refused):
+        """Ask which way out of a refused rhythm edit (``refused.choices``); None = cancel.
+        Tests replace this method."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(tr("放不下這個時值"))
+        box.setText(str(refused))
+        buttons = {}
+        for choice in refused.choices:
+            buttons[box.addButton(choice.label, QMessageBox.ButtonRole.AcceptRole)] = choice.key
+        cancel = box.addButton(tr("取消"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.exec()
+        return buttons.get(box.clickedButton())
+
+    def rhythm_refused(self, refused):
+        """Say why, at the place: select the note and show the reason (no modal dialog)."""
+        if refused.row is not None and refused.part == self.part and refused.row < len(self.part_notes()):
+            self.notes.select_rows([refused.row], refused.row)
+            self.notes.scrollTo(self.notes.currentIndex())
+        self.statusBar().showMessage(str(refused), 12000)
+        self.toast.show_text("⚠ " + str(refused))
+
+    def run_rhythm_edit(self, make, *, keep_selection=False):
+        """``make(choice)`` builds a ``RhythmEdit``; refusals offer their choices, then retry."""
+        if self.loading or (self.task and self.task_blocks_edit):
+            return False
+        from .rhythm_edit import RhythmRefused
+        choice = ""
+        while True:
+            try:
+                result = make(choice)
+                break
+            except RhythmRefused as refused:
+                if refused.choices and not choice:
+                    choice = self.choose_rhythm_option(refused)
+                    if choice:
+                        continue
+                    self.update_selection()          # the note bar shows the note's real value again
+                    self.notes.setFocus()
+                    return False
+                self.rhythm_refused(refused)
+                self.update_selection()
+                return False
+        part = self.part
+
+        def update(project):
+            project.score.parts[part].notes = list(result.notes)
+            for other, notes in (result.others or {}).items():
+                project.score.parts[other].notes = list(notes)
+        selection = None if keep_selection else result.selection
+        current = None if keep_selection else result.current
+        if not self.mutate(update, selection=selection, current=current):
+            return False
+        if result.notice:
+            self.toast.show_text(result.notice, self.undo)
+        elif hasattr(self, "toast"):
+            self.toast.dismiss()
+        return True
+
+    def rhythm_change(self, rows, change):
+        """Change durations in place: only each note's own bar changes (rests fill or give way)."""
+        from .rhythm_edit import change_notes
+        part = self.part
+        return self.run_rhythm_edit(lambda choice: change_notes(self.project.score, part, rows, change, choice=choice))
 
     def duration_clicked(self, value):
         self.duration.setCurrentIndex(self.duration.findData(value))
@@ -445,15 +532,18 @@ class EditActions(NotationActions):
             self.error(tr("無法新增"), tr("每份樂譜最多支援 10,000 個音符。"))
             return
         index = self.insertion_index()
-        previous_rows, previous_current = self.notes.selected_rows(), self.notes.currentRow()
         part = self.part
+        from .rhythm_edit import insert_notes
+        before = self.insert_position.currentData() == "before" and bool(self.notes.selected_rows())
 
-        def insert(project):
-            project.score.parts[part].notes[index:index] = notes
-        before = self.insert_position.currentData() == "before"
-        selection = [r + len(notes) for r in previous_rows] if before else range(index, index + len(notes))
-        current = previous_current + len(notes) if before and previous_current >= 0 else -1 if before else index + len(notes) - 1
-        if self.mutate(insert, selection=selection, current=current):
+        def make(choice):
+            result = insert_notes(self.project.score, part, index, notes, choice=choice)
+            if before:
+                # Keep the caret before the same note, so typing 1 2 3 inserts in order.
+                row = index + len(notes)
+                result = replace(result, selection=(row,), current=row)
+            return result
+        if self.run_rhythm_edit(make):
             self.notes.scrollTo(self.notes.currentIndex())
 
     def input_pitch(self, degree):
@@ -478,12 +568,8 @@ class EditActions(NotationActions):
         if not rows or not self.require_complete_tuplets(rows):
             return
         part = self.part
-        next_row = min(rows[0], len(self.part_notes()) - len(rows) - 1)
-
-        def delete(project):
-            selected = set(rows)
-            project.score.parts[part].notes = [n for i, n in enumerate(project.score.parts[part].notes) if i not in selected]
-        self.mutate(delete, selection=[next_row] if next_row >= 0 else [], current=next_row)
+        from .rhythm_edit import delete_notes
+        self.run_rhythm_edit(lambda choice: delete_notes(self.project.score, part, rows))
 
     def copy_notes(self):
         if not self.require_complete_tuplets(self.notes.selected_rows()):
@@ -598,7 +684,7 @@ class EditActions(NotationActions):
             if self.input_mode.currentData() != "edit":
                 self.next_note = change(self.next_note)
                 self.update_selection()
-            else:
+            elif command in ("raise", "lower"):
                 rows = self.notes.selected_rows()
                 part = self.part
 
@@ -607,6 +693,37 @@ class EditActions(NotationActions):
                     for row in rows:
                         notes[row] = change(notes[row])
                 self.mutate(update)
+            elif self.notes.selected_rows():
+                self.rhythm_change(self.notes.selected_rows(), change)
+
+    def ask_note_text(self, current):
+        """The text to put above the note (None = cancel). Tests replace this method."""
+        from PySide6.QtWidgets import QInputDialog
+        value, ok = QInputDialog.getText(
+            self, tr("音符上方文字"),
+            tr("速度、表情或段落標題，例如：中速、深情地、引子。印在這個音的上方；留空即移除。"),
+            QLineEdit.EchoMode.Normal, current)
+        return value.strip() if ok else None
+
+    def edit_note_text(self):
+        """Free text above the current note: tempo words, expression, section headings."""
+        rows = self.notes.selected_rows()
+        if not rows:
+            self.statusBar().showMessage(tr("請先點一個音符或休止符，再加上方文字。"), 6000)
+            return False
+        row = self.notes.currentRow() if self.notes.currentRow() in rows else rows[0]
+        part = self.part
+        value = self.ask_note_text(self.part_notes()[row].text)
+        if value is None:
+            return False
+
+        def update(project):
+            notes = project.score.parts[part].notes
+            notes[row] = replace(notes[row], text=value)
+        if self.mutate(update, selection=[row], current=row):
+            self.toast.show_text(tr("已加上「{text}」。").format(text=value) if value else tr("已移除上方文字。"), self.undo)
+            return True
+        return False
 
     def note_menu(self, position):
         menu = QMenu(self)
@@ -615,6 +732,10 @@ class EditActions(NotationActions):
             self.notes.select_bar(bar)
         search = menu.addAction(tr("加記號…　/"), self.palette.focus_search)
         search.setEnabled(True)
+        text = menu.addAction(tr("音符上方文字（中速、深情地、引子…）…"), self.edit_note_text)
+        text.setEnabled(bool(self.notes.selected_rows()))
+        if not text.isEnabled():
+            text.setToolTip(tr("請先點一個音符或休止符"))
         for sid in self.palette.recents[:5]:
             symbol = symbols.SYMBOLS[sid]
             state = self.symbol_state(sid)
@@ -733,6 +854,20 @@ class EditActions(NotationActions):
             self.statusBar().showMessage(tr("請先點選要填寫的休止符 0，或按「＋新增小節」。"), 6000)
             return
         row = self.notes.currentRow() if self.notes.currentRow() in rows else rows[0]
+        notes = self.part_notes()
+        if all(notes[r].degree != 0 for r in rows):
+            # 填寫 on written notes: a digit re-pitches them in place, keeping each duration,
+            # so nothing in the bar moves; then go on to the next note, like filling rests.
+            part, degree = self.part, note.degree
+
+            def update(project):
+                written = project.score.parts[part].notes
+                for r in rows:
+                    written[r] = self.replace_note(written[r], {"degree": degree})
+            if self.mutate(update) and max(rows) + 1 < len(self.part_notes()):
+                self.notes.select_rows([max(rows) + 1], max(rows) + 1)
+                self.notes.scrollTo(self.notes.currentIndex())
+            return
         try:
             result = replace_rest_input(self.project.score, row, note, self.part)
             if self.apply_measure_edit(result, rows_are_active=True):
@@ -803,8 +938,7 @@ class EditActions(NotationActions):
         self.add_measure_menu(menu.addMenu(tr("小節")))
 
     def fill_bar(self):
-        if any(p.notes for p in self.project.score.parts):
-            self.mutate(lambda p: p.score.fill_last_bar())
+        self.fix_problem()
 
     def current_bar(self):
         row = self.notes.currentRow()
@@ -825,15 +959,9 @@ class EditActions(NotationActions):
         problems = getattr(self, "problem_list", [])
         if not problems:
             score = self.project.score
-            import re
-            message = score.rhythm_error() or score.notation_error() or ""
-            match = re.search(r"第\s*(\d+)\s*[個个]音符", message)
-            row = int(match[1]) - 1 if match else len(score.notes) - 1
-            if row >= 0:
-                self.switch_part(0)
-                self.notes.select_rows([min(row, len(score.notes) - 1)])
-                self.notes.scrollTo(self.notes.currentIndex())
-                self.notes.setFocus()
+            message = score.rhythm_error() or self.current_notation_error()
+            if message:
+                self.goto_place(getattr(message, "part", 0), getattr(message, "row", None), getattr(message, "bar", None))
             return
         self.problem_cursor = (getattr(self, "problem_cursor", -1) + 1) % len(problems)
         part, bar, _ = problems[self.problem_cursor]
@@ -841,6 +969,44 @@ class EditActions(NotationActions):
         self.notes.select_bar(bar)
         self.notes.scrollTo(self.notes.currentIndex())
         self.notes.setFocus()
+
+    def goto_place(self, part, row=None, bar=None):
+        """Select the note (or the bar) a problem names and bring it into view."""
+        score = self.project.score
+        part = part if 0 <= (part or 0) < len(score.parts) else 0
+        notes = score.parts[part].notes
+        if part != self.part:
+            self.switch_part(part)
+        if row is not None and 0 <= row < len(notes):
+            self.notes.select_rows([row], row)
+        elif bar is not None and 0 <= bar < len(score.part_bars(part)):
+            self.notes.select_bar(bar)
+        elif notes:
+            self.notes.select_rows([len(notes) - 1], len(notes) - 1)
+        self.notes.scrollTo(self.notes.currentIndex())
+        self.notes.setFocus()
+
+    def fix_problem(self):
+        """The one-click fix of the current problem: fill the last bar, or remove an orphan mark."""
+        score = self.project.score
+        problem = score.rhythm_error() or self.current_notation_error()
+        fix = getattr(problem, "fix", None) if problem else None
+        if fix and fix[0] != "fill" and problem.row is not None:
+            part, row, (name, item) = problem.part, problem.row, fix
+
+            def update(project):
+                notes = project.score.parts[part].notes
+                note = notes[row]
+                if name == "tie":
+                    notes[row] = replace(note, tie=False)
+                else:
+                    notes[row] = replace(note, **{name: tuple(i for i in getattr(note, name) if i != item)})
+            if self.mutate(update):
+                self.toast.show_text(tr("已移除孤立的記號，可用復原還原。"), self.undo)
+            return
+        if any(p.notes for p in score.parts):
+            if self.mutate(lambda p: p.score.fill_last_bar()):
+                self.toast.show_text(tr("已補齊休止符。"), self.undo)
 
     def toggle_auto(self, checked):
         if checked:
@@ -882,7 +1048,7 @@ class EditActions(NotationActions):
 
     def show_work_log(self):
         dialog = QDialog(self)
-        dialog.setWindowTitle(tr("作業訊息"))
+        dialog.setWindowTitle(tr("工作紀錄"))
         dialog.resize(720, 460)
         layout = QVBoxLayout(dialog)
         text = QPlainTextEdit(self.log.toPlainText() or tr("目前沒有排版紀錄。"))
@@ -1001,6 +1167,10 @@ class EditActions(NotationActions):
         if sid == "tuplet.3":
             self.triplet_action()
             self.palette.record_use(sid)
+            return True
+        if sid == "text.free":
+            if self.edit_note_text():
+                self.palette.record_use(sid)
             return True
         if symbol.storage == "composite":
             self.notation_settings(2)

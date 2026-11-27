@@ -127,7 +127,7 @@ def test_unrepresentable_one_tick_tail_rejected_without_mutation():
 def test_cross_bar_notes_are_rejected_before_any_edit(operation):
     score = Score(notes=[Note(0, duration=2, dotted=True), Note(1, duration=2)])
     original = list(score.notes)
-    with pytest.raises(ValueError, match="第 2 個音符超出第 1 小節"):
+    with pytest.raises(ValueError, match="第 1 小節第 4 拍的音超出小節線"):
         operation(score)
     assert score.notes == original
 

@@ -26,6 +26,7 @@ DURATIONS = {1: N_("全音符 · 4 拍"), 2: N_("二分 · 2 拍"), 4: N_("四�
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_NOTES = 10000
 MAX_PARTS = 4
+MAX_NOTE_TEXT = 24
 FORMAT_VERSION = 2
 TICKS_PER_QUARTER = 48
 GRACE_PATTERN = r"(?:[#b]?[1-7](?:'{1,2}|,{1,2})?)"
@@ -62,14 +63,16 @@ class Note:
     spans_end: tuple[str, ...] = ()      # line ids ending on this note (paired by family)
     bar_start: tuple[str, ...] = ()      # bar items, parts[0] only, first note of a bar
     bar_end: tuple[str, ...] = ()        # bar items, parts[0] only, last note of a bar
+    text: str = ""                       # free text above the note: 中速、深情地、引子… (print + canvas)
 
     def __init__(self, degree=1, octave=0, duration=4, dotted=False, accidental="", *, tie=False, tuplet=0,
                  tuplet_start=False, tuplet_end=False, grace_before="", grace_after="", marks=(), spans_start=(),
-                 spans_end=(), bar_start=(), bar_end=(), **legacy):
+                 spans_end=(), bar_start=(), bar_end=(), text="", **legacy):
         values = dict(degree=degree, octave=octave, duration=duration, dotted=dotted, accidental=accidental, tie=tie,
                       tuplet=tuplet, tuplet_start=tuplet_start, tuplet_end=tuplet_end, grace_before=grace_before,
                       grace_after=grace_after, marks=_ids(marks), spans_start=_ids(spans_start),
-                      spans_end=_ids(spans_end), bar_start=_ids(bar_start), bar_end=_ids(bar_end))
+                      spans_end=_ids(spans_end), bar_start=_ids(bar_start), bar_end=_ids(bar_end),
+                      text=text)
         if legacy:
             for name in ID_FIELDS:
                 if not isinstance(values[name], tuple):
@@ -118,6 +121,9 @@ class Note:
             if not isinstance(grace, str) or (grace and re.fullmatch(GRACE_PATTERN + "{1,8}", grace) is None):
                 raise ValueError(tr("倚音須為 1–8 個音（1–7），可加 #、b 及最多兩個八度後綴，例如 23 或 #4'5。"))
         self._validate_ids()
+        if not isinstance(self.text, str) or len(self.text) > MAX_NOTE_TEXT or any(
+                ord(c) < 32 or c in "\x85\u2028\u2029" for c in self.text) or self.text != self.text.strip():
+            raise ValueError(tr("音符上方的文字須為一行，最多 {limit} 字。").format(limit=MAX_NOTE_TEXT))
         rest = self.degree == 0
         if rest and (self.tie or any(not symbols.SYMBOLS[m].on_rest and m not in symbols.LEGACY_REST_MARKS
                                      for m in self.marks)
@@ -179,7 +185,8 @@ class Note:
         pitch = accidental + str(self.degree) + ("'" * self.octave if self.octave >= 0 else "," * -self.octave)
         if self.duration <= 2:
             nominal_beats = Fraction(4, self.duration) * (Fraction(3, 2) if self.dotted else 1)
-            return " ".join([pitch] + ["-"] * (int(nominal_beats) - 1))
+            # jianpu writes a long rest as one 0 per beat ("0 0 0 0"), never "0 - - -".
+            return " ".join([pitch] + ["0" if self.degree == 0 else "-"] * (int(nominal_beats) - 1))
         return {4: "c", 8: "q", 16: "s", 32: "d"}[self.duration] + pitch + ("." if self.dotted else "")
 
     def notation_token(self) -> str:
@@ -203,18 +210,21 @@ class Note:
         return cls(**data)
 
 
-def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
+def tuplet_ranges(notes: list[Note], where=None) -> list[tuple[int, int]]:
     """Validate 3:2 groups and return zero-based, end-exclusive note ranges.
 
     This helper checks group structure independently of meter. A caller can
     use the ranges to reject copy/delete/duration edits that split a group.
+    ``where(row)`` names a note's place (「第 3 小節第 2 拍」) for the message.
     """
+    from .notation_rules import LocatedError
+    where = where or (lambda row: tr("這段音符中"))
     ranges, row = [], 0
     while row < len(notes):
         note = notes[row]
         if not note.tuplet:
             if note.tuplet_start or note.tuplet_end:
-                raise ValueError(tr("第 {n} 個音符的三連音端點沒有群組。").format(n=row + 1))
+                raise LocatedError(tr("{where}的三連音端點沒有群組。").format(where=where(row)), row)
             row += 1
             continue
         group = notes[row:row+3]
@@ -222,7 +232,7 @@ def tuplet_ranges(notes: list[Note]) -> list[tuple[int, int]]:
                 or any(n.tuplet != 3 or n.dotted or n.duration not in (4, 8, 16, 32) for n in group)
                 or len({n.duration for n in group}) != 1
                 or any(n.tuplet_start != (i == 0) or n.tuplet_end != (i == 2) for i, n in enumerate(group))):
-            raise ValueError(tr("第 {n} 個音符的三連音不完整；請選取完整的三個等時值、未附點音符。").format(n=row + 1))
+            raise LocatedError(tr("{where}的三連音不完整；請選取完整的三個等時值、未附點音符。").format(where=where(row)), row)
         ranges.append((row, row+3))
         row += 3
     return ranges
@@ -233,6 +243,11 @@ def _bar_ticks(meter: str) -> int:
     """Ticks per bar (hot: every bar-boundary test asks), exact integer arithmetic."""
     numerator, denominator = meter.split("/")
     return int(numerator) * 4 * TICKS_PER_QUARTER // int(denominator)
+
+
+def _place(score, part, row) -> str:
+    from .notation_rules import note_place
+    return note_place(score, part, row, with_part=True)
 
 
 def pickup_choices(bar_ticks: int) -> list[int]:
@@ -407,7 +422,7 @@ class Score:
                 note.validate()
                 if index and (note.bar_start or note.bar_end):
                     raise ValueError(tr("小節線、反覆與跳躍記號只能放在第一聲部。"))
-            tuplet_ranges(part.notes)
+            tuplet_ranges(part.notes, lambda row, index=index: _place(self, index, row))
 
     def rhythm_error(self) -> str | None:
         from .notation_rules import rhythm_error
@@ -431,8 +446,8 @@ class Score:
 
     def fill_last_bar(self) -> None:
         """Complete the last bar of every part with rests (to the next allowed length)."""
-        for part in self.parts:
-            tuplet_ranges(part.notes)
+        for index, part in enumerate(self.parts):
+            tuplet_ranges(part.notes, lambda row, index=index: _place(self, index, row))
         totals = [sum(n.ticks for n in p.notes) for p in self.parts]
         target = max(self.final_bar_targets(t)[0] for t in totals)
         fills = [self.rests_between(total, target) for total in totals]

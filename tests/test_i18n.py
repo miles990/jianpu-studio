@@ -182,8 +182,8 @@ def test_set_language_notifies_once_and_rejects_unknown_codes():
 def test_convert_goes_both_ways_including_templates_and_nested_messages():
     assert i18n.convert("已儲存：{x}".replace("{x}", "/a/b.jps"), "zh_CN") == "已保存：/a/b.jps"
     assert i18n.convert("已保存：/a/b.jps", "zh_TW") == "已儲存：/a/b.jps"
-    nested = "請先修正連線或反覆記號，再編輯小節：第 3 個音符的連弓線缺少起點。"
-    expected = "请先修正连线或反复记号，再编辑小节：第 3 个音符的连弓线缺少起点。"
+    nested = "請先修正連線或反覆記號，再編輯小節：第 3 小節第 2 拍後半的連線缺少起點。"
+    expected = "请先修正连线或反复记号，再编辑小节：第 3 小节第 2 拍后半的连线缺少起点。"
     assert i18n.convert(nested, "zh_CN") == expected
     assert i18n.convert(expected, "zh_TW") == nested
     assert i18n.convert("My own title 小星星", "zh_CN") == "My own title 小星星"
@@ -457,14 +457,14 @@ def test_wording_is_true_on_every_platform():
 def test_score_warning_follows_a_language_switch(window):
     """Review P2.1: the cached notation error was shown in the old language until the next edit."""
     window.reset(Project(Score(notes=[Note(1, duration=1, spans_start=("line.slur",))])))
-    assert "連弓線或反覆段落缺少終點" in window.rhythm_label.text()
+    assert "第 1 小節第 1 拍開始的連線缺少終點" in window.rhythm_label.text()
     window.change_language(i18n.SIMPLIFIED)
     try:
-        assert "连弓线或反复段落缺少终点" in window.rhythm_label.text()
-        assert "連弓線" not in window.rhythm_label.toolTip()
+        assert "第 1 小节第 1 拍开始的连线缺少终点" in window.rhythm_label.text()
+        assert "連線" not in window.rhythm_label.toolTip()
     finally:
         window.change_language(i18n.TRADITIONAL)
-    assert "連弓線或反覆段落缺少終點" in window.rhythm_label.text()
+    assert "第 1 小節第 1 拍開始的連線缺少終點" in window.rhythm_label.text()
 
 
 def _shortcut_texts(dialog):

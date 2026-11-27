@@ -33,10 +33,11 @@ def test_every_visible_symbol_has_a_usage_text_and_pinyin():
 def test_slide_searches_rank_the_slides_first(query):
     found = [s.id for s in symbols_ui.search(query, instrument="erhu")]
     assert found[0] == "slide.up"
+    slides = ["slide.up", "slide.down", "slide.back_up", "slide.back_down", "slide.gliss"]   # 回滑音 since round 4
     if query != "slide":
-        assert found[:4] == ["slide.up", "slide.down", "slide.gliss", "line.slur"]
+        assert found[:6] == slides + ["line.slur"]
     else:
-        assert found[:3] == ["slide.up", "slide.down", "slide.gliss"]
+        assert found[:5] == slides
 
 
 def test_simplified_input_and_syllable_matching():
@@ -96,8 +97,8 @@ def test_reasons_follow_the_selection_rules():
     assert notation_edit.symbol_state(score, t["one"], "line.slur").reason == "需要選取連續兩個以上的音符。"
     assert notation_edit.symbol_state(score, t["scattered"], "line.slur").reason.startswith("選取不連續")
     assert notation_edit.symbol_state(score, t["bars"], "finger.1").reason.startswith("目前選的是整個小節")
-    assert notation_edit.symbol_state(score, t["barline"], "volta.1").reason.startswith("房要選小節")
-    assert notation_edit.symbol_state(score, t["one"], "line.tie").reason.startswith("下一個音音高不同")
+    assert notation_edit.symbol_state(score, t["barline"], "volta.1").reason.startswith("結尾段要選小節")
+    assert notation_edit.symbol_state(score, t["one"], "line.tie").reason.startswith("延音線只能連到下一個相同音高的音")
     assert notation_edit.symbol_state(score, t["bars"], "nav.ds").reason.startswith("請先在要跳回的地方加 D.S. 記號")
     assert notation_edit.symbol_state(score, t["run"], "dyn.mf").available     # rests are skipped
     assert notation_edit.symbol_state(score, t["one"], "slide.gliss").available  # to the next note

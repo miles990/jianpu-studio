@@ -93,7 +93,7 @@ def build_workspace(self, label_factory=None, button_factory=None):
     self.split = QSplitter(Qt.Orientation.Horizontal)
     self.split.setObjectName("main_split")
     self.split.setChildrenCollapsible(False)
-    self.split.setHandleWidth(1)
+    self.split.setHandleWidth(5)       # a draggable divider; the panel draws the 1 px line itself
     _score_column(self)
     _side_panel(self)
     _preview_panel(self)
@@ -606,7 +606,7 @@ def _preview_panel(self):
     self.log.setReadOnly(True)
     log_layout.addWidget(self.log)
     log_layout.addWidget(push(tr("複製完整紀錄"), self.copy_log))
-    self.preview_tabs.addTab(log_page, tr("作業訊息"))
+    self.preview_tabs.addTab(log_page, tr("工作紀錄"))
     pv.addWidget(self.preview_tabs, 1)
 
 
@@ -652,11 +652,22 @@ def _status(self):
     self.language_buttons = {}
     lang = []
     from . import i18n
+    # 繁｜简 is a one-click switch (design §1.2, W-2); review: too small to notice in the
+    # corner. A language icon (it also toggles) and larger, bolder keys make it findable.
+    # Tooltips stay bilingual on purpose: they must be readable before switching.
+    other = {i18n.TRADITIONAL: i18n.SIMPLIFIED, i18n.SIMPLIFIED: i18n.TRADITIONAL}
+    self.language_icon = tool("", "language", "", "ghost", name="language_icon", icon_role="text2", size=16)
+    self.language_icon.setToolTip(i18n.LANGUAGE_MENU_TITLE + " · " + " ⇄ ".join(i18n.LANGUAGE_NAMES.values()))
+    self.language_icon.setAccessibleName(i18n.LANGUAGE_MENU_TITLE)
+    self.language_icon.setFixedSize(24, 24)
+    self.language_icon.clicked.connect(lambda: self.change_language(other[i18n.current_language()]))
+    row.addWidget(self.language_icon)
     for code in i18n.LANGUAGES:
         button = tool(i18n.LANGUAGE_SHORT[code], checkable=True, name=f"language_{code}")
-        button.setToolTip(i18n.LANGUAGE_MENU_TITLE)
+        button.setToolTip(i18n.LANGUAGE_MENU_TITLE + " · " + i18n.LANGUAGE_NAMES[code])
         button.setAccessibleName(i18n.LANGUAGE_NAMES[code])
-        button.setFixedSize(30, 24)
+        button.setProperty("lang", True)
+        button.setFixedSize(36, 24)
         button.clicked.connect(lambda checked=False, c=code: self.change_language(c))
         self.language_buttons[code] = button
         lang.append(button)

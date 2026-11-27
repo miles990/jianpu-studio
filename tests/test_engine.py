@@ -173,7 +173,7 @@ def test_worker_adapts_jianpu_ly_output_to_lilypond_version():
     assert "set-global-fonts" not in new and "print-all-headers = ##t\n}" in new
     assert "tempoWholesPerMinute = #21 }}" in new
     assert '#(set-paper-size "letter")' in new
-    assert 'property-defaults.fonts.serif = "Noto Serif CJK TC,' in new
+    assert 'property-defaults.fonts.serif = "C059, Noto Serif CJK TC,' in new   # round 4: Latin italics (rit., D.C. al Fine)
     for system_font in ("Microsoft JhengHei", "PingFang TC", "Songti TC", "Microsoft YaHei"):
         assert system_font in new
     assert "ly:make-moment 84 4" in adapt_output(legacy, 24, "a4")

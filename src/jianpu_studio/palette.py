@@ -49,6 +49,13 @@ def preview_path(symbol_id: str) -> Path:
     return PREVIEW_DIR / f"{symbol_id}.png"
 
 
+# Unavailable cells stay readable (review d1/10): the name is a text colour with at least
+# 4.5:1 on the panel and the drawn mark keeps 3:1; the dashed border and the missing fill
+# say "unavailable", not a faded name. Checked in tests from the real tokens.
+DISABLED_NAME_ROLE = "text2"
+DISABLED_INK_ALPHA = 0.5
+
+
 class Entry:
     """One painted item: a cell, a chip (常用/最近), a result row or a section heading."""
     __slots__ = ("kind", "rect", "sid", "section", "text", "key")
@@ -267,10 +274,10 @@ class SymbolGrid(QAbstractScrollArea):
         symbol = symbols.SYMBOLS[entry.sid]
         ink, faint = QColor(c.ink), QColor(c.faint)
         if disabled:
-            ink.setAlphaF(0.38)
+            ink.setAlphaF(DISABLED_INK_ALPHA)
             faint.setAlphaF(0.18)
         p.save()
-        name_color = c.text3 if disabled else c.text
+        name_color = getattr(c, DISABLED_NAME_ROLE) if disabled else c.text
         font = self.font()
         if entry.kind == "cell" and rect.height() > 50:
             glyphs.symbol_preview(p, symbol, QRectF(rect.left(), rect.top() + 2, rect.width(), rect.height() - 22),

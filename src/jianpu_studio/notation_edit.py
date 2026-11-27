@@ -35,6 +35,8 @@ def symbol_problem(score: Score, part: int, rows, symbol_id: str) -> str | None:
     if storage == "tuplet":
         return tr("三連音請選一個音符後用「拆成三連音」。")
     if storage == "composite":
+        if symbol_id == "text.free":
+            return None if len(rows) == 1 else tr("上方文字一次加在一個音上：請只選一個音符或休止符。")
         return tr("這個記號由倚音和滑音組成，請分別設定倚音與滑音。")
     if storage == "marks":
         for row in rows:
@@ -237,7 +239,7 @@ def _bar_targets(score: Score, target: Target, symbol) -> tuple[list[int], str]:
         return [], tr("請先點小節號或小節線。")
     if target.kind == SELECT_BARLINE:
         if symbol.id in VOLTAS or symbol.id == "volta.final":
-            return [], tr("房要選小節：請點小節號。")
+            return [], tr("結尾段要選小節：請點小節號。")
         bar = target.barline - 1 if symbol.bar_edge == "end" else target.barline
         if not 0 <= bar < count:
             return [], tr("這條小節線的這一側沒有小節；請點另一條小節線或小節號。")
@@ -299,7 +301,7 @@ def _place_volta(score: Score, first: int, last: int, symbol_id: str) -> None:
     if symbol_id == "volta.final":
         group = next((g for g in _volta_groups(score) if first in g["starts"].values()), None)
         if group is None or first != g_last_start(group):
-            raise ValueError(tr("「結尾房」要加在最後一房的小節上：請先加上房號。"))
+            raise ValueError(tr("「最後結尾（結）」要加在最後一個結尾的小節上：請先加上結尾編號。"))
         set_bar_item(score, first, "volta.final")
         return
     number = VOLTAS.index(symbol_id) + 1
@@ -309,21 +311,21 @@ def _place_volta(score: Score, first: int, last: int, symbol_id: str) -> None:
         elif _bar_has(score, last, "bar.repeat_end"):
             set_bar_item(score, last, "bar.repeat_end", present=False)
             if first == 0:
-                raise ValueError(tr("第一房前面要有反覆：請先加反覆起與反覆止 :‖。"))
+                raise ValueError(tr("第一結尾前面要有反覆：請先加反覆起與反覆止 :‖。"))
             set_bar_item(score, first - 1, "bar.repeat_end")
         else:
-            raise ValueError(tr("第一房前面要有反覆：請先在第一房結尾加反覆止 :‖。"))
+            raise ValueError(tr("第一結尾前面要有反覆：請先在第一結尾的末端加反覆止 :‖。"))
         set_bar_item(score, first, "volta.1")
         set_bar_item(score, last, "volta.end")
         return
     group = next((g for g in _volta_groups(score) if g["starts"].get(number - 1) is not None
                   and g["starts"][number - 1] < first), None)
     if group is None:
-        raise ValueError(tr("請先加第{n}房。").format(n=tr(_ORDINALS[number - 1])))
+        raise ValueError(tr("請先加第{n}結尾。").format(n=tr(_ORDINALS[number - 1])))
     if group["end"] is not None and group["end"] != first - 1:
         if group["end"] >= first:
-            raise ValueError(tr("第{n}房要放在前一房之後的小節。").format(n=tr(_ORDINALS[number])))
-        raise ValueError(tr("第{n}房要緊接在前一房後面。").format(n=tr(_ORDINALS[number])))
+            raise ValueError(tr("第{n}結尾要放在前一個結尾之後的小節。").format(n=tr(_ORDINALS[number])))
+        raise ValueError(tr("第{n}結尾要緊接在前一個結尾後面。").format(n=tr(_ORDINALS[number])))
     if group["end"] is not None:
         set_bar_item(score, group["end"], "volta.end", present=False)
     if group.get("final") is not None:
@@ -345,7 +347,7 @@ def _remove_volta(score: Score, bar: int, symbol_id: str) -> None:
     if group is None:
         return
     if max(group["starts"]) != number:
-        raise ValueError(tr("請先移除後面的房，再移除這一房。"))
+        raise ValueError(tr("請先移除後面的結尾，再移除這一個。"))
     end = group["end"]
     set_bar_item(score, bar, symbol_id, present=False)
     if group.get("final") == bar:
@@ -381,6 +383,8 @@ def _base_reason(score: Score, target: Target, symbol) -> str:
             return tr("請選一個沒有附點的音，會拆成三等份。")
         return ""
     if kind == "composite":
+        if symbol.id == "text.free":
+            return "" if len(target.rows) == 1 else tr("上方文字一次加在一個音上：請只選一個音符或休止符。")
         return tr("贈音是後倚音：請在「選取」區按「＋倚音」設定。")
     if line:
         if not target.contiguous:
@@ -487,7 +491,7 @@ def _apply(score: Score, target: Target, symbol_id: str, remove: bool) -> str:
             note = notes[row]
             if not remove and (note.degree == 0 or (note.degree, note.octave, note.accidental.replace("n", ""))
                                != (nxt.degree, nxt.octave, nxt.accidental.replace("n", ""))):
-                raise ValueError(tr("下一個音音高不同，不能加延音線（要連貫請用連線）。"))
+                raise ValueError(tr("延音線只能連到下一個相同音高的音；這兩個音高不同，要連貫演奏請用「連線（圓滑線）」。"))
             notes[row] = replace(note, tie=not remove)
         return ""
     if kind == "spans":
@@ -587,7 +591,7 @@ def symbol_state(score: Score, target: Target, symbol_id: str, *, check: bool = 
         for r in target.rows:
             if notes[r].grace_after and symbol.slot != "breath" and notes[r].degree:
                 return SymbolState(False, tr("有後倚音的音只能再加換氣記號；請先移除後倚音。"))
-    if check and symbol.storage != "tuplet":
+    if check and symbol.storage not in ("tuplet", "composite"):
         trial = score.copy()
         try:
             _apply(trial, target, symbol_id, removes)

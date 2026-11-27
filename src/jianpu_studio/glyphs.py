@@ -95,10 +95,12 @@ LANE_HEIGHT = 14.0
 
 def layer(symbol) -> int:
     """Stacking order above a note, from the note outward (design §3.2)."""
+    if symbol.slot == "bow":          # bowings share the fingering page but stack outside it
+        return LAYER_BOW
+    if symbol.slot in ("string_side", "position"):   # 內／外 and 一把… print as text outside the fingering
+        return LAYER_TECH
     if symbol.category == "fingering":
         return LAYER_FINGER
-    if symbol.slot == "bow":
-        return LAYER_BOW
     if symbol.category == "tempo":
         return LAYER_TEMPO
     if symbol.category == "technique":
@@ -198,6 +200,12 @@ def draw_accidental(p, accidental: str, x: float, y: float, s: float, color: QCo
     _accidental(p, {"#": "sharp", "b": "flat", "n": "natural"}[accidental], x, y, s * 1.25, color)
 
 
+def _arrowhead(p, x, y, direction, s, color, size=2.6):
+    """A small open head at (x, y) pointing up (direction -1) or down (+1)."""
+    p.drawLine(QPointF(x, y), QPointF(x - size * 0.8 * s, y - direction * size * s))
+    p.drawLine(QPointF(x, y), QPointF(x + size * 0.8 * s, y - direction * size * s))
+
+
 def _arrow(p, x1, y1, x2, y2, s, color, head=3.5):
     _pen(p, color, 1.3, s)
     p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
@@ -265,6 +273,20 @@ def _shape(p, name, symbol, x, y, s, color, variant):
     elif base == "tenuto":
         path.moveTo(x - 6 * s, y)
         path.lineTo(x + 6 * s, y)
+    elif base == "tenuto_bar":          # short thick bar: never mistaken for finger 一 (thin, wide)
+        pen = QPen(color, max(1.2, 2.6 * s))
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        p.setPen(pen)
+        p.drawLine(QPointF(x - 3.5 * s, y), QPointF(x + 3.5 * s, y))
+        return
+    elif base == "backslash":           # 抹／彈: a drawn stroke, not the 丶 glyph that reads as an octave dot
+        _pen(p, color, 1.6, s)
+        p.drawLine(QPointF(x - 3 * s, y - 5 * s), QPointF(x + 3 * s, y + 5 * s))
+        return
+    elif base in ("micro_up", "micro_down"):
+        _arrow(p, x, y + (5 if base == "micro_up" else -5) * s, x, y + (-5 if base == "micro_up" else 5) * s, s,
+               color, 3)
+        return
     elif base in ("triangle_down", "triangle_down_hollow"):
         tri = QPainterPath(QPointF(x - 3.6 * s, y - 3 * s))
         tri.lineTo(x + 3.6 * s, y - 3 * s)
@@ -282,7 +304,11 @@ def _shape(p, name, symbol, x, y, s, color, variant):
         p.setBrush(color)
         p.drawPath(tri)
         return
-    elif base in ("upbow", "v", "v_bold"):
+    elif base == "v":                   # breath V: small, at the upper right like the print
+        path.moveTo(x - 3 * s, y - 6.5 * s)
+        path.lineTo(x, y + 0.5 * s)
+        path.lineTo(x + 3 * s, y - 6.5 * s)
+    elif base in ("upbow", "v_bold"):
         if base == "v_bold":
             _pen(p, color, 2.4, s)
         path.moveTo(x - 4.5 * s, y - 5 * s)
@@ -334,11 +360,11 @@ def _shape(p, name, symbol, x, y, s, color, variant):
         p.drawEllipse(QPointF(x + 8 * s * flip, y - 1 * s), 1.3 * s, 1.3 * s)
         p.setBrush(Qt.BrushStyle.NoBrush)
     elif base == "tremolo":
-        count = int(arg or 3)
-        _pen(p, color, 1.6, s)
+        count = int(arg or 3)           # same proportions as the printed \jsTrem* strokes
+        _pen(p, color, 1.5, s)
         for i in range(count):
-            dy = (i - (count - 1) / 2) * 3.2 * s
-            p.drawLine(QPointF(x - 4.5 * s, y + dy + 1.6 * s), QPointF(x + 4.5 * s, y + dy - 1.6 * s))
+            dy = (i - (count - 1) / 2) * 3.4 * s
+            p.drawLine(QPointF(x - 4 * s, y + dy + 1.6 * s), QPointF(x + 4 * s, y + dy - 1.6 * s))
         return
     elif base == "arpeggio":
         wave = QPainterPath()
@@ -357,11 +383,28 @@ def _shape(p, name, symbol, x, y, s, color, variant):
             p.drawLine(QPointF(x, tip), QPointF(x - 2.5 * s, tip - direction * 3 * s))
             p.drawLine(QPointF(x, tip), QPointF(x + 2.5 * s, tip - direction * 3 * s))
         return
-    elif base == "slide_up":
-        _arrow(p, x - 5 * s, y + 5 * s, x + 4 * s, y - 4 * s, s, color)
+    elif base in ("slide_up", "slide_down"):
+        # 上滑音: small curved arrow at the upper left, rising into the note; 下滑音: at the upper right,
+        # falling out of it (drawn like the printed \jsSlideUp / \jsSlideDown).
+        _pen(p, color, 1.3, s)
+        points = ((-4, 2), (0, 2), (2.5, 0), (2.5, -6.5)) if base == "slide_up" else \
+            ((-4, -1), (0, -1), (2.5, 1), (2.5, 6))
+        tail, c1, c2, tip = (QPointF(x + dx * s, y + dy * s) for dx, dy in points)
+        path.moveTo(tail)
+        path.cubicTo(c1, c2, tip)
+        p.drawPath(path)
+        _arrowhead(p, tip.x(), tip.y(), -1 if base == "slide_up" else 1, s, color)
         return
-    elif base == "slide_down":
-        _arrow(p, x - 5 * s, y - 5 * s, x + 4 * s, y + 4 * s, s, color)
+    elif base in ("slide_back_up", "slide_back_down"):
+        # 上回滑音 ∩ / 下回滑音 ∪ with the head turning back to the note (like \jsSlideBackUp / Down)
+        _pen(p, color, 1.3, s)
+        sign = -1 if base == "slide_back_up" else 1
+        top = y - 3 * s
+        path.moveTo(x - 5 * s, top - sign * 2 * s)
+        path.cubicTo(QPointF(x - 4.5 * s, top + sign * 5 * s), QPointF(x + 1.5 * s, top + sign * 5 * s),
+                     QPointF(x + 2.5 * s, top - sign * 1 * s))
+        p.drawPath(path)
+        _arrowhead(p, x + 2.5 * s, top - sign * 1.5 * s, -sign, s, color)
         return
     elif base == "curl_up":
         path.moveTo(x - 5 * s, y + 3 * s)
@@ -377,8 +420,9 @@ def _shape(p, name, symbol, x, y, s, color, variant):
         p.drawLine(QPointF(x + 4 * s, y + 4 * s), QPointF(x + 1.5 * s, y + 1.5 * s))
         p.drawLine(QPointF(x + 4 * s, y + 4 * s), QPointF(x + 6 * s, y + 1 * s))
         return
-    elif base == "tilde":
-        _wave(path, x - 7 * s, x + 7 * s, y, s, 2.4, 7)
+    elif base in ("tilde", "vibrato"):  # one period, like the printed ～ / \jsErhuVibrato
+        _pen(p, color, 1.4, s)
+        _wave(path, x - 6.5 * s, x + 6.5 * s, y, s, 2.6, 13)
     elif base == "arc":
         path.moveTo(x - 6 * s, y + 3 * s)
         path.cubicTo(x - 5 * s, y - 4 * s, x + 5 * s, y - 4 * s, x + 6 * s, y + 3 * s)
@@ -503,6 +547,15 @@ def nav_text(symbol) -> str:
     if symbol.id == "nav.dc":
         return "D.C."
     return text.replace(" ⊕", "")
+
+
+def draw_nav_text(p, text, x, y, s, color, align="left") -> float:
+    """Italic navigation words (jump texts, "Coda"), the style the print uses."""
+    qfont = font("italic", 13 * s)
+    width = QFontMetricsF(qfont).horizontalAdvance(text)
+    left = x - width / 2 if align == "center" else x if align == "left" else x - width
+    _text(p, text, left, y, qfont, color, "left")
+    return width
 
 
 def draw_nav(p, symbol, x, y, s, color, align="center") -> float:
@@ -639,6 +692,9 @@ def symbol_preview(p: QPainter, symbol, rect: QRectF, ink: QColor, faint: QColor
             _text(p, digits[0], x1, ny, number, faint)
             _text(p, digits[1], x2, ny, number, faint)
         _preview_span(p, symbol, x1, x2, ny, s, ink, faint, variant)
+    elif kind == "composite" and symbol.canvas.startswith("text:"):     # text.free: words above a 5
+        _text(p, "5", cx, cy + 6 * s, number, faint)
+        _text(p, symbol.canvas_text(variant), cx, cy - 10 * s, font("cjk", 11.5 * s, variant), ink)
     elif kind == "composite":
         _text(p, "5", cx + 2 * s, cy + 5 * s, number, faint)
         _text(p, "6", cx + 12 * s, cy - 2 * s, font("number", 10 * s), ink)

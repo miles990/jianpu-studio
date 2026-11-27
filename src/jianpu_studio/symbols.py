@@ -31,7 +31,7 @@ SOURCE_BUILTINS = frozenset({"fp", "sf", "sfp", "fz", "rfz", "cresc", "dim", "de
 CATEGORY_NAMES = {
     "dynamic": N_("力度"), "barline": N_("小節線與反覆"), "navigation": N_("跳躍記號"), "line": N_("線條"),
     "articulation": N_("演奏法"), "ornament": N_("裝飾音"), "tempo": N_("速度表情"), "pedal": N_("踏板"),
-    "technique": N_("民樂技法"), "fingering": N_("指法與弦序"),
+    "technique": N_("民樂技法"), "fingering": N_("指法、弓法與弦序"),
 }  # catalog sources; show tr(value)
 GROUP_NAMES = {
     "common": N_("通用"), "erhu": N_("二胡"), "dizi": N_("笛子"), "guzheng": N_("古箏"), "pipa": N_("琵琶"),

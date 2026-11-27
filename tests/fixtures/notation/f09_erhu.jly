@@ -3,6 +3,6 @@ composer=
 NoIndent
 OctavesBefore
 1=D 4/4 4=80
-c5 Fr=1 \mp \accent \downbow \jsErhuInner c6 Fr=2 \staccato \upbow slideUp c1' Fr=3 \jsErhuVibrato slideDown c6 \jsFingerZero \jsStaccatoHollow \jsErhuOuter
+c5 Fr=1 \mp \accent \downbow \jsErhuInner c6 Fr=2 \staccato \upbow \jsSlideUp slideUp c1' Fr=3 \jsErhuVibrato \jsSlideDown slideDown c6 \jsFingerZero \jsStaccatoHollow \jsErhuOuter
 g[56] c5 \jsErhuDun ( c3 Fr=4 ) c2 \jsPizzLeft ~ c2 \flageolet
-3[ q5 \jsErhuPao q6 q5 \jsBreathV ] c0 \fermata c3/// c2 \jsRit
+3[ q5 \jsErhuPao q6 q5 \jsBreathV ] c0 \fermata c3 \jsTremThree c2 \jsRit

@@ -60,10 +60,21 @@ def test_keyboard_insert_edit_duration_and_play(window, qtbot, monkeypatch):
     assert window.input_mode.currentData() == "edit"
     qtbot.keyClicks(window.notes, "7")
     assert [note.degree for note in window.project.score.notes] == [1, 7, 3, 0]
-    for key, duration in zip("qweras", (1, 2, 4, 8, 16, 32)):
+    # Round 4: a duration change is local to its bar (rests fill or give way; bar lines stay).
+    for key, duration in zip("rase", (8, 16, 32, 4)):
         qtbot.keyClicks(window.notes, key)
         assert window.project.score.notes[1].duration == duration
         assert window.project.score.notes[1].degree == 7
+        assert sum(n.ticks for n in window.project.score.notes) == 192
+    assert [n.degree for n in window.project.score.notes] == [1, 7, 3, 0]
+    # Longer than the room before the next note: the user chooses (here: overwrite, then fit).
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: "overwrite")
+    qtbot.keyClicks(window.notes, "w")
+    assert window.project.score.notes[1].duration == 2 and [n.degree for n in window.project.score.notes] == [1, 7, 0]
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: "fit")
+    qtbot.keyClicks(window.notes, "q")
+    assert (window.project.score.notes[1].duration, window.project.score.notes[1].dotted) == (2, True)
+    assert sum(n.ticks for n in window.project.score.notes) == 192
     calls = []
     monkeypatch.setattr(window, "play_midi", lambda: calls.append("play"))
     qtbot.keyClick(window.notes, Qt.Key.Key_Return)
@@ -113,14 +124,16 @@ def test_shift_delete_undo_redo_restores_selection(window, qtbot):
     assert window.notes.selected_rows() == list(range(1, 14))
     current = window.notes.currentRow()
     qtbot.keyClick(window.notes, Qt.Key.Key_Delete)
-    assert window.project.score.notes == original[:1] + original[14:]
+    # Round 4: deleting in the middle leaves rests of the same length (later bars do not move).
+    deleted = original[:1] + [Note(0)] * 13 + original[14:]
+    assert window.project.score.notes == deleted
     remaining_selection = window.notes.selected_rows()
     qtbot.keyClick(window.notes, Qt.Key.Key_Z, CTRL)
     assert window.project.score.notes == original
     assert window.notes.selected_rows() == list(range(1, 14))
     assert window.notes.currentRow() == current
     qtbot.keyClick(window.notes, Qt.Key.Key_Y, CTRL)
-    assert window.project.score.notes == original[:1] + original[14:]
+    assert window.project.score.notes == deleted
     assert window.notes.selected_rows() == remaining_selection
 
 

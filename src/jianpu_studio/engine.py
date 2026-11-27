@@ -285,7 +285,7 @@ def recognize(image: Path, output: Path, audiveris: Path,
         elif "couldn't load any languages" in log.lower():
             message = tr("辨識字庫無法載入。請重新安裝完整版，或檢查工具設定。")
         else:
-            message = tr("照片辨識未完成。請確認完整五線譜清楚、水平且沒有陰影；詳細紀錄可在「作業訊息」複製。")
+            message = tr("照片辨識未完成。請確認完整五線譜清楚、水平且沒有陰影；詳細紀錄可在「工作紀錄」複製。")
         raise RecognitionError(message, log) from exc
     candidates = sorted(output.rglob("*.mxl")) + sorted(output.rglob("*.musicxml")) + sorted(output.rglob("*.xml"))
     candidates = [p for p in candidates if p.name != "container.xml"]

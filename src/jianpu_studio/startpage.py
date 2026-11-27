@@ -139,6 +139,11 @@ class StartPage(QScrollArea):
         for path in recent[:8]:
             button = tool(Path(path).name, "file-recent", path, "ghost")
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            if not Path(path).is_file():
+                # A moved or deleted file stays listed (it may be on a removable drive) but says why.
+                from .widgets import REASON_MARK
+                button.setEnabled(False)
+                button.setToolTip(path + REASON_MARK + tr("找不到這個檔案（可能已移動、改名或刪除）"))
             button.clicked.connect(lambda checked=False, p=path: self.window.open_file(path=Path(p)))
             self.recent_host.addWidget(button)
             self.recent_widgets.append(button)
@@ -242,6 +247,12 @@ class Toast(QFrame):
         self.show()
         self.raise_()
         self.timer.start()
+
+    def dismiss(self):
+        """Hide at once: the notice is about something the score no longer is."""
+        self.timer.stop()
+        self.fade.stop()
+        self.hide()
 
     def _undo_clicked(self):
         if self._undo is not None:

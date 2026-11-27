@@ -13,8 +13,8 @@ import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
-from PySide6.QtGui import QColor, QGuiApplication, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPalette
+from PySide6.QtWidgets import QApplication, QProxyStyle, QStyle
 
 from . import i18n
 
@@ -50,6 +50,28 @@ def tokens(scheme: str, white_paper: bool = False) -> dict[str, str]:
         values.update(WHITE_PAPER)
         values["paper_light"] = "1"
     return values
+
+
+def luminance(value: str) -> float:
+    """WCAG 2.x relative luminance of an opaque #rrggbb colour."""
+    channels = []
+    for i in (1, 3, 5):
+        c = int(value[i:i + 2], 16) / 255
+        channels.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    r, g, b = channels
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG contrast ratio between two opaque colours (1–21)."""
+    hi, lo = sorted((luminance(a), luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def blend(top: str, bottom: str, alpha: float) -> str:
+    """``top`` painted with ``alpha`` over ``bottom``, as an opaque #rrggbb."""
+    mix = [round(int(top[i:i + 2], 16) * alpha + int(bottom[i:i + 2], 16) * (1 - alpha)) for i in (1, 3, 5)]
+    return "#" + "".join(f"{v:02x}" for v in mix)
 
 
 def qcolor(value: str, alpha: float | None = None) -> QColor:
@@ -233,6 +255,8 @@ QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; border: no
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 QSplitter::handle { background: %(border)s; }
 QSplitter::handle:horizontal { width: 1px; }
+QSplitter#main_split::handle:horizontal { width: 5px; background: transparent; }
+QSplitter#main_split::handle:horizontal:hover { background: %(accentsoft)s; }
 QProgressBar { border: none; background: %(border)s; max-height: 3px; }
 QProgressBar::chunk { background: %(accent)s; }
 QTabWidget::pane { border: 1px solid %(border)s; background: %(raised)s; border-radius: 6px; top: -1px; }
@@ -262,10 +286,56 @@ QWidget#status_host { background: transparent; }
 QWidget#status_host QPushButton[kind="ghost"] { padding: 1px 6px; min-height: 18px; }
 QWidget#status_host QToolButton { min-height: 0px; padding: 0px 2px; }
 QWidget#status_host QToolButton:focus { padding: 0px 1px; }
+QWidget#status_host QToolButton[lang="true"] { font-size: 14px; font-weight: 600; }
 QWidget#status_host QComboBox { min-height: 18px; padding: 1px 18px 1px 6px; max-width: 74px; }
 QLabel#result_count { color: %(text2)s; font-size: 12px; }
 QTreeWidget { background: %(raised)s; }
 """ % dict(c, check=chevron_file(t["onaccent"], "check"))
+
+
+# Message-box icons drawn from the line icons in token colours: Fusion's own question
+# mark is dark grey and disappears on a dark dialog.
+MESSAGE_ICONS = {
+    QStyle.StandardPixmap.SP_MessageBoxQuestion: ("help", "accenttext"),
+    QStyle.StandardPixmap.SP_MessageBoxInformation: ("info", "accenttext"),
+    QStyle.StandardPixmap.SP_MessageBoxWarning: ("warning", "warn"),
+    QStyle.StandardPixmap.SP_MessageBoxCritical: ("error", "danger"),
+}
+
+
+class TokenStyle(QProxyStyle):
+    """Fusion with message-box icons that follow the current theme."""
+
+    def __init__(self):
+        super().__init__("Fusion")
+        self.tokens = LIGHT
+
+    def standardIcon(self, standard_icon, option=None, widget=None):
+        if standard_icon in MESSAGE_ICONS:
+            from . import icons
+            name, role = MESSAGE_ICONS[standard_icon]
+            result = QIcon()
+            for size in (32, 48, 64):
+                result.addPixmap(icons.pixmap(name, size, self.tokens[role]))
+            return result
+        return super().standardIcon(standard_icon, option, widget)
+
+
+_STYLE: list = []
+
+
+def _token_style(app) -> TokenStyle:
+    """The application's TokenStyle, installed once (again if something replaced it)."""
+    if _STYLE:
+        try:
+            _STYLE[0].objectName()
+            return _STYLE[0]
+        except RuntimeError:      # deleted by a later QApplication.setStyle
+            _STYLE.clear()
+    style = TokenStyle()
+    app.setStyle(style)
+    _STYLE.append(style)
+    return style
 
 
 class ThemeManager(QObject):
@@ -324,8 +394,8 @@ class ThemeManager(QObject):
         self.tokens = tokens(scheme, self.white_paper)
         self.colors = canvas_colors(self.tokens)
         if app is not None:
-            if app.style().name().lower() != "fusion":
-                app.setStyle("Fusion")
+            style = _token_style(app)
+            style.tokens = self.tokens
             hints = app.styleHints()
             if hasattr(hints, "setColorScheme") and sys.platform != "linux":
                 # Native title bars and Qt's own dialogs follow a forced choice (Qt 6.8+).

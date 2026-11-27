@@ -32,6 +32,9 @@ jsSegnoSign jsSf jsSfp jsSfpp jsSfz jsSfzz jsStaccatoHollow jsStringFive jsStrin
 jsStringTwo jsStrokeLun jsStrokeYao jsToCodaText jsTremFour jsTremOne jsTremTwo jsTrillFlat jsTrillNatural
 jsTrillSharp jsVoltaJie jsWavySpan jsXuzhiSpan jsYangqinShuangtanlun prallprall reverseturn rfz sf sfp
 startTrillSpan stopTextSpan stopTrillSpan sustainOff sustainOn""".split())
+# round 4 (domain review): drawn tenuto/slides/tremolo/microtones, position marks, pppp/ffff.
+SPEC_NEW_WORDS |= set("""ffff jsMicroDown jsMicroUp jsPosFive jsPosFour jsPosOne jsPosThree jsPosTwo jsSlideBackDown
+jsSlideBackUp jsSlideDown jsSlideUp jsTenuto jsTremThree pppp""".split())
 
 
 def fixture(name):
@@ -44,7 +47,9 @@ def project(name):
 
 # ---------------------------------------------------------------- registry
 def test_registry_is_complete_and_consistent():
-    assert len(symbols.SYMBOLS) == 178          # tech.md's 175 + volta.3, volta.4, volta.end
+    # tech.md's 175 + volta.3, volta.4, volta.end + round 4: pppp, ffff, 一把…五把, 上/下回滑音, 微升, 微降,
+    # free text (text.free)
+    assert len(symbols.SYMBOLS) == 190
     macros = set(symbols.macro_names())
     for s in symbols.SYMBOLS.values():
         assert s.name in CATALOG and CATALOG[s.name], s.id            # both languages
@@ -56,7 +61,8 @@ def test_registry_is_complete_and_consistent():
                 assert word in macros, (s.id, word)                    # and defined in the prelude
         if s.kind == "span" and s.storage == "spans":
             assert s.family and s.span_words(False)[0], s.id
-    assert sum(s.confidence == "low" for s in symbols.SYMBOLS.values()) == 27
+    # round 4: pipa.tan/tiao/lun, gz.pi, dizi.da shown; finger.5 hidden (erhu has four fingers)
+    assert sum(s.confidence == "low" for s in symbols.SYMBOLS.values()) == 23
 
 
 def test_source_whitelist_is_generated_from_the_registry():
@@ -216,7 +222,7 @@ def test_duet_example_renders_both_parts(tmp_path):
     assert len(p.score.parts) == 2
     result = render(p.notation(), tmp_path / "duet", tool.resolve())
     assert not re.search(r"warning|error", result.log, re.I), result.log[-3000:]
-    assert [len(t) for t in read_midi(result.midi)[0]] == [53, 34]      # D.C. replays the inner repeat
+    assert [len(t) for t in read_midi(result.midi)[0]] == [45, 23]      # D.C. replays the inner repeat (round 4 rewrite)
 
 
 # ---------------------------------------------------------------- v1 -> v2
@@ -318,7 +324,7 @@ def notes_of(*bars):
 
 
 @pytest.mark.parametrize("score, message", [
-    (Score(notes=notes_of([Note(1, spans_start=("line.slur",))], bar(2, 3, 4))), "連弓線"),              # pairing
+    (Score(notes=notes_of([Note(1, spans_start=("line.slur",))], bar(2, 3, 4))), "連線缺少終點"),              # pairing
     (Score(notes=notes_of(bar(1, 2, 3, 4, spans_start=("orn.trill_span",)),
                           [Note(1, spans_start=("line.wavy",)), Note(2), Note(3), Note(4, spans_end=("line.wavy",))])),
      "重疊"),                                                                                            # family overlap
@@ -333,7 +339,7 @@ def notes_of(*bars):
                           bar(1, 2, 3, 4, bar_start=("bar.repeat_start",)))), "巢狀"),                    # repeats
     (Score(notes=notes_of(bar(1, 2, 3, 4, bar_start=("bar.repeat_start",)), [Note(1), Note(2), Note(3),
                           Note(4, bar_end=("bar.repeat_end",))], bar(5, 5, 5, 5, bar_start=("volta.2",)))),
-     "房號"),                                                                                           # voltas
+     "結尾編號"),                                                                                        # voltas
     (Score(notes=notes_of(bar(1, 2, 3, 4), [Note(1), Note(2), Note(3), Note(4, bar_end=("nav.ds",))])), "D.S."),
     (Score(notes=notes_of(bar(1, 2, 3, 4, bar_start=("bar.repeat_start",)),
                           [Note(1), Note(2), Note(3), Note(4, bar_end=("nav.fine",))],
@@ -354,7 +360,7 @@ def test_pickup_rhythm_rules():
     assert "還缺 2 拍" in missing.rhythm_error()
     missing.fill_last_bar()
     assert missing.rhythm_error() is None and len(missing.notes) == 7
-    assert Score(pickup=48, notes=[Note(5, duration=2)]).rhythm_error().startswith("第 1 個音符超出第 1 小節")
+    assert Score(pickup=48, notes=[Note(5, duration=2)]).rhythm_error().startswith("弱起小節第 4 拍的音超出小節線")
 
 
 def test_parts_must_have_equal_length():

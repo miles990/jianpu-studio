@@ -49,6 +49,8 @@ class Row:
     below_span_y: float = 0.0    # 8vb line
     arc_y: float = 0.0           # slur/tie lane (top of arcs' ends)
     tuplet_y: float = 0.0
+    text_y: float = 0.0          # free text above the notes (中速、引子…)
+    lyric_y: float = 0.0         # lyrics under the notes
     span_lanes: dict = field(default_factory=dict)   # family -> y (8va, trill, text spans)
 
 
@@ -167,6 +169,12 @@ class LayoutMixin:
         self.systems = []
         self.rects = []
         self.part_rects = [[QRect() for _ in notes] for notes in part_notes]
+        self.part_onsets = [[(0, 0) for _ in notes] for notes in part_notes]     # (bar, offset in bar)
+        self.part_lines = [[None] * len(notes) for notes in part_notes]          # system of each note
+        from .engraving import shown_accidentals
+        self.part_accidentals = [shown_accidentals(score, p) for p in range(len(parts))]
+        from .engraving import lyric_map
+        self.part_lyrics = [lyric_map(p.notes, p.lyrics) for p in parts]
         self.part_centers = [[0.0 for _ in notes] for notes in part_notes]
         self.note_lines = [0] * len(part_notes[active])
         self.bar_rects, self.bar_bottoms = [], []
@@ -180,10 +188,10 @@ class LayoutMixin:
         gap = max(4, int(18 * s))
         for number, bars in enumerate(rows_of_bars):
             base_total = sum(bar_widths[b] for b in bars)
-            extra = max(0.0, (available - base_total) / len(bars)) if (not per_line or len(rows_of_bars) > 1
-                                                                       or base_total > available * .6) else 0
-            if per_line:
-                extra = max(0.0, (available - base_total) / len(bars))
+            # Full lines are justified; the last line keeps its natural width (ragged-last, as
+            # the print does), so a short last line is not stretched and its slurs stay small.
+            last_line = number == len(rows_of_bars) - 1
+            extra = 0.0 if last_line else max(0.0, (available - base_total) / len(bars))
             # Vertical metrics per part.
             volta = any(any(i.startswith("volta.") and i != "volta.end" for i in items[b][0]) for b in bars)
             nav = any(any(symbols.SYMBOLS[i].category == "navigation" for i in items[b][0] + items[b][1]) for b in bars)
@@ -202,7 +210,7 @@ class LayoutMixin:
                 for key, value in lanes.items():
                     if key == "spans":
                         row.span_lanes = {f: baseline - v * s for f, v in value.items()}
-                    elif key in ("arc_y", "tuplet_y"):
+                    elif key in ("arc_y", "tuplet_y", "text_y"):
                         setattr(row, key, baseline - value * s)
                     else:
                         setattr(row, key, baseline + value * s)
@@ -239,6 +247,8 @@ class LayoutMixin:
                         rect = QRect(int(left), int(row_geom.top + 18 * s), max(1, int(right - left)),
                                      max(1, int(row_geom.bottom - row_geom.top - 22 * s)))
                         self.part_rects[p][r] = rect
+                        self.part_onsets[p][r] = (bar, offset)
+                        self.part_lines[p][r] = number
                 if bar < len(part_ranges[active]):
                     a, b = part_ranges[active][bar]
                     self.bar_rects.append((frame, bar, list(range(a, b))))
@@ -298,7 +308,7 @@ class LayoutMixin:
         """(above, below, lanes) in unscaled px for one part in one system."""
         above_need = 34.0
         below_need = 24.0
-        has_dyn = has_hair = has_pedal = has_trem = has_8vb = False
+        has_dyn = has_hair = has_pedal = has_trem = has_8vb = has_text = False
         span_families = set()
         cache = self._row_cache.get(part)
         if cache is None:
@@ -312,6 +322,7 @@ class LayoutMixin:
             a, b = ranges[bar]
             for r in range(a, b):
                 note = notes[r]
+                has_text = has_text or bool(note.text)
                 above, left, right, below = _marks_by_place(note)
                 base = 22 + 6 * max(0, note.octave)
                 if r in under_arc:
@@ -357,6 +368,10 @@ class LayoutMixin:
         if has_pedal:
             lanes["pedal_y"] = below + 8
             below += 18
+        lyrics = self.part_lyrics[part] if part < len(getattr(self, "part_lyrics", ())) else {}
+        if lyrics and any(r in lyrics for bar in bars if bar < len(ranges) for r in range(*ranges[bar])):
+            lanes["lyric_y"] = below + 10
+            below += 22
         lanes["arc_y"] = arc_lift + 3 if arc_lift else 25
         lanes["tuplet_y"] = max(lanes["arc_y"] + 22, 40) if arc_lift else 36
         above = above_need
@@ -366,6 +381,9 @@ class LayoutMixin:
                 spans[family] = above + 6
                 above += 16
         lanes["spans"] = spans
+        if has_text:
+            lanes["text_y"] = above + 10
+            above += 20
         return above, below + 4, lanes
 
     @staticmethod
@@ -434,13 +452,24 @@ class LayoutMixin:
         return y
 
     def _center(self, part, row):
-        note = self.score_model.score.parts[part].notes[row]
         rect = self.part_rects[part][row]
         before = self.part_graces[part][row][0]
         prefix = (14 * len(before) + 16) * self.scale if before else 0
-        lb = long_beats(note)
         main = self._main_width(part, row)
-        return rect.left() + prefix + main / (2 * lb) if lb > 1 else rect.left() + prefix + min(main / 2, 17 * self.scale)
+        # The same offset from the onset for every note, long or short, so notes that start
+        # together line up across parts.
+        return rect.left() + prefix + min(main / 2, 17 * self.scale)
+
+    def beat_x(self, part, row, beat):
+        """x of a long note's ``beat``-th dash (or a long rest's zero): on the shared time grid."""
+        bar, offset = self.part_onsets[part][row]
+        xs = self.bar_onset_x.get(bar, {})
+        rect = self.part_rects[part][row]
+        tick = offset + beat * TICKS_PER_QUARTER
+        x = xs.get(tick)
+        if x is None:
+            x = self._x_at(xs, tick, rect.right())
+        return x + min(self._main_width(part, row) / 2, 17 * self.scale)
 
     def _main_width(self, part, row):
         ornament = sum((14 * len(group) + 16) * self.scale for group in self.part_graces[part][row] if group)
@@ -459,6 +488,9 @@ class LayoutMixin:
         return self.systems[bar_row].rows.get(part) if bar_row is not None else None
 
     def note_line(self, part, row):
+        lines = getattr(self, "part_lines", None)
+        if lines is not None and part < len(lines) and row < len(lines[part]):
+            return lines[part][row]
         rect = self.part_rects[part][row]
         for number, system in enumerate(self.systems):
             if system.rect.top() <= rect.top() <= system.rect.bottom():

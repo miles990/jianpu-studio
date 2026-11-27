@@ -15,7 +15,7 @@ from typing import Iterable, NamedTuple
 from . import symbols
 from .i18n import tr
 from .model import DURATIONS, Note, Score
-from .notation_rules import bar_items, span_pairs
+from .notation_rules import LocatedError, bar_items, note_place, span_pairs
 
 MAX_NOTES = 10000
 # A source identity is (copy generation, original note row). New rests/notes
@@ -63,8 +63,8 @@ def measure_ranges(score: Score, part: int = 0) -> list[tuple[int, int]]:
     for row, note in enumerate(score.parts[part].notes):
         offset, length = score.bar_room(position)
         if offset + note.ticks > length:
-            raise ValueError(tr("第 {n} 個音符超出第 {bar} 小節。請先縮短時值或拆分跨小節長音。").format(
-                n=row + 1, bar=score.bar_index(position) + 1))
+            raise LocatedError(tr("{where}的音超出小節線。請先縮短時值或拆分跨小節長音。").format(
+                where=note_place(score, part, row, with_part=True)), row)
         position += note.ticks
     return score.part_bars(part)
 

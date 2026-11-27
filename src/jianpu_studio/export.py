@@ -94,6 +94,12 @@ def literal(text: str, *, lyric: bool = False) -> str:
     return _RESERVED.sub("​", text)
 
 
+def note_text(text: str) -> str:
+    """Text above a note inside ``^"..."``: every character jianpu-ly or LilyPond would read as
+    syntax (quotes, backslash, braces, $, #, % which starts a comment) becomes a lookalike."""
+    return _RESERVED.sub("\u200b", "".join(_SAFE.get(c, c) for c in upstream_normalized(text)))
+
+
 def grace_source(value: str) -> str:
     """Translate the UI's octave suffixes to unambiguous upstream prefixes.
 
@@ -166,6 +172,9 @@ def note_words(note, ctx: dict) -> list[str]:
             slot, word = reg[sid].span_words(end)
             if slot == "post":
                 w.append(word)
+    if note.text:
+        # Free text above the note (中速、深情地、引子…), as a literal string (never markup).
+        w.append('^"' + note_text(note.text) + '"')
     # 8.-13. dashes, after-grace, tie, after marks, after line ends, tuplet end
     w += continuation
     if note.grace_after:

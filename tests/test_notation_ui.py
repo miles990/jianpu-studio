@@ -182,7 +182,10 @@ def test_partial_triplet_operations_reject_without_data_or_inspector_drift(notat
         assert window.notes.selected_rows() == [1]
         assert len(window.history) == history_count
     assert QApplication.clipboard().text() == "keep clipboard"
-    assert len(errors) == 6
+    # Round 4: the two duration refusals are shown at the note (status bar + notice), not as a
+    # modal error; the four whole-group commands still explain with an error box.
+    assert len(errors) == 4
+    assert "三連音" in window.statusBar().currentMessage() or "三連音" in window.toast.text.text()
 
 
 def test_whole_triplet_copy_paste_cut_and_undo_keep_complete_groups(notation_window, qtbot):
@@ -221,6 +224,10 @@ def test_pasting_a_whole_repeated_bar_keeps_its_repeat_only_on_a_bar_line(notati
     assert bar_items(score)[2] == (("bar.repeat_start",), ("bar.repeat_end",))
     assert score.notation_error() is None
     # Pasted after the first note, the bar items would not sit on bar lines: they are left out.
+    # (Round 4: the bar has no rests, so pasting in the middle moves later bar lines only when the
+    # user explicitly chooses 「整首往後推移」.)
+    asked = []
+    window.choose_rhythm_option = lambda refused: asked.append(refused) or "ripple"
     window.notes.select_rows([0])
     window.insert_position.setCurrentIndex(window.insert_position.findData("after"))
     qtbot.keyClick(window.notes, Qt.Key.Key_V, CTRL)
@@ -228,6 +235,7 @@ def test_pasting_a_whole_repeated_bar_keeps_its_repeat_only_on_a_bar_line(notati
     assert score.notes[1:5] == [Note(1), Note(2), Note(3), Note(4)]
     assert score.notation_error() is None
     assert "移除 2" in window.statusBar().currentMessage()
+    assert [c.key for c in asked[0].choices] == ["ripple"]
 
 
 def test_copying_half_a_tie_or_the_outer_notes_of_two_slurs_pastes_no_connection(notation_window, qtbot):
@@ -239,6 +247,7 @@ def test_copying_half_a_tie_or_the_outer_notes_of_two_slurs_pastes_no_connection
     qtbot.keyClick(window.notes, Qt.Key.Key_C, CTRL)
     window.notes.select_rows([5])
     window.insert_position.setCurrentIndex(window.insert_position.findData("after"))
+    window.choose_rhythm_option = lambda refused: "ripple"   # round 4: a full bar asks first
     qtbot.keyClick(window.notes, Qt.Key.Key_V, CTRL)     # lands right before an existing 1
     pasted = window.project.score.notes[6:9]
     assert pasted == [Note(1), Note(2), Note(5)]

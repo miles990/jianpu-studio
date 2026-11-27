@@ -53,6 +53,9 @@ from .photo import PhotoDialog
 from .playback import MidiPlayer
 from .workspace import build_workspace
 
+PANEL_KEY = "layout/side_panel_width"
+PANEL_NARROW, PANEL_DEFAULT, PANEL_MAX = 276, 328, 360    # design §1.2–1.3
+
 
 def label(text: str, name: str = "", wrap: bool = False) -> QLabel:
     item = QLabel(text)
@@ -113,7 +116,9 @@ class MainWindow(EditActions, QMainWindow):
         self.play_timer.timeout.connect(self.playback_tick)
         self.panel_collapsed = False
         self.shortcuts_dialog = None
-        self.project = demo_project()
+        # A real launch starts blank behind the start page (design §5); tests and the
+        # self-test keep the demo.
+        self.project = Project() if recovery else demo_project()
         self.path: Path | None = None
         self.dirty = False
         self.loading = False
@@ -155,6 +160,11 @@ class MainWindow(EditActions, QMainWindow):
         self.build_ui()
         self.build_menus()
         self.build_shortcuts()
+        from .widgets import DisabledReasons
+        self.disabled_reasons = DisabledReasons(self.disabled_reason, self)
+        self.disabled_reasons.watch_tree(self)
+        for action in (self.undo_action, self.redo_action):
+            self.disabled_reasons.watch(action)
         self.theme_changed()
         self.sync()
         self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
@@ -163,28 +173,79 @@ class MainWindow(EditActions, QMainWindow):
         self.settings.setValue("guide/launches", launches + 1)
         self.guide.setVisible(self.guide.should_show())
         self.start_page.refresh(self.recent_files())
-        if recovery and initial_path is None and not self.recent_files() and not self.recovery_path.is_file():
+        # A real launch (design §5) shows the start page until something is opened:
+        # recovered work, the file the system asked for, or the last score if it still
+        # exists. It never shows the demo as if it were the user's own score.
+        last_file = self.last_file() if recovery and initial_path is None else None
+        if recovery:
             self.editor_stack.setCurrentIndex(1)
         self.autosave = QTimer(self)
         self.autosave.setInterval(15000)
         self.autosave.timeout.connect(self.write_recovery)
         self.autosave.start()
-        if initial_path is not None or (recovery and self.recovery_path.is_file()):
-            QTimer.singleShot(0, lambda: self.finish_startup(recovery, initial_path))
+        if initial_path is not None or last_file is not None or (recovery and self.recovery_path.is_file()):
+            QTimer.singleShot(0, lambda: self.finish_startup(recovery, initial_path, last_file))
         else:
             QTimer.singleShot(250, lambda: self.render_score(False))
 
-    def finish_startup(self, recovery, initial_path):
+    def last_file(self) -> Path | None:
+        """The most recently opened score, if it is still there."""
+        files = self.recent_files()
+        if not files:
+            return None
+        path = Path(files[0])
+        return path if path.is_file() else None
+
+    def finish_startup(self, recovery, initial_path, last_file=None):
         # One callback: a separate open-file timer could run inside a recovery
         # dialog's nested event loop and delete the only unsaved copy.
+        restored = False
         if recovery and self.recovery_path.is_file():
-            self.restore_recovery()
+            restored = self.restore_recovery()
         if initial_path is not None:
             self.open_file(path=initial_path)
+        elif last_file is not None and not restored and last_file.is_file():
+            # Restored work is newer than the last saved file: keep it on screen.
+            self.open_file(path=last_file)
+
+    def changed(self):
+        """Every score change: a notice about the previous state (a warning that an earlier
+        attempt failed, or an undo offer for an earlier edit) is stale now (review c1/13)."""
+        super().changed()
+        self.toast.dismiss()
 
     def build_ui(self):
+        try:
+            self.panel_width = int(self.settings.value(PANEL_KEY, PANEL_DEFAULT))
+        except (TypeError, ValueError):
+            self.panel_width = PANEL_DEFAULT
         build_workspace(self)
+        self.split.splitterMoved.connect(self.panel_dragged)
+        self.split.installEventFilter(self)
         self.apply_responsive()
+
+    def fit_split(self):
+        """Give the side panel its width and the score the rest. Also run when the splitter
+        itself is resized: QSplitter scales sizes set before its own resize proportionally."""
+        if self.print_preview_active:
+            return
+        narrow = self.width() <= 1180
+        panel = PANEL_NARROW if narrow else max(PANEL_DEFAULT, min(PANEL_MAX, self.panel_width))
+        total = self.split.width()
+        if self.split.sizes()[2:] != [panel] or sum(self.split.sizes()) + 2 * self.split.handleWidth() < total - 2:
+            self.split.setSizes([max(1, total - panel - self.split.handleWidth()), 0, panel])
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "split", None) and event.type() == event.Type.Resize:
+            self.fit_split()
+        return super().eventFilter(watched, event)
+
+    def panel_dragged(self, *_):
+        """The user dragged the divider: keep the side panel width (wide windows only)."""
+        if self.width() <= 1180 or not self.side_panel.isVisible():
+            return
+        self.panel_width = max(PANEL_DEFAULT, min(PANEL_MAX, self.side_panel.width()))
+        self.settings.setValue(PANEL_KEY, self.panel_width)
 
     def build_menus(self):
         def action(menu, text, fn, shortcut=None, icon_name=""):
@@ -272,7 +333,7 @@ class MainWindow(EditActions, QMainWindow):
         self.hidden_action.setCheckable(True)
         self.palette.showHiddenChanged.connect(self.hidden_action.setChecked)
         tools_menu = self.menuBar().addMenu(tr("工具"))
-        action(tools_menu, tr("作業訊息"), self.show_work_log)
+        action(tools_menu, tr("工作紀錄"), self.show_work_log)
         action(tools_menu, tr("工具與環境設定"), self.tool_settings).setMenuRole(QAction.MenuRole.PreferencesRole)
         self.language_menu = self.menuBar().addMenu(i18n.LANGUAGE_MENU_TITLE)
         self.language_group = QActionGroup(self)
@@ -320,6 +381,32 @@ class MainWindow(EditActions, QMainWindow):
         self.panel_collapsed = not self.panel_collapsed
         self.side_panel.setVisible(not self.panel_collapsed and not self.print_preview_active)
         self.panel_action.setChecked(not self.panel_collapsed)
+
+    def disabled_reason(self, control) -> str:
+        """Why ``control`` cannot be used right now, in the user's words (design §7 item 30)."""
+        from .model import MAX_PARTS
+        if self.task is not None and self.task_blocks_edit and not control.isEnabled():
+            return tr("正在處理作業；完成或按「取消作業」後才能使用")
+        if control in (self.undo_action, self.undo_button):
+            return tr("目前沒有可以復原的修改")
+        if control in (self.redo_action, self.redo_button):
+            return tr("目前沒有可以重做的修改")
+        if control is self.tie_button:
+            return tr("請先選取要連到下一個同音高音的音符")
+        if control is self.add_part_button:
+            return tr("最多 {count} 個聲部").format(count=MAX_PARTS)
+        if control is self.palette.detail.favorite:
+            return tr("請先在面板中點一個記號")
+        if control is self.preview_button:
+            return tr("正在排版，完成後可再更新")
+        note_bar = [*self.pitch_buttons, *self.duration_buttons.values(), *self.accidental_buttons.values(),
+                    self.dot_button, self.octave_up_button, self.octave_down_button]
+        if any(control is b for b in note_bar):
+            return tr("修改模式：請先在譜上點選要修改的音符")
+        if control in self.inspector.measure_buttons.values():
+            return tr("請先點小節號選取小節")
+        reason = control.property("disabled_reason")
+        return tr(reason) if reason else ""
 
     def show_guide(self):
         self.settings.setValue("guide/hidden", False)
@@ -410,10 +497,12 @@ class MainWindow(EditActions, QMainWindow):
                                       else Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.preview_button_top.setText(tr("預覽") if icon_only else tr("列印預覽"))
         narrow = width <= 1180
-        panel = 276 if narrow else 328
-        self.side_panel.setFixedWidth(panel)
-        if not self.print_preview_active:
-            self.split.setSizes([max(1, width - panel - 1), 0, panel])
+        # ≤ 1180 the panel is the compact 276; wider, the user may drag it between 328 and
+        # 360 (design §1.3) and the choice is remembered across restarts.
+        low, high = (PANEL_NARROW, PANEL_NARROW) if narrow else (PANEL_DEFAULT, PANEL_MAX)
+        self.side_panel.setMinimumWidth(low)
+        self.side_panel.setMaximumWidth(high)
+        self.fit_split()
         self.palette.grid.compact = narrow
         self.palette.grid.relayout()
         self.palette.detail.set_compact(narrow or height <= 700)
@@ -468,6 +557,7 @@ class MainWindow(EditActions, QMainWindow):
             button.setChecked(code == new)
         message = self.statusBar().currentMessage()
         i18n.translate_tree(self, new, old)
+        self.disabled_reasons.refresh_all()
         log = self.log.toPlainText()
         converted = i18n.convert(log, new, old)
         if converted != log:
@@ -629,13 +719,14 @@ class MainWindow(EditActions, QMainWindow):
                 # The previous recovery copy is left untouched (atomic, validated before writing).
                 self.statusBar().showMessage(tr("自動復原暫存失敗，請手動儲存專案。"), 5000)
 
-    def restore_recovery(self):
+    def restore_recovery(self) -> bool:
+        """Offer the recovery copy; True when the recovered score is now shown."""
         try:
             recovered = load_project(self.recovery_path)
         except Exception:
             self.statusBar().showMessage(tr("找到無法讀取的復原檔，已保留原檔並暫停自動暫存；請手動儲存新樂譜。"), 8000)
             self.recovery_protected = True
-            return
+            return False
         try:
             recovered = self.prepare_visual_project(recovered)
         except ValueError as exc:
@@ -649,14 +740,15 @@ class MainWindow(EditActions, QMainWindow):
                 # Never overwrite or delete the only copy if backup failed.
                 self.recovery_protected = True
                 self.error(tr("舊版復原暫存已保留"), tr("{detail}\n\n無法建立備份，原暫存保留於：{path}\n本次自動復原暫存暫停，請手動儲存新樂譜。").format(detail=exc, path=self.recovery_path))
-            return
+            return False
         if QMessageBox.question(self, tr("復原未儲存樂譜"), tr("上次有未儲存的樂譜，現在復原嗎？")) == QMessageBox.StandardButton.Yes:
             # The file stays until the restored work is saved or discarded: a second crash
             # before the next autosave must not lose the only copy.
             self.reset(recovered, dirty=True, keep_recovery=True)
-        else:
-            self.clear_recovery()
-            self.autopreview.start()
+            return True
+        self.clear_recovery()
+        self.autopreview.start()
+        return False
 
     def job_dir(self) -> Path:
         self.job_number += 1
@@ -696,8 +788,7 @@ class MainWindow(EditActions, QMainWindow):
             self.cancel_button.hide()
             stale = revision is not None and revision != self.revision
             if error is not None and not stale and not self.close_requested:
-                self.play_after_render = False
-                self.output_request = None
+                self.drop_pending_output()
                 self.preview_status.setText(tr("作業已取消。") if isinstance(error, Cancelled) else tr("未完成；請查看訊息並修正。"))
                 self.log.setPlainText(str(error) + "\n\n" + getattr(error, "details", ""))
                 self.statusBar().showMessage((str(error) or tr("作業未完成")).splitlines()[0][:180], 10000)
@@ -734,6 +825,7 @@ class MainWindow(EditActions, QMainWindow):
         self.play_after_render = False
         self.output_request = None
         self.render_cancelled = True
+        self.update_transport()
         if self.task:
             self.task.cancel.set()
             self.statusBar().showMessage(tr("正在取消…"))
@@ -759,16 +851,14 @@ class MainWindow(EditActions, QMainWindow):
         try:
             source = self.project.notation()
         except ValueError as exc:
-            self.play_after_render = False
-            self.output_request = None
+            self.drop_pending_output()
             self.preview_status.setText(str(exc))
             if manual:
                 self.error(tr("請先完成樂譜"), exc)
             return
         lilypond = self.current_tool("lilypond")
         if not lilypond:
-            self.play_after_render = False
-            self.output_request = None
+            self.drop_pending_output()
             self.preview_status.setText(tr("尚未找到 LilyPond。請使用完整版安裝檔，或在「工具與環境設定」指定位置。"))
             if manual:
                 self.tool_settings()
@@ -812,6 +902,13 @@ class MainWindow(EditActions, QMainWindow):
         self.start_task(tr("正在準備列印 PDF；可繼續編輯…") if create_pdf else tr("正在準備 MIDI 試聽資料…"), job, complete, manual, blocks_edit=False, revision=revision)
         if self.task:
             self.task.creates_pdf = create_pdf
+
+    def drop_pending_output(self):
+        """A failed or impossible render: nothing will play or export, so the transport
+        must not keep saying 「準備試聽…」."""
+        self.play_after_render = False
+        self.output_request = None
+        self.update_transport()
 
     def clear_pdf_preview(self):
         self.pdf_document.close()

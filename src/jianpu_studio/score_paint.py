@@ -200,7 +200,8 @@ class PaintMixin:
                 return style
         if last:
             return "final"
-        return "single"
+        from .engraving import end_barline
+        return end_barline(self.bar_items_cache, bar, last) or "single"
 
     def _prints_repeat_end(self, bar):
         """True at the end of every ending except the last one of a volta group."""
@@ -222,7 +223,8 @@ class PaintMixin:
         voltas = [i for i in starts if i.startswith("volta.") and i not in ("volta.end", "volta.final")]
         if voltas:
             number = voltas[0].split(".")[1]
-            label = number + "." + (" " + glyphs.tr_jie(variant) if "volta.final" in starts else "")
+            # The print replaces the whole label with 「結」 (\jsVoltaJie): the same here.
+            label = glyphs.tr_jie(variant) if "volta.final" in starts else number + "."
             end_bar = self._volta_end(bar)
             x1 = frame.left() + 2 * s
             right_frame = self.bar_frames.get(end_bar, frame)
@@ -232,21 +234,34 @@ class PaintMixin:
             p.setPen(QPen(c.ink, max(0.8, 1.1 * s)))
             p.drawLine(QPointF(x1, y + 14 * s), QPointF(x1, y))
             p.drawLine(QPointF(x1, y), QPointF(x2, y))
-            closed = not self._is_last_volta(bar)
+            # As LilyPond: the bracket closes when its bar line is a repeat/double/final line,
+            # and stays open after the last ending that runs on into a plain bar line.
+            items = self.bar_items_cache
+            end_items = items[end_bar] if end_bar < len(items) else ((), ())
+            nxt = items[end_bar + 1][0] if end_bar + 1 < len(items) else ()
+            closed = self._end_style(end_bar, end_items[0], end_items[1], nxt,
+                                     end_bar == len(self.part_ranges[0]) - 1) != "single"
             if closed and same_system:
                 p.drawLine(QPointF(x2, y), QPointF(x2, y + 14 * s))
             font = glyphs.font("sans", 11 * s)
             p.setFont(font)
             p.drawText(QPointF(x1 + 4 * s, y + 12 * s), label)
+        from .engraving import coda_start, jump_text
+        y = system.nav_y + 6 * s
+        if coda_start(self.bar_items_cache) == bar:
+            # "⊕ Coda" where the coda starts, as the print labels it.
+            glyphs.draw_coda(p, frame.left() + 10 * s, y, s, c.ink)
+            glyphs.draw_nav_text(p, "Coda", frame.left() + 20 * s, y, s, c.ink, "left")
         for item in (*starts, *ends):
             symbol = symbols.SYMBOLS[item]
             if symbol.category != "navigation":
                 continue
             at_start = symbol.bar_edge == "start"
-            y = system.nav_y + 6 * s
             if at_start:
                 glyphs.draw_nav(p, symbol, frame.left() + 30 * s, y, s, c.ink, "left" if not symbol.canvas.startswith(
                     "shape:") else "center")
+            elif item in ("nav.ds", "nav.dc"):
+                glyphs.draw_nav_text(p, jump_text(self.bar_items_cache), frame.right() - 4 * s, y, s, c.ink, "right")
             else:
                 glyphs.draw_nav(p, symbol, frame.right() - 4 * s, y, s, c.ink, "right")
 
@@ -294,8 +309,9 @@ class PaintMixin:
         p.setPen(color)
         p.setFont(glyphs.font("number", 21 * s))
         p.drawText(QRectF(cx - 14 * s, cy - 16 * s, 28 * s, 32 * s), Qt.AlignmentFlag.AlignCenter, str(note.degree))
-        if note.accidental:
-            glyphs.draw_accidental(p, note.accidental, cx - 11 * s, cy - 5 * s, s * 0.9, color)
+        accidental = self.part_accidentals[part][r] if r < len(self.part_accidentals[part]) else note.accidental
+        if accidental:          # the same decision as the print (engraving.shown_accidentals)
+            glyphs.draw_accidental(p, accidental, cx - 11 * s, cy - 5 * s, s * 0.9, color)
         p.setBrush(color)
         p.setPen(Qt.PenStyle.NoPen)
         if note.dotted and note.duration > 2:
@@ -304,14 +320,31 @@ class PaintMixin:
             y = cy - (20 + 6 * octave) * s if note.octave > 0 else cy + (15 + 4 * beams(note) + 4 + 6 * octave) * s
             p.drawEllipse(QPointF(cx, y), 1.8 * s, 1.8 * s)
         lb = long_beats(note)
-        if lb > 1:
+        if lb > 1 and note.degree == 0:
+            # A long rest is one 0 per beat (jianpu never extends a rest with dashes); the
+            # export writes the same zeros.
+            p.setPen(color)
+            for beat in range(1, lb):
+                x = self.beat_x(part, r, beat)
+                p.drawText(QRectF(x - 14 * s, cy - 16 * s, 28 * s, 32 * s), Qt.AlignmentFlag.AlignCenter, "0")
+        elif lb > 1:
             pen = QPen(color, 1.7 * s)
             p.setPen(pen)
-            main = self._main_width(part, r)
             for beat in range(1, lb):
-                x = cx + main * beat / lb
-                p.drawLine(QPointF(x - 6 * s, cy), QPointF(x + 6 * s, cy))   # as jianpu-ly prints, rests too
+                x = self.beat_x(part, r, beat)      # on the shared time grid: aligned across parts
+                p.drawLine(QPointF(x - 6 * s, cy), QPointF(x + 6 * s, cy))
         self._draw_marks(p, part, r, note, cx, cy, row, color if playing else c.ink)
+        syllable = self.part_lyrics[part].get(r) if part < len(self.part_lyrics) else None
+        if syllable and row.lyric_y:
+            # Lyrics under the notes, one syllable per sung note (engraving.lyric_map = the print).
+            p.setPen(c.ink)
+            p.setFont(glyphs.font("cjk", 14 * s, self.score_model.score.print_variant))
+            p.drawText(QRectF(cx - 20 * s, row.lyric_y - 10 * s, 40 * s, 20 * s), Qt.AlignmentFlag.AlignCenter, syllable)
+        if note.text and row.text_y:
+            # Free text above the note (the print writes ^"text" there, upright, left-aligned).
+            p.setPen(c.ink)
+            p.setFont(glyphs.font("cjk", 13 * s, self.score_model.score.print_variant))
+            p.drawText(QPointF(cx - 7 * s, row.text_y + 5 * s), note.text)
         if note.grace_before or note.grace_after:
             self._draw_graces(p, part, r, cy, c.ink)
 
@@ -383,37 +416,16 @@ class PaintMixin:
 
     def _paint_beams(self, p, part, system, row):
         """Underlines (減時線) joined within one beat (design §3.1)."""
+        from .engraving import beam_runs
         c, s = self.colors, self.scale
         score = self.score_model.score
-        notes = score.parts[part].notes
-        positions = self.part_positions[part]
         ranges = self.part_ranges[part]
         p.setPen(QPen(c.ink, max(0.8, 1.3 * s)))
         for bar in system.bars:
             if bar >= len(ranges):
                 continue
-            a, b = ranges[bar]
-            for level in range(3):
-                run = []
-                for r in range(a, b + 1):
-                    ok = r < b and beams(notes[r]) > level
-                    if ok and run:
-                        prev = run[-1]
-                        same_beat = self._beat(positions[prev]) == self._beat(positions[r])
-                        if not same_beat:
-                            self._beam_run(p, part, run, row, level)
-                            run = []
-                    if ok:
-                        run.append(r)
-                    else:
-                        if run:
-                            self._beam_run(p, part, run, row, level)
-                        run = []
-
-    def _beat(self, tick):
-        score = self.score_model.score
-        offset = tick if tick < score.first_bar_ticks or not score.pickup else tick - score.first_bar_ticks
-        return offset // 48 if not score.pickup or tick >= score.first_bar_ticks else -1 - (score.first_bar_ticks - tick) // 48
+            for level, run in beam_runs(score, part, *ranges[bar]):     # the same groups jianpu-ly prints
+                self._beam_run(p, part, run, row, level)
 
     def _beam_run(self, p, part, run, row, level):
         s = self.scale

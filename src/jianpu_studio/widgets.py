@@ -1,8 +1,9 @@
 """Shared appearance helpers; every colour comes from ``theme`` tokens."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QToolButton
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QAbstractButton, QFrame, QLabel, QPushButton, QToolButton
 
 from . import i18n, icons, theme
 
@@ -106,3 +107,65 @@ def repolish(widget) -> None:
 
 STYLE = None  # 0.3.x name; the style sheet now depends on the theme (see theme.ThemeManager)
 __all__ = ["stylesheet", "label", "tool", "push", "rule", "segment", "repolish", "i18n"]
+
+
+REASON_MARK = "\n⊘ "     # tooltip line that says why a control cannot be used right now
+
+
+def tooltip_base(text: str) -> str:
+    """A tooltip without the line ``DisabledReasons`` appended."""
+    return text.split(REASON_MARK, 1)[0]
+
+
+class DisabledReasons(QObject):
+    """Every disabled button says why (design §7 item 30): 「重複小節 ⊘ 請先點小節號選取小節」.
+
+    ``reason(widget)`` returns the reason in the current language (or ""). The tooltip is
+    recomposed whenever the control is enabled or disabled, just before a tooltip shows (the
+    reason can change while the control stays disabled) and after a language switch.
+    """
+
+    def __init__(self, reason, parent=None):
+        super().__init__(parent)
+        self.reason = reason
+        self.watched: list = []
+        self._busy = False
+
+    def watch_tree(self, root) -> None:
+        for button in root.findChildren(QAbstractButton):
+            self.watch(button)
+
+    def watch(self, widget) -> None:
+        if any(w is widget for w in self.watched):
+            return
+        self.watched.append(widget)
+        if isinstance(widget, QAction):        # no events: follow its changed() signal
+            widget.changed.connect(lambda w=widget: self.refresh(w))
+        else:
+            widget.installEventFilter(self)
+        self.refresh(widget)
+
+    def refresh(self, widget) -> None:
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            tip = widget.toolTip()
+            base = tooltip_base(tip)
+            reason = "" if widget.isEnabled() else self.reason(widget)
+            wanted = base + REASON_MARK + reason if reason else base
+            if wanted != tip:
+                widget.setToolTip(wanted)
+        except RuntimeError:          # the C++ object is gone
+            self.watched = [w for w in self.watched if w is not widget]
+        finally:
+            self._busy = False
+
+    def refresh_all(self) -> None:
+        for widget in list(self.watched):
+            self.refresh(widget)
+
+    def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.EnabledChange, QEvent.Type.ToolTip):
+            self.refresh(watched)
+        return False

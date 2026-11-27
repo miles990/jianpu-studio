@@ -16,7 +16,7 @@ from .vendor import jianpu_ly
 # Chinese Noto font contains the full CJK glyph set, so Simplified text never
 # falls back to missing glyphs; system SC fonts are listed only as a last
 # resort for developer installs without the bundled font.
-SERIF_FONTS = ("Noto Serif CJK TC, Noto Serif TC, PMingLiU, MingLiU, Songti TC, STSong, "
+SERIF_FONTS = ("C059, Noto Serif CJK TC, Noto Serif TC, PMingLiU, MingLiU, Songti TC, STSong, "
                "Microsoft JhengHei, PingFang TC, Noto Serif CJK SC, SimSun, Songti SC, "
                "Microsoft YaHei, serif")
 SANS_FONTS = ("Noto Sans CJK TC, Noto Sans TC, Microsoft JhengHei, PingFang TC, Heiti TC, "
@@ -148,9 +148,57 @@ def midi_rewrite(ly: str) -> str:
     return re.sub(r"(?s)% === BEGIN MIDI STAFF ===.*?% === END MIDI STAFF ===", fix, ly)
 
 
+# Print engraving choices shared with the canvas (engraving.py): one-line italic jump texts
+# ("D.S. al Coda", "D.C. al Fine"; LilyPond's default reads "D.S. al ⊕ e poi la Coda" on two
+# lines), "To Coda ⊕" at the jump-off and "⊕ Coda" where the coda starts, the key mark clear
+# of the tempo, dynamics that take horizontal room (no "mfsfz"), and a ragged last line.
+ENGRAVING = r"""
+#(define (js-jump-text context return-count marks)
+   (let* ((start (car marks)) (end (cadr marks)) (next (caddr marks))
+          (head (if start "D.S." "D.C.")))
+     (make-italic-markup (cond (next (string-append head " al Coda"))
+                               (end (string-append head " al Fine"))
+                               (else head)))))
+#(define (js-coda-mark number context)
+   (make-line-markup (list (make-italic-markup "To Coda") (make-coda-markup))))
+\layout {
+  \context { \Score
+    dalSegnoTextFormatter = #js-jump-text
+    codaMarkFormatter = #js-coda-mark
+    \override MetronomeMark.X-offset = #KEYWIDTH
+    \override JumpScript.font-size = #0
+  }
+  \context { \Voice
+    \override DynamicText.extra-spacing-width = #'(-0.4 . 0.6)
+    \override DynamicLineSpanner.padding = #1.2
+    \override Fingering.script-priority = #-100
+  }
+}
+\paper { ragged-last = ##t }
+"""
+_BAR_NUMBERS = re.compile(r"\\override Score\.BarNumber(?:\.| #')break-visibility = #center-visible")
+_BAR_EVERY = re.compile(r"\\set Score\.barNumberVisibility = #\(every-nth-bar-number-visible \d+\)")
+_CODA_LABEL = '\\sectionLabel "Coda"'
+
+
+def engraving_rewrite(ly: str) -> str:
+    """Bar numbers only at the start of a line (mid-line numbers read like stray notes in
+    jianpu) and the coda start labelled "⊕ Coda" (the canvas draws the same)."""
+    ly = _BAR_NUMBERS.sub(lambda m: "\\override Score.BarNumber.break-visibility = #begin-of-line-visible", ly)
+    ly = _BAR_EVERY.sub(lambda m: "\\set Score.barNumberVisibility = #first-bar-number-invisible-and-no-parenthesized-bar-numbers", ly)
+    return ly.replace(_CODA_LABEL, '\\sectionLabel \\markup { \\musicglyph "scripts.coda" "Coda" }')
+
+
 def finish_output(ly: str, variant: str = "tc", parts: int = 1) -> str:
     """tech.md §3.2 a–d, after ``adapt_output``."""
-    return midi_rewrite(fix_fine(insert_prelude(ly, variant, parts)))
+    ly = insert_prelude(ly, variant, parts)
+    index = ly.index("\\score {")
+    # The tempo sits right of the key mark "1=D" (one line, as jianpu writes it); a key with
+    # an accidental ("1=B♭") is wider.
+    key = re.search(r"\\mark \\markup\{1=([^}]*)\}", ly)
+    wide = key is not None and ("\\flat" in key[1] or "\\sharp" in key[1])
+    ly = ly[:index] + ENGRAVING.replace("KEYWIDTH", "9.5" if wide else "7") + ly[index:]
+    return midi_rewrite(fix_fine(engraving_rewrite(ly)))
 
 
 def run(args: list[str]) -> int:

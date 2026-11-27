@@ -20,204 +20,45 @@
         "name": "二胡一",
         "lyrics": "",
         "notes": [
-          {
-            "degree": 3,
-            "marks": [
-              "dyn.mf"
-            ],
-            "spans_start": [
-              "line.slur"
-            ],
-            "bar_start": [
-              "bar.repeat_start"
-            ]
-          },
-          {
-            "degree": 5,
-            "spans_end": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 6,
-            "marks": [
-              "finger.2"
-            ]
-          },
-          {
-            "octave": 1,
-            "marks": [
-              "finger.3"
-            ]
-          },
-          {
-            "degree": 2,
-            "octave": 1
-          },
-          {
-            "octave": 1,
-            "spans_start": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 6,
-            "spans_end": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 5,
-            "bar_end": [
-              "bar.repeat_end"
-            ]
-          },
-          {
-            "degree": 5
-          },
-          {
-            "degree": 4,
-            "accidental": "#",
-            "marks": [
-              "finger.1"
-            ]
-          },
-          {
-            "degree": 5
-          },
-          {
-            "degree": 6
-          },
-          {
-            "degree": 2
-          },
-          {
-            "degree": 3
-          },
-          {
-            "duration": 2,
-            "marks": [
-              "art.fermata"
-            ],
-            "bar_end": [
-              "nav.fine"
-            ]
-          },
-          {
-            "degree": 5,
-            "bar_start": [
-              "nav.coda_sign"
-            ]
-          },
-          {
-            "degree": 6
-          },
-          {
-            "degree": 7,
-            "accidental": "b",
-            "marks": [
-              "finger.4"
-            ]
-          },
-          {
-            "degree": 6
-          },
-          {
-            "degree": 5,
-            "spans_start": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 3,
-            "spans_end": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 2,
-            "duration": 2,
-            "bar_end": [
-              "nav.dc"
-            ]
-          }
+          {"degree": 3, "marks": ["dyn.mf"], "spans_start": ["line.slur"], "bar_start": ["bar.repeat_start"]},
+          {"degree": 5, "spans_end": ["line.slur"]},
+          {"degree": 6, "marks": ["finger.1"]},
+          {"degree": 1, "octave": 1, "marks": ["finger.3"], "bar_end": ["bar.repeat_end"]},
+          {"degree": 2, "octave": 1, "marks": ["finger.4"], "bar_start": ["volta.1"]},
+          {"degree": 1, "octave": 1},
+          {"degree": 6},
+          {"degree": 5},
+          {"degree": 2, "octave": 1, "bar_start": ["volta.2"]},
+          {"degree": 7, "marks": ["finger.2"]},
+          {"degree": 6},
+          {"degree": 4, "accidental": "#", "marks": ["finger.3"], "bar_end": ["volta.end"]},
+          {"degree": 5, "marks": ["finger.0"]},
+          {"degree": 3},
+          {"degree": 1, "duration": 2, "marks": ["art.fermata"], "bar_end": ["nav.fine"]},
+          {"degree": 7, "accidental": "b", "marks": ["dyn.mp", "finger.2"], "spans_start": ["line.slur"]},
+          {"degree": 6, "spans_end": ["line.slur"]},
+          {"degree": 5, "spans_start": ["line.slur"]},
+          {"degree": 3, "spans_end": ["line.slur"]},
+          {"degree": 2, "marks": ["finger.1"]},
+          {"degree": 3},
+          {"degree": 2, "duration": 2, "bar_end": ["nav.dc"]}
         ]
       },
       {
         "name": "二胡二",
         "lyrics": "",
         "notes": [
-          {
-            "duration": 2,
-            "marks": [
-              "dyn.mf",
-              "finger.0"
-            ]
-          },
-          {
-            "degree": 3,
-            "duration": 2
-          },
-          {
-            "degree": 4,
-            "duration": 2,
-            "spans_start": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 3,
-            "duration": 2,
-            "spans_end": [
-              "line.slur"
-            ]
-          },
-          {
-            "degree": 3
-          },
-          {
-            "degree": 2
-          },
-          {
-            "degree": 3
-          },
-          {
-            "degree": 4,
-            "accidental": "#"
-          },
-          {
-            "degree": 5,
-            "octave": -1,
-            "duration": 2
-          },
-          {
-            "duration": 2,
-            "marks": [
-              "art.fermata"
-            ]
-          },
-          {
-            "degree": 3
-          },
-          {
-            "degree": 4
-          },
-          {
-            "degree": 5
-          },
-          {
-            "degree": 6
-          },
-          {
-            "degree": 7,
-            "octave": -1,
-            "duration": 2
-          },
-          {
-            "degree": 5,
-            "octave": -1,
-            "duration": 2
-          }
+          {"degree": 1, "duration": 2, "marks": ["dyn.mf", "finger.0"]},
+          {"degree": 3, "duration": 2},
+          {"degree": 4, "duration": 2, "marks": ["finger.3"]},
+          {"degree": 3, "duration": 2},
+          {"degree": 5, "duration": 2},
+          {"degree": 2, "duration": 2},
+          {"degree": 3, "duration": 2},
+          {"degree": 1, "duration": 2, "marks": ["art.fermata"]},
+          {"degree": 5, "duration": 2, "marks": ["dyn.mp"]},
+          {"degree": 1, "duration": 2},
+          {"degree": 5, "duration": 1}
         ]
       }
     ]

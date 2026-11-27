@@ -2,8 +2,8 @@
 
 Every registry symbol is put on a note 5 (lines on 5 6, bar items in the smallest valid
 repeat/jump context), exported through the app's own pipeline (Score.to_jianpu -> worker
--> LilyPond 2.26), cropped by LilyPond (PostScript backend, -dcrop; the cairo backend drops PostScript
-marks such as tremolo strokes) and turned into a black-on-transparent
+-> LilyPond 2.26), rendered by LilyPond (PostScript backend; the cairo backend drops PostScript
+marks such as tremolo strokes), cropped to the ink and turned into a black-on-transparent
 PNG (alpha = darkness) in src/jianpu_studio/assets/symbols/<id>.png. The app recolours it
 for dark mode. Output is deterministic for one LilyPond version; re-run after changing
 the registry:
@@ -57,8 +57,11 @@ def context(symbol) -> tuple[list[Note], str]:
         second = Note(3) if symbol.family == "gliss" else six
         return [replace(five, spans_start=(sid,)), replace(second, spans_end=(sid,))], "2/4"
     if symbol.kind == "composite":
-        grace = {"slide.pad": dict(grace_before="3", marks=("slide.up",)), "dizi.zeng": dict(grace_after="6")}[sid]
+        grace = {"slide.pad": dict(grace_before="3", marks=("slide.up",)), "dizi.zeng": dict(grace_after="6"),
+                 "text.free": dict(text="中速")}[sid]
         return [Note(5, **grace)], "1/4"
+    if sid == "pedal.off":      # a release prints nothing without a pedal to release
+        return [Note(5, marks=("pedal.on",)), Note(6, marks=(sid,))], "2/4"
     if symbol.kind != "bar":
         return [Note(5, marks=(sid,))], "1/4"
     a, b, c, d = Note(5), Note(6), Note(5), Note(3)
@@ -70,7 +73,8 @@ def context(symbol) -> tuple[list[Note], str]:
         return [replace(a, bar_start=("bar.repeat_start",), bar_end=("bar.repeat_both",)),
                 replace(b, bar_end=("bar.repeat_end",)), c], "1/4"
     if sid.startswith("volta."):
-        count = {"volta.1": 1, "volta.2": 2, "volta.3": 3, "volta.4": 4, "volta.final": 2, "volta.end": 1}[sid]
+        # One alternative alone prints "1.2." (it covers both passes): show the first ending next to a second.
+        count = {"volta.1": 2, "volta.2": 2, "volta.3": 3, "volta.4": 4, "volta.final": 2, "volta.end": 1}[sid]
         notes = [replace(a, bar_start=("bar.repeat_start",), bar_end=("bar.repeat_end",))]
         for k in range(1, count + 1):
             starts = (f"volta.{k}",) + (("volta.final",) if sid == "volta.final" and k == count else ())
@@ -114,8 +118,23 @@ def source_for(symbol) -> str:
     return text
 
 
+def ink_crop(image: QImage, margin: int = 6) -> QImage:
+    """Crop a page to its ink. LilyPond's -dcrop uses the layout extents, and marks drawn outside their
+    extents on purpose (zero-size slide arrows, caesura) would be cut off."""
+    left, top, right, bottom = image.width(), image.height(), -1, -1
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if image.pixelColor(x, y).lightness() < 200:
+                left, right, top, bottom = min(left, x), max(right, x), min(top, y), max(bottom, y)
+    if right < 0:
+        return image
+    left, top = max(0, left - margin), max(0, top - margin)
+    return image.copy(left, top, min(image.width(), right + margin + 1) - left,
+                      min(image.height(), bottom + margin + 1) - top)
+
+
 def to_alpha(path: Path, target: Path) -> None:
-    image = QImage(str(path)).convertToFormat(QImage.Format.Format_ARGB32)
+    image = ink_crop(QImage(str(path)).convertToFormat(QImage.Format.Format_ARGB32))
     out = QImage(image.size(), QImage.Format.Format_ARGB32)
     for y in range(image.height()):
         for x in range(image.width()):
@@ -136,15 +155,15 @@ def render_one(symbol, lilypond: Path, work: Path) -> tuple[str, str]:
         hide = HIDE + (r"\override Score.BarLine.stencil = ##f " if symbol.kind != "bar" else "")
         ly = ly.replace("\\override Staff.TimeSignature.style = #'numbered", hide)
         crop = folder / "crop.ly"
-        crop.write_text(ly, encoding="utf-8")
-        done = subprocess.run([str(lilypond), "-dno-point-and-click", "--pdf", "--png", "-dcrop", "-dresolution=240",
+        crop.write_text(ly + "\n\\header { tagline = ##f }\n", encoding="utf-8")
+        done = subprocess.run([str(lilypond), "-dno-point-and-click", "--pdf", "--png", "-dresolution=240",
                                "-o", str(folder / "crop"), str(crop)], cwd=folder, env=lilypond_env(),
                               capture_output=True, text=True, timeout=120)
         if done.returncode:
             return symbol.id, done.stderr[-400:]
-        png = folder / "crop.cropped.png"
+        png = folder / "crop.png"
         if not png.is_file():
-            return symbol.id, "no cropped png"
+            return symbol.id, "no png"
         to_alpha(png, OUT / f"{symbol.id}.png")
         return symbol.id, ""
     except Exception as exc:     # report and continue: the app falls back to the drawn glyph

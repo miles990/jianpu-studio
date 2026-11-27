@@ -31,12 +31,12 @@ def test_rhythm_crossing_and_fill():
     assert sum(n.beats for n in score.notes) == 4
     assert score.rhythm_error() is None
     score = Score(notes=[Note(1, duration=2, dotted=True), Note(2, duration=2)])
-    assert "第 2 個音符超出" in score.rhythm_error()
+    assert "第 1 小節第 4 拍的音超出小節線" in score.rhythm_error()
 
 
 @pytest.mark.parametrize("note,token", [
     (Note(1, 1, 8, True, "#"), "q#1'."),
-    (Note(0, duration=1), "0 - - -"),
+    (Note(0, duration=1), "0 0 0 0"),        # round 4: jianpu writes one 0 per beat, never "0 - - -"
     (Note(6, -1, 2, True), "6, - -"),
     (Note(2, duration=32), "d2"),
 ])
@@ -110,7 +110,7 @@ def test_invalid_performance_marks_are_rejected(changes):
 def test_long_note_marks_attach_to_number_and_tie_follows_dashes():
     note = Note(2, duration=2, finger=3, bow="downbow", dynamic="mf", slide="up", slur_start=True, tie=True)
     # v2 orders post marks by the registry (fingering first, dynamics before bowing): tech.md §1.4
-    assert note.notation_token() == r"slideUp 2 Fr=3 \mf \downbow ( - ~"
+    assert note.notation_token() == r"\jsSlideUp slideUp 2 Fr=3 \mf \downbow ( - ~"   # round 4: curved arrow
     assert Note(3, duration=2, slur_end=True, repeat_end=True).notation_token() == "3 ) - }"
 
 
@@ -122,21 +122,21 @@ def test_complete_erhu_marks_and_page_settings_roundtrip():
                   paper_size="letter", staff_size=24, bars_per_line=2)
     assert score.notation_error() is None
     # v2: a repeat at bar 0 prints its |: (P6) and the open string prints as bold 0 (tech.md §1.4)
-    assert 'R{ \\bar ".|:" slideUp c1 \\jsFingerZero' in score.to_jianpu()
+    assert 'R{ \\bar ".|:" \\jsSlideUp slideUp c1 \\jsFingerZero' in score.to_jianpu()
     project = Project(score)
     assert Project.from_dict(project.to_dict()) == project
 
 
 @pytest.mark.parametrize("notes,message", [
     ([Note(1, slur_end=True)], "缺少起點"),
-    ([Note(1, slur_start=True), Note(2, slur_start=True)], "重疊連弓"),
+    ([Note(1, slur_start=True), Note(2, slur_start=True)], "重疊的連線"),
     ([Note(1, slur_start=True)], "缺少終點"),
     ([Note(1, tie=True), Note(2)], "相同音高"),
     ([Note(1, tie=True)], "相同音高"),
     ([Note(1), Note(2, repeat_start=True)], "小節開頭"),
     ([Note(1, repeat_start=True, repeat_end=True)], "完整小節末"),
-    ([Note(1, duration=1, repeat_end=True)], "需要起點"),
-    ([Note(1, duration=1, repeat_start=True)], "缺少終點"),
+    ([Note(1, duration=1, repeat_end=True)], "前面沒有反覆起點"),
+    ([Note(1, duration=1, repeat_start=True)], "缺少反覆終點"),
 ])
 def test_invalid_connections_and_repeats(notes, message):
     assert message in Score(notes=notes).notation_error()

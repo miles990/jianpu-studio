@@ -202,10 +202,19 @@ def _v1_to_v2_words(text: str) -> list[list[str]]:
     * open string: upstream ``Fr=0`` (prints 宀) -> ``\\jsFingerZero`` (bold 0, JP-Word form)
     * ``\\sfz`` -> ``\\jsSfz`` (same print; MIDI accents one note instead of changing the level)
     * a repeat starting the piece prints its ``|:`` (``R{ \\bar ".|:"``, tech.md P6)
+    * ``\\tenuto`` -> ``\\jsTenuto`` (short thick bar, so it is not read as finger 一; same articulation)
+    * ``slideUp`` / ``slideDown`` -> ``\\jsSlideUp slideUp`` / ``\\jsSlideDown slideDown`` (the app word
+      redraws jianpu-ly's straight arrow as a small curved one; 下滑音 moves to the upper right)
     """
     out = []
+    renamed = {"Fr=0": "\\jsFingerZero", "\\sfz": "\\jsSfz", "\\tenuto": "\\jsTenuto"}
+    slides = {"slideUp": "\\jsSlideUp", "slideDown": "\\jsSlideDown"}
     for index, line in enumerate(text.strip().splitlines()):
-        words = ["\\jsFingerZero" if w == "Fr=0" else "\\jsSfz" if w == "\\sfz" else w for w in line.split()]
+        words = []
+        for w in line.split():
+            if w in slides:
+                words.append(slides[w])
+            words.append(renamed.get(w, w))
         if words[:1] == ["R{"] and words[1:2] != ["\\bar"] and not any(_HEAD.match(w) for previous in out for w in previous):
             words[1:1] = ["\\bar", '".|:"']
         out.append(words)

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import glyphs, symbols, symbols_ui
+from . import glyphs, i18n, symbols, symbols_ui
 from .i18n import N_, tr
 from .widgets import label, tool
 
@@ -193,10 +193,10 @@ class SelectionInspector(QFrame):
         self.title.setText(title)
         self.props.setText(props if not empty_hint else empty_hint)
         self.props.setVisible(bool(props or empty_hint) and not self.compact)
-        key = (tuple(marks), self.colors.tokens.get("ink"))
-        if key == getattr(self, "_chip_key", None):
-            marks = []
-        else:
+        # Chip names come from the symbol registry, not the catalog: rebuild them when the
+        # language (or the theme) changes, not only when the marks do.
+        key = (tuple(marks), self.colors.tokens.get("ink"), i18n.current_language())
+        if key != getattr(self, "_chip_key", None):
             self._chip_key = key
             for chip in self.chip_widgets:
                 self.chips.removeWidget(chip)
@@ -204,10 +204,10 @@ class SelectionInspector(QFrame):
                 chip.setParent(None)
                 chip.deleteLater()
             self.chip_widgets = []
-        for sid, present, total in marks:
-            chip = MarkChip(self, sid, present, total, self.colors)
-            self.chips.addWidget(chip)
-            self.chip_widgets.append(chip)
+            for sid, present, total in marks:
+                chip = MarkChip(self, sid, present, total, self.colors)
+                self.chips.addWidget(chip)
+                self.chip_widgets.append(chip)
         self.chips_host.setVisible(bool(self.chip_widgets))
         self.chips_host.updateGeometry()
         self.actions.setVisible(measure)

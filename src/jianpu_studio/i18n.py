@@ -51,15 +51,23 @@ def modifier_name() -> str:
     return "⌘" if sys.platform == "darwin" else "Ctrl"
 
 
+def option_name() -> str:
+    """Qt's Alt modifier is the Option key (⌥) on macOS."""
+    return "⌥" if sys.platform == "darwin" else "Alt"
+
+
 def platform_keys(text: str) -> str:
-    """Show shortcut hints with this platform's modifier (Ctrl+Z -> ⌘Z on macOS)."""
-    if "Ctrl" not in text or modifier_name() == "Ctrl":
+    """Show shortcut hints with this platform's modifiers (Ctrl+Z -> ⌘Z, Alt+1 -> ⌥1 on macOS)."""
+    if modifier_name() == "Ctrl" or ("Ctrl" not in text and "Alt+" not in text):
         return text
+    text = text.replace("Alt+", option_name())
     return text.replace("Ctrl+", modifier_name()).replace("Ctrl", modifier_name())
 
 
 def _portable_keys(text: str) -> str:
     """Undo ``platform_keys`` so shown text can be matched against the catalog."""
+    if "⌥" in text:
+        text = text.replace("⌥", "Alt+")
     if "⌘" not in text:
         return text
     # platform_keys turned "Ctrl+X" into "⌘X" and a bare "Ctrl" (e.g. "Ctrl＋點", fullwidth
@@ -153,10 +161,40 @@ def _apply_qt_translator() -> None:
         _qt_translator = None
     translator = QTranslator(app)
     path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
-    if translator.load(f"qtbase_{_language}", path) and app.installTranslator(translator):
+    if not translator.load(f"qtbase_{_language}", path):
+        translator.deleteLater()
+        return
+    if sys.platform == "darwin":
+        # macOS buttons have no mnemonics: Qt would show 「是(Y)」「否(N)」.
+        translator = _NoMnemonics(translator, app)
+    if app.installTranslator(translator):
         _qt_translator = translator
     else:
         translator.deleteLater()
+
+
+_MNEMONIC = re.compile(r"\s*[(（]&\w[)）]")
+
+
+def strip_mnemonic(text: str) -> str:
+    """「是(&Y)」 -> 「是」, 「儲存(&S)…」 -> 「儲存…」; a bare & accelerator is dropped too."""
+    return _MNEMONIC.sub("", text).replace("&&", "\0").replace("&", "").replace("\0", "&")
+
+
+class _NoMnemonics(QTranslator):
+    """Qt's own translations without Windows-style mnemonics (used on macOS)."""
+
+    def __init__(self, inner: QTranslator, parent):
+        super().__init__(parent)
+        self.inner = inner
+        inner.setParent(self)
+
+    def translate(self, context, source, disambiguation=None, n=-1):
+        text = self.inner.translate(context, source, disambiguation, n)
+        return strip_mnemonic(text) if text else None    # None = "no translation" (not "")
+
+    def isEmpty(self):
+        return self.inner.isEmpty()
 
 
 def ui_font_family(language: str | None = None) -> str:

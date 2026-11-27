@@ -175,7 +175,7 @@ def test_after_grace_rejects_upstream_detached_or_misattached_events(changes):
 
 def test_after_grace_keeps_safe_slide_and_breath_after_the_ornament():
     note = Note(grace_after="23", slide="up", articulation="breathe")
-    assert note.notation_token() == r"slideUp c1 [23]g \breathe"
+    assert note.notation_token() == r"\jsSlideUp slideUp c1 [23]g \breathe"
 
 
 def test_new_notation_fields_roundtrip_and_old_projects_still_load():
