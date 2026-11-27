@@ -1,15 +1,18 @@
 """Engraving decisions shared by the canvas and the print path, so screen = print.
 
-* ``shown_accidentals``: which accidental each note shows. LilyPond (the print) shows an
-  accidental when the note's alteration differs from the one in force for the same degree
-  and octave earlier in the bar; a tied-over continuation shows none; every bar starts
-  natural. A stored ♮ ("n") prints only when needed (upstream has no cautionary natural).
+* ``shown_accidentals`` / ``shown_grace_accidentals``: which accidental each note and grace
+  note shows. LilyPond (the print) shows an accidental when the note's alteration differs
+  from the one in force for the same degree and octave earlier in the bar (grace notes
+  included); every bar starts natural; ties follow LilyPond's tie rules (``_accidental_walk``).
+  A stored ♮ ("n") prints only when needed (upstream has no cautionary natural).
 * ``beam_runs``: underline (減時線) groups — notes shorter than a quarter joined within one
   counted beat, level by level, like jianpu-ly.
 * ``rest_beats``: a rest longer than one beat is written as one 0 per beat (jianpu never
   extends a rest with dashes); the export writes the same zeros.
 """
 from __future__ import annotations
+
+import re
 
 from .notation_rules import beat_ticks
 
@@ -28,30 +31,74 @@ def _alteration(note) -> str:
     return "" if note.accidental in ("", "n") else note.accidental
 
 
-def shown_accidentals(score, part: int) -> list[str]:
-    """Per note: "#", "b", "n" (a natural sign is printed) or "" (nothing printed)."""
+_GRACE = re.compile(r"([#b]?)([1-7])((?:'{1,2}|,{1,2})?)")
+_ANY = object()       # "an alteration different from every real one": the next note always shows its sign
+
+
+def _real_tie(previous, note) -> bool:
+    """A tie LilyPond sees as a tie: same pitch, and the tied-from note is a single head.
+    jianpu-ly draws the tie from a head with dashes (a half or longer) as a slur-like
+    curve, so LilyPond treats that continuation as a fresh note (it reprints the sign)."""
+    return (previous is not None and previous.tie and previous.degree == note.degree != 0
+            and previous.octave == note.octave and _alteration(previous) == _alteration(note)
+            and nominal_beats(previous) == 1)
+
+
+def _accidental_walk(score, part: int) -> list[tuple[tuple[str, ...], str, tuple[str, ...]]]:
+    """Per note: (signs of its before-graces, sign of the note, signs of its after-graces);
+    a sign is "#", "b", "n" (a natural is printed) or "" (nothing printed).
+
+    The rules LilyPond 2.26 applies to the jianpu staff (its default accidental style, checked
+    against real renders in tests/test_print_fidelity.py):
+
+    * state per degree and octave, starting natural in every bar; a note prints its sign when
+      its alteration differs from the state, then sets the state;
+    * grace notes take part in time order — before-graces ahead of their note, after-graces
+      after it, all in their note's bar;
+    * a really tied continuation (see ``_real_tie``) never prints a sign. When it would have
+      needed one (a ♯ tied over the bar line), the rest of that bar prints the sign of every
+      later note of that degree and octave, even ♮ or the same ♯ again;
+    * rests change nothing.
+    """
     notes = score.parts[part].notes
-    out = [""] * len(notes)
-    state: dict[tuple[int, int], str] = {}
-    position, bar = 0, None
-    previous = None
-    for row, note in enumerate(notes):
+    out = []
+    state: dict[tuple[int, int], object] = {}
+    position, bar, previous = 0, None, None
+
+    def sign(degree, octave, alteration, tied=False):
+        key = (degree, octave)
+        if alteration == state.get(key, ""):
+            return ""
+        state[key] = _ANY if tied else alteration
+        return "" if tied else alteration or "n"
+
+    for note in notes:
         index = score.bar_index(position)
         if index != bar:
             bar, state = index, {}
         position += note.ticks
         if note.degree == 0:
-            previous = note
-            continue
-        key = (note.degree, note.octave)
-        alteration = _alteration(note)
-        tied_over = (previous is not None and previous.tie and previous.degree == note.degree
-                     and previous.octave == note.octave and _alteration(previous) == alteration)
-        if not tied_over and alteration != state.get(key, ""):
-            out[row] = alteration or "n"
-        state[key] = alteration
+            out.append(((), "", ()))
+        else:
+            before = tuple(sign(int(d), len(o) * (-1 if "," in o else 1), a)
+                           for a, d, o in _GRACE.findall(note.grace_before))
+            main = sign(note.degree, note.octave, _alteration(note), _real_tie(previous, note))
+            after = tuple(sign(int(d), len(o) * (-1 if "," in o else 1), a)
+                          for a, d, o in _GRACE.findall(note.grace_after))
+            out.append((before, main, after))
         previous = note
     return out
+
+
+def shown_accidentals(score, part: int) -> list[str]:
+    """Per note: "#", "b", "n" (a natural sign is printed) or "" (nothing printed)."""
+    return [main for _, main, _ in _accidental_walk(score, part)]
+
+
+def shown_grace_accidentals(score, part: int) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Per note: the signs its (before, after) grace notes print, one per grace note, like
+    ``shown_accidentals`` (a grace note's written ♯ may print nothing, a plain one a ♮)."""
+    return [(before, after) for before, _, after in _accidental_walk(score, part)]
 
 
 def beam_runs(score, part: int, start: int, end: int) -> list[tuple[int, list[int]]]:

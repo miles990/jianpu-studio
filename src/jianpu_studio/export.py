@@ -94,10 +94,20 @@ def literal(text: str, *, lyric: bool = False) -> str:
     return _RESERVED.sub("​", text)
 
 
+# The converter keeps a quoted text in one word only across ASCII spaces; any other
+# whitespace (U+3000, NBSP, figure space\u2026) would split it into broken words. Such a space is
+# written as ASCII spaces of about its printed width (LilyPond keeps runs of spaces in text;
+# one ASCII space is about a quarter em in the print font).
+_SPACE_WIDTH = {"\u3000": 4, "\u2001": 4, "\u2003": 4, "\u2000": 2, "\u2002": 2, "\u2007": 2}
+
+
 def note_text(text: str) -> str:
     """Text above a note inside ``^"..."``: every character jianpu-ly or LilyPond would read as
-    syntax (quotes, backslash, braces, $, #, % which starts a comment) becomes a lookalike."""
-    return _RESERVED.sub("\u200b", "".join(_SAFE.get(c, c) for c in upstream_normalized(text)))
+    syntax (quotes, backslash, braces, $, #, % which starts a comment) becomes a lookalike,
+    and every non-ASCII space becomes ASCII spaces (see ``_SPACE_WIDTH``)."""
+    text = "".join(" " * _SPACE_WIDTH.get(c, 1) if c.isspace() else _SAFE.get(c, c)
+                   for c in upstream_normalized(text))
+    return _RESERVED.sub("\u200b", text)
 
 
 def grace_source(value: str) -> str:

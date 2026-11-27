@@ -118,8 +118,16 @@ class LayoutMixin:
         part_ranges = [score.part_bars(i) for i in range(len(parts))]
         bar_count = max((len(r) for r in part_ranges), default=0)
         self.part_ranges = part_ranges
-        self.part_graces = [[(grace_tokens(n.grace_before), grace_tokens(n.grace_after)) for n in notes]
-                            for notes in part_notes]
+        # Grace notes show the signs the print shows (a written ♯ already in force prints none,
+        # a plain degree after a ♯ prints ♮), from the same rule as the main notes.
+        from .engraving import shown_grace_accidentals
+        self.part_graces = []
+        for index, notes in enumerate(part_notes):
+            signs = shown_grace_accidentals(score, index)
+            self.part_graces.append([tuple(
+                tuple((sign, degree, octave) for (_, degree, octave), sign in zip(grace_tokens(text), shown))
+                for text, shown in ((n.grace_before, signs[row][0]), (n.grace_after, signs[row][1])))
+                for row, n in enumerate(notes)])
         self.note_graces = self.part_graces[active]
         positions = []
         for notes in part_notes:

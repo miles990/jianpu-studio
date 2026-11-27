@@ -120,6 +120,50 @@ def fix_fine(ly: str) -> str:
     return ly
 
 
+def _block_end(ly: str, k: int) -> int:
+    """Index just past the ``{ ... }`` block opening at ``ly[k]``, skipping strings."""
+    depth = 0
+    while k < len(ly):
+        c = ly[k]
+        if c == '"':
+            k = ly.index('"', k + 1)
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return k + 1
+        k += 1
+    raise ValueError("Unbalanced afterGrace block")
+
+
+_AFTER_GRACE = "\\afterGrace {"
+_TEXT_SCRIPTS = re.compile(r'(?:\s*[_^]"[^"]*")+')
+
+
+def attach_after_grace_text(ly: str) -> str:
+    """Move the text written on a note with an after-grace onto that note.
+
+    Upstream wraps only the note in ``\\afterGrace { note } { graces }`` and leaves the
+    note's ``^"text"`` after the block, where LilyPond finds nothing to attach it to
+    ("Unattached TextScriptEvent") and prints it over the next note.
+    """
+    position = 0
+    while (index := ly.find(_AFTER_GRACE, position)) >= 0:
+        main_open = index + len(_AFTER_GRACE) - 1
+        main_end = _block_end(ly, main_open)
+        grace_open = main_end + len(ly[main_end:]) - len(ly[main_end:].lstrip())
+        position = main_end
+        if not ly.startswith("{", grace_open):
+            continue
+        grace_end = _block_end(ly, grace_open)
+        texts = _TEXT_SCRIPTS.match(ly, grace_end)
+        if texts:
+            ly = (ly[:main_end - 1] + texts[0].strip() + " " + ly[main_end - 1:grace_end]
+                  + ly[texts.end():])
+    return ly
+
+
 # 8va/8vb sound ±12 in MIDI. Upstream places the line words wherever the notes put them --
 # inside a \times or \afterGrace block when the line starts or ends there -- so the rewrite
 # must not open or close braces (that re-nests tuplets and grace blocks). \transposition is a
@@ -198,7 +242,7 @@ def finish_output(ly: str, variant: str = "tc", parts: int = 1) -> str:
     key = re.search(r"\\mark \\markup\{1=([^}]*)\}", ly)
     wide = key is not None and ("\\flat" in key[1] or "\\sharp" in key[1])
     ly = ly[:index] + ENGRAVING.replace("KEYWIDTH", "9.5" if wide else "7") + ly[index:]
-    return midi_rewrite(fix_fine(engraving_rewrite(ly)))
+    return midi_rewrite(fix_fine(attach_after_grace_text(engraving_rewrite(ly))))
 
 
 def run(args: list[str]) -> int:
