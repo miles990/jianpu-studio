@@ -467,6 +467,30 @@ def test_f6_cycles_score_palette_inspector_and_score_bar(window, qtbot):
     assert order == ["palette", "inspector", "scorebar", "score"]
 
 
+@pytest.mark.parametrize("longer", [1, 0])
+def test_bar_symbols_on_a_bar_the_first_part_does_not_have_yet(longer):
+    """Review P1.1: a part longer than part 1 (while it is written) must not crash the palette."""
+    long, short = [Note(1, duration=1), Note(2), Note(3)], [Note(5, duration=1)]
+    parts = [Part("一", short), Part("二", long)] if longer else [Part("一", long), Part("二", short)]
+    score = Score(parts=parts)
+    score.validate()
+    # rows 1-2 are the second bar of the longer part (part 2 when ``longer``, else part 1)
+    targets = [Target("notes", longer, (1,)), Target("notes", longer, (1, 2)), Target("bars", longer, (1, 2), (1,)),
+               Target("barline", longer, (), (), 2)]
+    original = score.copy()
+    for target in targets:
+        for symbol in symbols.SYMBOLS.values():
+            state = notation_edit.symbol_state(score, target, symbol.id)     # must not raise
+            if symbol.storage == "bar" and longer:
+                assert not state.available and state.reason, (target, symbol.id)
+            notation_edit.target_where(score, target, symbol.id)
+            if symbol.storage == "bar" and longer:
+                trial = score.copy()
+                with pytest.raises(ValueError):
+                    notation_edit.toggle_symbol(trial, target, symbol.id)
+    assert score == original
+
+
 def test_start_page_templates_and_example(window):
     window.show_start_page()
     assert window.editor_stack.currentIndex() == 1

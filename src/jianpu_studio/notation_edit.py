@@ -252,6 +252,9 @@ def _bar_targets(score: Score, target: Target, symbol) -> tuple[list[int], str]:
         return [], tr("請先點小節號或小節線。")
     if bars != list(range(bars[0], bars[-1] + 1)):
         return [], tr("請只選一段連續的小節。")
+    if bars[-1] >= count or bars[0] < 0:
+        # Another part can be longer while it is being written; bar items live on part 1's bars.
+        return [], tr("第一聲部還沒有這個小節；請先補齊各聲部的小節，再加小節記號。")
     if symbol.id in VOLTAS or symbol.id == "volta.final":
         return bars, ""
     if symbol.id in ("bar.repeat_start", "bar.repeat_end") and len(bars) > 1:
