@@ -176,3 +176,43 @@ def test_a_short_notice_with_undo_stays_one_line(window):
     assert toast_shows_all_of_its_text(window) and window.toast.undo.isVisible()
     assert window.toast.text.height() < 1.5 * window.toast.text.fontMetrics().height()
     assert window.toast.rect().contains(window.toast.undo.geometry())
+
+
+# ---------------------------------------------------------------- 3. a pickup asks before re-barring
+def set_pickup(window, ticks):
+    window.pickup_field.setCurrentIndex(window.pickup_field.findData(ticks))
+    QApplication.processEvents()
+
+
+def test_a_pickup_on_written_music_asks_and_cancel_leaves_the_score_untouched(window, monkeypatch):
+    """小星星 fits a quarter pickup without splitting a note; it was re-barred without a word."""
+    window.reset(demo_project())
+    before = window.project.snapshot()
+    asked = []
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: asked.append(refused) or None)
+    set_pickup(window, 48)
+    assert len(asked) == 1 and window.project == before and not window.dirty and not window.history
+    assert window.pickup_field.currentData() == 0                 # the field shows the real pickup again
+    text = str(asked[0])
+    assert "弱起" in text and "小節線" in text
+    assert "12 小節 → 13 小節" in text and "可用復原還原" in text      # what will change, and the way back
+    assert "rebar" in [choice.key for choice in asked[0].choices]
+
+
+def test_an_accepted_pickup_is_one_undo_step(window, monkeypatch):
+    window.reset(demo_project())
+    before = window.project.snapshot()
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: "rebar")
+    set_pickup(window, 48)
+    score = window.project.score
+    assert score.pickup == 48 and score.rhythm_error() is None and len(window.history) == 1
+    assert [n.degree for n in score.notes if n.degree] == [n.degree for n in before.score.notes if n.degree]
+    window.undo()
+    assert window.project == before and window.pickup_field.currentData() == 0
+
+
+def test_an_empty_score_takes_a_pickup_without_a_question(window, monkeypatch):
+    window.new_from_template("blank")
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: pytest.fail("asked on an empty score"))
+    set_pickup(window, 48)
+    assert window.project.score.pickup == 48

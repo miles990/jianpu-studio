@@ -399,10 +399,12 @@ class EditActions(NotationActions):
             return
         self.mutate(update)
 
-    def move_bar_lines(self, *, meter, pickup, label, values=None) -> bool:
+    def move_bar_lines(self, *, meter, pickup, label, values=None, always_ask=False) -> bool:
         """A pickup or meter that moves the bar lines of written music: an empty (all-rest) score
         is simply redrawn, and so is music whose notes all fit the new bars; otherwise the user
-        chooses how, after seeing what each way changes (one undo step)."""
+        chooses how, after seeing what each way changes (one undo step). With ``always_ask`` (a
+        pickup: every bar line and bar number after it moves) written music is never re-barred
+        unasked, even when no note has to change."""
         from . import rebar
         from .rhythm_edit import Choice, RhythmRefused
         score = self.project.score
@@ -411,7 +413,7 @@ class EditActions(NotationActions):
                   if result is not None and view.problem is None}
         if "rests" in usable:
             key = "rests"
-        elif "rebar" in usable and usable["rebar"][2].trivial:
+        elif "rebar" in usable and usable["rebar"][2].trivial and not always_ask:
             key = "rebar"
         else:
             if not usable:
@@ -473,7 +475,7 @@ class EditActions(NotationActions):
         was_whole = crossing(self.project.score) is None
         if was_whole and any(p.notes for p in self.project.score.parts):
             label = tr("設定 {beats} 拍弱起").format(beats=_beats(ticks)) if ticks else tr("取消弱起")
-            self.move_bar_lines(meter=self.project.score.meter, pickup=ticks, label=label)
+            self.move_bar_lines(meter=self.project.score.meter, pickup=ticks, label=label, always_ask=True)
             return
 
         def update(project):
