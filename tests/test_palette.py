@@ -97,9 +97,15 @@ def test_reasons_follow_the_selection_rules():
     assert notation_edit.symbol_state(score, t["one"], "line.slur").reason == "需要選取連續兩個以上的音符。"
     assert notation_edit.symbol_state(score, t["scattered"], "line.slur").reason.startswith("選取不連續")
     assert notation_edit.symbol_state(score, t["bars"], "finger.1").reason.startswith("目前選的是整個小節")
-    assert notation_edit.symbol_state(score, t["barline"], "volta.1").reason.startswith("結尾段要選小節")
+    # Round 6: an ending can start from a bar line too (the bar right of it); the :‖ comes along.
+    assert notation_edit.symbol_state(score, t["barline"], "volta.1").available
     assert notation_edit.symbol_state(score, t["one"], "line.tie").reason.startswith("延音線只能連到下一個相同音高的音")
-    assert notation_edit.symbol_state(score, t["bars"], "nav.ds").reason.startswith("請先在要跳回的地方加 D.S. 記號")
+    # Round 6: a structure is built one sign at a time -- D.S. before its Segno is allowed and
+    # then listed as unfinished, with the next step.
+    assert notation_edit.symbol_state(score, t["bars"], "nav.ds").available
+    trial = score.copy()
+    notation_edit.toggle_symbol(trial, t["bars"], "nav.ds")
+    assert "還需要 Segno" in trial.notation_error() and trial.edit_error() is None
     assert notation_edit.symbol_state(score, t["run"], "dyn.mf").available     # rests are skipped
     assert notation_edit.symbol_state(score, t["one"], "slide.gliss").available  # to the next note
 
@@ -116,7 +122,8 @@ def test_palette_state_agrees_with_mutate_validation():
             try:
                 notation_edit.toggle_symbol(trial, target, symbol.id)
                 trial.validate()
-                ok = trial.notation_error() is None
+                # Round 6: an unfinished repeat/jump is a legal step (listed, not refused).
+                ok = trial.edit_error() is None
             except ValueError:
                 ok = False
             assert ok == state.available, (symbol.id, target, state)

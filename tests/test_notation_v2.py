@@ -77,8 +77,9 @@ def test_source_whitelist_is_generated_from_the_registry():
 
 def test_prelude_variants_and_braces():
     tc, sc = symbols.prelude("tc"), symbols.prelude("sc", parts=2)
-    assert 'jsErhuInner = ^\\markup \\fontsize #-2 "內"' in tc
-    assert 'jsErhuInner = ^\\markup \\fontsize #-2 "内"' in sc
+    # Round 6: 內/外 sit next to their note, under tempo texts (lower outside-staff priority).
+    assert 'jsErhuInner = -\\tweak outside-staff-priority #300 ^\\markup \\fontsize #-2 "內"' in tc
+    assert 'jsErhuInner = -\\tweak outside-staff-priority #300 ^\\markup \\fontsize #-2 "内"' in sc
     assert "SystemStartBrace" in sc and "SystemStartBrace" not in tc
     assert "Fingering.font-encoding = #'latin1" in tc            # tech.md P1
     for name in symbols.macro_names():

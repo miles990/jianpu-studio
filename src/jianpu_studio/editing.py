@@ -31,6 +31,9 @@ from .measures import clean_pasted, clip_notes
 from .migrate import LEGACY_FIELDS
 from .model import DURATIONS, MAX_PARTS, Note, pickup_choices
 from .notation_actions import NotationActions
+from .notation_rules import bar_label
+
+NEW_SCORE_STAFF_SIZE = 24
 
 NOTE_MIME = "application/x-jianpu-studio-notes"
 PICKUP_NAMES = {48 * 4: N_("全音符"), 96: N_("二分"), 144: N_("附點二分"), 48: N_("四分"), 72: N_("附點四分"),
@@ -72,8 +75,10 @@ class EditActions(NotationActions):
                 raise ValueError(tr("本版只提供視覺編輯，未變更目前樂譜。"))
             project.score.validate()
             self.validate_tuplet_edit(project.score)
-            if self.current_notation_error() is None:
-                if error := project.score.notation_error():
+            # An unfinished repeat/jump is a legal step while building it (it is listed as a
+            # problem); anything else an edit would break is refused.
+            if self.current_edit_error() is None:
+                if error := project.score.edit_error():
                     raise ValueError(error)
             totals = [sum(n.ticks for n in p.notes) for p in self.project.score.parts]
             after = [sum(n.ticks for n in p.notes) for p in project.score.parts]
@@ -107,6 +112,15 @@ class EditActions(NotationActions):
             self._error_cache = cached
         return cached[3]
 
+    def current_edit_error(self):
+        """edit_error() of the current project (cached like ``current_notation_error``)."""
+        cached = getattr(self, "_edit_error_cache", None)
+        key = (self.project, self.revision, i18n.current_language())
+        if cached is None or cached[0] is not key[0] or cached[1:3] != key[1:]:
+            cached = (*key, self.project.score.edit_error())
+            self._edit_error_cache = cached
+        return cached[3]
+
     def changed(self):
         self.revision += 1
         self.dirty = True
@@ -127,7 +141,14 @@ class EditActions(NotationActions):
         self.future.append(self.snapshot())
         rows, current = self._restore(self.history.pop())
         self.changed()
+        self.mark_saved_state()
         self.sync(selection=rows, current=current)
+
+    def mark_saved_state(self):
+        """Undo/redo back to what was last saved (or opened) is not 「已修改」."""
+        saved = getattr(self, "saved_project", None)
+        if saved is not None and self.project == saved:
+            self.dirty = False
 
     def redo(self):
         if not self.future or (self.task and self.task_blocks_edit):
@@ -135,6 +156,7 @@ class EditActions(NotationActions):
         self.history.append(self.snapshot())
         rows, current = self._restore(self.future.pop())
         self.changed()
+        self.mark_saved_state()
         self.sync(selection=rows, current=current)
 
     # ---------------------------------------------------------------- refresh
@@ -152,7 +174,7 @@ class EditActions(NotationActions):
                 if field.text() != value:
                     field.setText(value)
                     field.setCursorPosition(0)
-            self.key_field.setCurrentText(score.key)
+            self.key_field.setCurrentIndex(self.key_field.findData(score.key))
             self.meter_field.setCurrentText(score.meter)
             self.tempo_field.setValue(score.tempo)
             self.staff.setChecked(score.with_staff)
@@ -254,8 +276,18 @@ class EditActions(NotationActions):
         notation = self.current_notation_error()
         error = rhythm or notation
         over = any(text == tr("超拍") for _, _, text, _ in found)
+        from .notation_rules import structure_problems
+        structure = structure_problems(score) if score.parts[0].notes else []
+        barlines = set()
+        for problem in structure:
+            # Drawn on the bar of the sign: 「尚未完成」 for a structure being built, else 「結構有誤」.
+            if problem.bar is not None and (0, problem.bar) not in problems:
+                problems[(0, problem.bar)] = tr("尚未完成") if problem.incomplete else tr("反覆／跳躍有誤")
+                if problem.row is not None and problem.row == score.part_bars(0)[problem.bar][1] - 1:
+                    barlines.add(problem.bar)
+        edit = self.current_edit_error()
         # Every problem is reachable with 「下一個問題」: the bar problems, then the located messages.
-        for message in (rhythm, notation):
+        for message in (rhythm, edit, *structure):
             if not message or getattr(message, "fix", None) == ("fill",) or (message is rhythm and over):
                 continue
             part = getattr(message, "part", 0) or 0
@@ -265,7 +297,7 @@ class EditActions(NotationActions):
                 bar = next((k for k, (a, b) in enumerate(score.part_bars(part)) if a <= row < b), None)
             found.append((part, bar, str(message), row))
         self.problem_list = found
-        self.notes.set_problems(problems, bars_flagged, set())
+        self.notes.set_problems(problems, bars_flagged, barlines)
         if error or found:
             first = found[0] if found else None
             if first and first[3] is None:
@@ -290,9 +322,15 @@ class EditActions(NotationActions):
             fix = getattr(rhythm, "fix", None) or fix
         fill = not over and ((bool(found) and any(row is None and bar == len(score.part_bars(p)) - 1
                                                   for p, bar, _, row in found)) or (fix and fix[0] == "fill"))
-        self.fill_button.setText(tr("補齊休止符") if fill or not fix else tr("移除孤立記號"))
-        self.fill_button.setToolTip(tr("把最後一小節補滿休止符") if fill or not fix else
-                                    tr("移除這個沒有另一端的記號（可復原）：{problem}").format(problem=error))
+        if not fill and fix and fix[0] == "add":
+            name = symbols.SYMBOLS[fix[2]].display_name
+            self.fill_button.setText(tr("加上「{name}」").format(name=name))
+            self.fill_button.setToolTip(tr("把「{name}」加在{bar}（可復原）：{problem}").format(
+                name=name, bar=bar_label(score, fix[1]), problem=error))
+        else:
+            self.fill_button.setText(tr("補齊休止符") if fill or not fix else tr("移除孤立記號"))
+            self.fill_button.setToolTip(tr("把最後一小節補滿休止符") if fill or not fix else
+                                        tr("移除這個沒有另一端的記號（可復原）：{problem}").format(problem=error))
         self.fill_button.setVisible(bool(fill or fix))
 
     def capture_fields(self, *_):
@@ -300,7 +338,7 @@ class EditActions(NotationActions):
             return
         part = min(self.part, len(self.project.score.parts) - 1)
         values = dict(title=self.title_field.text(), composer=self.composer_field.text(),
-                      key=self.key_field.currentText(), meter=self.meter_field.currentText(),
+                      key=self.key_field.currentData() or self.project.score.key, meter=self.meter_field.currentText(),
                       tempo=self.tempo_field.value(), with_staff=self.staff.isChecked())
         lyrics = self.lyrics.text()
         score = self.project.score
@@ -319,7 +357,70 @@ class EditActions(NotationActions):
             if was_whole and (problem := crossing(project.score)):
                 raise ValueError(tr("改成 {meter} 拍後小節線會移到別的位置，{where}的音會跨過小節線，所以沒有修改。"
                                     "請先調整這些音的時值，或新增一份樂譜。").format(meter=project.score.meter, where=problem))
+        if was_whole and values["meter"] != score.meter and any(p.notes for p in score.parts):
+            trial = score.copy()
+            for name, value in values.items():
+                setattr(trial, name, value)
+            if trial.pickup and trial.pickup not in pickup_choices(trial.bar_ticks):
+                trial.pickup = 0
+            if crossing(trial) is not None:
+                self.move_bar_lines(values=values, meter=trial.meter, pickup=trial.pickup,
+                                    label=tr("改成 {meter} 拍").format(meter=trial.meter))
+                return
         self.mutate(update)
+
+    def move_bar_lines(self, *, meter, pickup, label, values=None) -> bool:
+        """A pickup or meter that moves the bar lines of written music: an empty (all-rest) score
+        is simply redrawn; otherwise the user chooses how, after seeing what changes (one undo step)."""
+        from . import rebar
+        from .rhythm_edit import Choice, RhythmRefused
+        score = self.project.score
+        options = {}
+        if rebar.rests_only(score):
+            options["rests"] = rebar.rebar_rests(score, meter=meter, pickup=pickup)
+            key = "rests"
+        else:
+            from .model import Score
+            old_first, new_bar = score.first_bar_ticks, Score(meter=meter).bar_ticks
+            new_first = pickup or new_bar
+            choices, lines = [], []
+            if meter == score.meter:
+                pad = (new_first - old_first) % new_bar
+                cut = old_first - new_first
+                if 0 < cut and rebar.leading_rest_ticks(score) >= cut:
+                    options["trim"] = rebar.trim_to_pickup(score, pickup)
+                    choices.append(Choice("trim", tr("刪去曲首 {beats} 拍休止符（其餘小節不動）").format(beats=_beats(cut))))
+                if pad:
+                    options["pad"] = rebar.pad_first_bar(score, pad)
+                    choices.append(Choice("pad", tr("在曲首補上 {beats} 拍休止符（其餘小節不動）").format(beats=_beats(pad))))
+            try:
+                options["rebar"] = rebar.rebar(score, meter=meter, pickup=pickup)
+                choices.append(Choice("rebar", tr("整首重新分小節")))
+                lines.append(rebar.describe(score, options["rebar"], tr("整首重新分小節")))
+            except ValueError as exc:
+                lines.append(tr("不能整首重新分小節：{reason}").format(reason=exc))
+            if not choices:
+                self.error(tr("無法移動小節線"), tr("{label}會移動小節線。").format(label=label) + " ".join(lines))
+                self.sync()
+                return False
+            message = tr("{label}會移動後面所有的小節線，有音會跨過新的小節線。請選擇做法：").format(label=label)
+            refused = RhythmRefused(message + "\n\n" + "\n".join(lines), choices=tuple(choices), title=tr("移動小節線"))
+            key = self.choose_rhythm_option(refused)
+            if key not in options:
+                self.sync()
+                return False
+        result = options[key]
+
+        def update(project):
+            if values:
+                for name, value in values.items():
+                    setattr(project.score, name, value)
+            result.apply(project.score, meter=meter, pickup=pickup)
+        if self.mutate(update):
+            self.toast.show_text(tr("已移動小節線；可用復原還原。"), self.undo)
+            return True
+        self.sync()
+        return False
 
     def change_pickup(self, *_):
         if self.loading:
@@ -330,6 +431,12 @@ class EditActions(NotationActions):
 
         from .notation_rules import crossing
         was_whole = crossing(self.project.score) is None
+        trial = self.project.score.copy()
+        trial.pickup = ticks
+        if was_whole and any(p.notes for p in trial.parts) and crossing(trial) is not None:
+            label = tr("設定 {beats} 拍弱起").format(beats=_beats(ticks)) if ticks else tr("取消弱起")
+            self.move_bar_lines(meter=self.project.score.meter, pickup=ticks, label=label)
+            return
 
         def update(project):
             project.score.pickup = ticks
@@ -658,12 +765,16 @@ class EditActions(NotationActions):
             self.edit_property("degree", degree)
             if self.notes.selected_rows():
                 self.guide.mark(2)
-        elif self.input_mode.currentData() == "fill":
-            self.fill_rest(self.replace_note(self.next_note, {"degree": degree}))
-            self.guide.mark(2)
         else:
-            self.insert_notes([self.replace_note(self.next_note, {"degree": degree})])
+            note = self.replace_note(self.next_note, {"degree": degree})
+            revision = self.revision
+            self.fill_rest(note) if self.input_mode.currentData() == "fill" else self.insert_notes([note])
             self.guide.mark(2)
+            if self.revision != revision and self.next_note.dotted:
+                # A dot is for one note (as on paper: 5· then 6): the next note is plain again.
+                self.next_note = replace(self.next_note, dotted=False)
+                self.update_selection()
+                self.statusBar().showMessage(tr("附點只加在這一個音；下一個音不帶附點（要再加按 .）。"), 5000)
         if self.notes.currentRow() >= 0:
             self.notes.flash(self.notes.currentRow())
         self.notes.setFocus()
@@ -706,7 +817,72 @@ class EditActions(NotationActions):
         except (TypeError, ValueError, AttributeError) as exc:
             self.error(tr("無法貼上音符"), exc)
             return
+        if self.paste_over_bars(notes):
+            return
+        revision = self.revision
         self.insert_clip(notes, notice=True)
+        if self.revision != revision and not self.statusBar().currentMessage():
+            self.toast.show_text(tr("已插入 {count} 個音，後面的音往後移（要取代整小節，請先點小節號選取小節再貼上）。").format(
+                count=len(notes)), self.undo)
+
+    def paste_over_bars(self, notes) -> bool:
+        """Pasting whole copied bars onto selected bars asks: replace them, or insert before them."""
+        from .rhythm_edit import Choice, RhythmRefused
+        bars = sorted(self.notes.selected_bars) if self.notes.selection_kind == "bars" else []
+        score = self.project.score
+        ranges = score.part_bars(self.part)
+        if not bars or bars[-1] >= len(ranges):
+            return False
+        a, b = ranges[bars[0]][0], ranges[bars[-1]][1]
+        part_notes = score.parts[self.part].notes
+        room = sum(n.ticks for n in part_notes[a:b])
+        if sum(n.ticks for n in notes) != room:
+            return False
+        label = tr("第 {a}–{b} 小節").format(a=notation_edit.bar_number(score, bars[0]),
+                                            b=notation_edit.bar_number(score, bars[-1])) if len(bars) > 1 else \
+            bar_label(score, bars[0])
+        refused = RhythmRefused(tr("要怎麼貼上這 {count} 個音？").format(count=len(notes)), choices=(
+            Choice("replace", tr("取代{bars}的音").format(bars=label)),
+            Choice("insert", tr("插入在{bars}前面").format(bars=label))), title=tr("貼上小節"))
+        key = self.choose_rhythm_option(refused)
+        if key == "insert":
+            self.notes.select_rows(list(range(a, b)), a)
+            position = self.insert_position.currentData()
+            self.insert_position.setCurrentIndex(self.insert_position.findData("before"))
+            self.insert_clip(notes, notice=True)
+            self.insert_position.setCurrentIndex(self.insert_position.findData(position))
+            return True
+        if key != "replace":
+            return True
+        plain, _ = clean_pasted(notes)
+        part = self.part
+        # The bar lines (repeats, endings, jumps) of the selected bars stay where they are.
+        positions, bounds, tick = [], {}, 0
+        for row in range(a, b):
+            positions.append(tick)
+            tick += part_notes[row].ticks
+        for row in range(a, b):
+            bounds.setdefault(positions[row - a], [None, None])[0] = part_notes[row].bar_start
+            end = positions[row - a] + part_notes[row].ticks
+            bounds.setdefault(end, [None, None])[1] = part_notes[row].bar_end
+        out, tick = [], 0
+        for note in plain:
+            start, end = tick, tick + note.ticks
+            values = {}
+            if start in bounds and bounds[start][0]:
+                values["bar_start"] = bounds[start][0]
+            if end in bounds and bounds[end][1]:
+                values["bar_end"] = bounds[end][1]
+            out.append(replace(note, **values) if values else note)
+            tick = end
+
+        def update(project):
+            project.score.parts[part].notes[a:b] = out
+        if self.mutate(update, selection=list(range(a, a + len(out))), current=a,
+                       explicit=lambda item: item.part == part and a <= item.row < b
+                       and item.kind not in edit_guard.BAR_KINDS):
+            self.toast.show_text(tr("已取代{bars}的音。").format(bars=label), self.undo)
+        return True
 
     def insert_clip(self, notes, *, notice=False):
         """Insert copied notes: complete repeats and bar lines come along when whole bars land on
@@ -717,7 +893,7 @@ class EditActions(NotationActions):
             with_bars, kept_removed = clean_pasted(notes, keep_bar_items=True)
             trial = self.project.score.copy()
             trial.parts[0].notes[self.insertion_index():self.insertion_index()] = with_bars
-            if trial.notation_error() is None:
+            if trial.edit_error() is None:
                 chosen, removed = with_bars, kept_removed
         if self.insert_notes(chosen) and removed and notice:
             self.statusBar().showMessage(tr("已貼上；移除 {count} 個不完整的連線或小節記號。").format(count=removed), 8000)
@@ -827,6 +1003,33 @@ class EditActions(NotationActions):
         if self.mutate(update, selection=[row], current=row,
                        explicit=lambda item: item.part == part and item.row == row and item.kind == "text"):
             self.toast.show_text(tr("已加上「{text}」。").format(text=value) if value else tr("已移除上方文字。"), self.undo)
+            return True
+        return False
+
+    def add_note_text(self, word) -> bool:
+        """A ready-made word from the search (中速, 全弓, 15弦…) above the selected note; added
+        after any text already there, so nothing is replaced."""
+        rows = self.notes.selected_rows()
+        if len(rows) != 1:
+            message = tr("請先點一個音符或休止符，再加上文字「{word}」。").format(word=word) if not rows else \
+                tr("上方文字一次加在一個音上：請只選一個音符或休止符。")
+            self.statusBar().showMessage(message, 8000)
+            self.toast.show_text("⚠ " + message)
+            return False
+        row, part = rows[0], self.part
+        old = self.part_notes()[row].text
+        value = (old + " " + word) if old and word not in old.split() else (old or word)
+        if value == old:
+            self.toast.show_text(tr("這個音上已有「{word}」。").format(word=word))
+            return False
+
+        def update(project):
+            notes = project.score.parts[part].notes
+            notes[row] = replace(notes[row], text=value)
+        if self.mutate(update, selection=[row], current=row,
+                       explicit=lambda item: item.part == part and item.row == row and item.kind == "text"):
+            self.palette.record_use("text.free")
+            self.toast.show_text(tr("已加上「{text}」。").format(text=value), self.undo)
             return True
         return False
 
@@ -1129,6 +1332,15 @@ class EditActions(NotationActions):
                 self.toast.show_text("⚠ " + str(rhythm))
                 return
             problem = notation
+        if fix and fix[0] == "add":
+            bar, item = fix[1], fix[2]
+
+            def add(project):
+                notation_edit.set_bar_item(project.score, bar, item)
+            if self.mutate(add):
+                self.toast.show_text(tr("已在{bar}加上「{name}」，可用復原還原。").format(
+                    bar=bar_label(self.project.score, bar), name=symbols.SYMBOLS[item].display_name), self.undo)
+            return
         if fix and fix[0] != "fill" and problem.row is not None:
             part = problem.part
 
@@ -1289,7 +1501,7 @@ class EditActions(NotationActions):
         key = (self.revision, self.current_target(), self.project.score.print_variant)
         if getattr(self, "_state_key", None) != key:
             self._state_key = key
-            self._base_error = self.current_notation_error()
+            self._base_error = self.current_edit_error()
         return notation_edit.symbol_state(self.project.score, self.current_target(), sid, base_error=self._base_error)
 
     def symbol_where(self, sid):
@@ -1297,6 +1509,11 @@ class EditActions(NotationActions):
 
     def palette_apply(self, sid, how="click"):
         """A palette cell / search result / favourite was activated (design §2.6–§2.7)."""
+        from .symbols_ui import text_word
+        if word := text_word(sid):
+            if self.add_note_text(word) and how == "click":
+                self.notes.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
         if how == "continuous":
             self.set_continuous("" if self.palette.continuous == sid else sid)
             if self.palette.continuous and self.current_target().kind != "none":
@@ -1339,6 +1556,12 @@ class EditActions(NotationActions):
         if target.rows:
             self.notes.flash(target.rows[0])          # landing feedback (colour only, design §4.5)
         text = notice.get("text", "")
+        if symbol.storage == "bar":
+            # Building a repeat or jump one sign at a time: say what it still needs.
+            from .notation_rules import structure_problems
+            pending = [p for p in structure_problems(self.project.score) if p.incomplete]
+            if pending:
+                text = (text + " " if text else "") + str(pending[0])
         if text:
             self.toast.show_text(text, self.undo)
         self.palette.invalidate()
@@ -1623,7 +1846,8 @@ class EditActions(NotationActions):
         from .model import Part, Project, Score
         if not self.guard_unsaved():
             return
-        score = Score(title=tr("未命名樂曲"), key="D", meter="4/4", tempo=72)
+        # New scores print at staff size 24 (a book-like page); files keep the size they were saved with.
+        score = Score(title=tr("未命名樂曲"), key="D", meter="4/4", tempo=72, staff_size=NEW_SCORE_STAFF_SIZE)
         bars = score.rests_between(0, 8 * score.bar_ticks)
         if kind == "duet":
             score.parts = [Part(tr("二胡一"), list(bars)), Part(tr("二胡二"), list(bars))]

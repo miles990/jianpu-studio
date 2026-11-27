@@ -363,7 +363,8 @@ class PaintMixin:
             y = min(y, row.arc_y - 4 * s) - 8 * s
         if under_tuplet:
             y = min(y, row.tuplet_y - 6 * s)
-        for symbol in above:
+        for symbol, gap in zip(above, glyphs.stack_gaps(above)):
+            y -= gap * s
             h = glyphs.mark_height(symbol) * s
             self._draw_symbol(p, symbol, cx, y - h / 2, color, variant)
             y -= h + 2 * s

@@ -20,6 +20,13 @@ from . import i18n, migrate, symbols
 from .i18n import N_, tr
 
 KEYS = ("C", "G", "D", "A", "E", "B", "F#", "F", "Bb", "Eb", "Ab", "Db", "Gb")
+
+
+def key_label(key: str) -> str:
+    """Jianpu writes the accidental before the letter: 「♭B」, 「♯F」."""
+    if len(key) == 2 and key[1] in "#b":
+        return ("♯" if key[1] == "#" else "♭") + key[0]
+    return key
 METERS = ("4/4", "3/4", "2/4", "6/8", "3/8", "2/2", "9/8", "12/8")
 DURATIONS = {1: N_("全音符 · 4 拍"), 2: N_("二分 · 2 拍"), 4: N_("四分 · 1 拍"), 8: N_("八分 · ½ 拍"),
              16: N_("十六分 · ¼ 拍"), 32: N_("三十二分 · ⅛ 拍")}  # values are catalog sources; show tr(value)
@@ -431,6 +438,11 @@ class Score:
     def notation_error(self) -> str | None:
         from .notation_rules import notation_error
         return notation_error(self)
+
+    def edit_error(self) -> str | None:
+        """notation_error() without the repeat/jump structure, which may be unfinished while editing."""
+        from .notation_rules import edit_error
+        return edit_error(self)
 
     def export_warnings(self) -> list[str]:
         """Things the export silently adjusts (shown to the user; the PDF is still correct)."""

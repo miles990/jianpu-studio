@@ -119,7 +119,7 @@ class Onset:
 class PlayMap:
     """Note onsets of one part in performance order."""
 
-    def __init__(self, score, part: int = 0):
+    def __init__(self, score, part: int = 0, order: list[int] | None = None):
         from .model import TICKS_PER_QUARTER
         self.part = part
         self.tempo = score.tempo
@@ -127,7 +127,7 @@ class PlayMap:
         ranges = score.part_bars(part)
         notes = score.parts[part].notes
         lengths = [sum(n.ticks for n in score.parts[0].notes[a:b]) for a, b in score.part_bars(0)]
-        self.order = unfold_bars(score)
+        self.order = unfold_bars(score) if order is None else list(order)
         self.onsets: list[Onset] = []
         self.bar_starts: list[tuple[int, int]] = []   # (tick, bar) per visit
         tick = 0

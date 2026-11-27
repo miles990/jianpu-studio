@@ -15,6 +15,7 @@ from functools import lru_cache
 
 from . import symbols
 from .i18n import N_, catalog, tr
+from .text_words import TEXT_WORDS
 
 CATEGORY_ORDER = ("fingering", "technique", "articulation", "dynamic", "line", "ornament", "barline",
                   "navigation", "tempo", "pedal")
@@ -143,13 +144,13 @@ USAGE = {
     "volta.3": N_("第三遍跳過前面的結尾，改奏這個結尾。"),
     "volta.4": N_("第四遍跳過前面的結尾，改奏這個結尾。"),
     "volta.final": N_("最後一個結尾標「結」，奏完即結束。"),
-    "nav.segno": N_("標出 D.S. 要跳回的位置（𝄋）。"),
+    "nav.segno": N_("標出 D.S. 要跳回的位置（Segno 記號）。"),
     "nav.tocoda": N_("第二遍奏到這裡，跳到尾聲（Coda）。"),
-    "nav.ds": N_("奏到這裡，回到 𝄋 記號處再奏。"),
+    "nav.ds": N_("奏到這裡，回到 Segno 記號處再奏。"),
     "nav.dc": N_("奏到這裡，回到樂曲開頭再奏。"),
     "nav.fine": N_("反覆回來時，在這裡結束全曲。"),
     "nav.coda_sign": N_("只印 ⊕ 記號，不改變試聽順序。"),
-    "nav.segno_sign": N_("只印 𝄋 記號，不改變試聽順序。"),
+    "nav.segno_sign": N_("只印 Segno 記號，不改變試聽順序。"),
     "nav.dc_text": N_("只印文字 D.C.，試聽不會跳回。"),
     "nav.dcfine_text": N_("只印文字 D.C. al Fine，試聽不會跳回。"),
     "nav.ds_text": N_("只印文字 D.S.，試聽不會跳回。"),
@@ -469,3 +470,35 @@ def search(query: str, *, instrument: str = "erhu", include_hidden: bool = False
 def hidden_matches(query: str, instrument: str = "erhu") -> list:
     visible = {s.id for s in search(query, instrument=instrument)}
     return [s for s in search(query, instrument=instrument, include_hidden=True) if s.id not in visible]
+
+
+# ---------------------------------------------------------------- ready-made text words (round 6)
+TEXT_PREFIX = "text.free:"
+MAX_TEXT = 20
+
+
+def text_suggestions(query: str, *, found: bool = True) -> list[str]:
+    """Words to offer as 「加上文字「…」」 for a search: the ready-made words that match (in
+    the script the user typed), and the query itself when nothing else matched."""
+    folded = fold(query).strip()
+    if not folded:
+        return []
+    out = []
+    for tc, sc, keys in TEXT_WORDS:
+        for word in (tc, sc):
+            if folded in fold(word) and word not in out:
+                out.append(word)
+                break
+        else:
+            if (re.fullmatch(r"[a-z0-9\s']+", folded) and any(k.startswith(folded.replace(" ", ""))
+                                                                for k in keys.split())) or folded in keys.split():
+                out.append(tc)
+    exact = query.strip()
+    if not out and not found and 0 < len(exact) <= MAX_TEXT and not any(c in exact for c in "\\{}\"$#%"):
+        out.append(exact)
+    return out[:6]
+
+
+def text_word(sid: str) -> str:
+    """The word of a 「加上文字」 result id (``text.free:中速``), or ""."""
+    return sid[len(TEXT_PREFIX):] if sid.startswith(TEXT_PREFIX) else ""

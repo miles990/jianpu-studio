@@ -31,12 +31,14 @@ MODES = ("insert", "edit", "edit", "fill")
 ACTIONS = ("duration", "dot", "delete", "digit", "paste", "duplicate", "split", "collapse", "grace_before",
            "grace_after", "text", "fill_rests", "bar_insert", "bar_delete", "bar_clear", "bar_duplicate",
            "symbol", "unsymbol", "part_add", "part_remove", "cut")
-SYMBOLS = ("dyn.p", "finger.1", "art.staccato", "line.slur", "hairpin.cresc", "line.tie", "bar.double", "nav.fine")
+SYMBOLS = ("dyn.p", "finger.1", "art.staccato", "line.slur", "hairpin.cresc", "line.tie", "bar.double", "nav.fine",
+           # Round 6: structures are built one sign at a time, so half-built ones occur on the way.
+           "bar.repeat_start", "bar.repeat_end", "volta.1", "volta.2", "nav.segno", "nav.ds", "nav.dc", "nav.tocoda")
 
 
 def fixture(rng):
     pickup, number, structure, tiny = (rng.choice([0, 48]), rng.choice([1, 2, 3]),
-                                       rng.choice([None, "dc", "ds", "coda"]), rng.random() < .4)
+                                       rng.choice([None, "dc", "ds", "coda", "half"]), rng.random() < .4)
     prefix = [Note(7, duration=4)] if pickup else []
     if tiny:
         first = [Note(1, duration=32, dotted=True, text="A"),
@@ -53,7 +55,12 @@ def fixture(rng):
     fourth = [Note(5, text="J", spans_end=("line.8va",)), Note(0), Note(6, marks=("finger.1",)), Note(0)]
     fifth = [Note(5, text="K"), Note(0), Note(6), Note(0)]
     sixth = [Note(5), Note(0), Note(6, grace_before="23"), Note(0)]
-    if structure:
+    if structure == "half":
+        # Unfinished structures are a legal state: a ‖: without :‖ and a Segno without D.S.
+        first[0] = replace(first[0], bar_start=("bar.repeat_start",))
+        fourth[0] = replace(fourth[0], spans_end=(), bar_start=("nav.segno",))
+        third[0] = replace(third[0], spans_start=())
+    elif structure:
         first[0] = replace(first[0], bar_start=("bar.repeat_start",))
         first[-1] = replace(first[-1], bar_end=("bar.repeat_end",))
         second[0] = replace(second[0], bar_start=("volta.1",))
@@ -71,7 +78,8 @@ def fixture(rng):
         parts.append(Part(f"part {p + 1}", prefix + [Note(0, duration=2), Note(p + 2, duration=2, text=f"P{p}")] * 6))
     score = Score(parts=parts, pickup=pickup)
     score.validate()
-    assert score.notation_error() is None and score.rhythm_error() is None
+    assert score.edit_error() is None and score.rhythm_error() is None
+    assert (score.notation_error() is None) == (structure != "half")
     return score
 
 
@@ -137,6 +145,11 @@ def explicit_for(action, score, part, rows, bars, sid):
         return lambda i: i[3] in kind
     if action == "part_remove":
         return lambda i: True
+    if action == "fill_rests":
+        # The one-click fix of a conflicting repeat/jump sign removes that sign (on purpose).
+        fix = getattr(score.notation_error(), "fix", None)
+        if fix and fix[0] in ("bar_start", "bar_end"):
+            return lambda i: i[0] == 0 and i[3] == fix[0] and i[4] == fix[1]
     return lambda i: False
 
 
@@ -244,8 +257,11 @@ def test_random_edit_sequences_keep_the_score_whole(window, seed, monkeypatch):
         assert len(totals) == 1, (where, totals)
         if crossing(after_score) is not None:
             assert w.problem_list and w.rhythm_label.text().startswith("⚠"), where
-        if before_score.notation_error() is None:
-            assert after_score.notation_error() is None, (where, after_score.notation_error())
+        if before_score.edit_error() is None:
+            assert after_score.edit_error() is None, (where, after_score.edit_error())
+        # An unfinished repeat/jump is listed with its place (and stays editable).
+        if after_score.notation_error() is not None and after_score.edit_error() is None:
+            assert w.problem_list, where
         gone = lost(before_score, after_score, explicit_for(action, before_score, part, rows, bars, sid))
         undeclared = gone - declared_keys(questions)
         assert not undeclared, (where, undeclared, [str(q) for q, _ in questions])

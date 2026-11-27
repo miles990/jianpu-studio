@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 from . import __version__, icons
 from .i18n import N_, tr
 from .inspector import SelectionInspector
-from .model import DURATIONS, KEYS, METERS
+from .model import DURATIONS, KEYS, METERS, key_label
 from .palette import SymbolPalette
 from .score_view import NoteList
 from .widgets import label, push, rule, segment, tool
@@ -214,7 +214,8 @@ def _scorebar(self, root):
     self.composer_rule = rule(True)
     row.addWidget(self.composer_rule)
     self.key_field = QComboBox()
-    self.key_field.addItems(KEYS)
+    for key in KEYS:
+        self.key_field.addItem(key_label(key), key)
     self.key_field.setAccessibleName(tr("調號"))
     self.meter_field = QComboBox()
     self.meter_field.addItems(METERS)

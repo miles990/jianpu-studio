@@ -134,6 +134,20 @@ def mark_height(symbol) -> float:
     return LANE_HEIGHT
 
 
+def stack_gaps(above) -> list[float]:
+    """Unscaled gap below each mark of a note's stack (from the note outward): marks of a new
+    layer (fingering -> bowing -> 內外…) keep a clear gap, so 一 never closes a ⊓ into a box;
+    a fermata nearest the note keeps clear of octave dots."""
+    gaps, previous = [], None
+    for symbol in above:
+        if previous is None:
+            gaps.append(4.0 if symbol.canvas.startswith("shape:fermata") else 0.0)
+        else:
+            gaps.append(5.0 if layer(symbol) != layer(previous) else 2.0)
+        previous = symbol
+    return gaps
+
+
 def mark_width(symbol, variant: str = "tc") -> float:
     """Approximate width (unscaled) so lanes and cells can reserve room."""
     text = symbol.canvas_text(variant)
@@ -258,6 +272,11 @@ def _text_mark(p, symbol, x, y, s, color, variant):
     if symbol.id in FINGER_STROKES:
         _finger_strokes(p, symbol.id, x, y, s, color)
         return
+    if symbol.id == "finger.0":
+        # Open string: a small thin ring, like the other fingerings (never a rest 0).
+        _pen(p, color, 1.0, s)
+        p.drawEllipse(QPointF(x, y), 2.6 * s, 3.6 * s)
+        return
     if is_dynamic(symbol):
         _text(p, text, x, y, font("dynamic", 15 * s), color)
     elif symbol.category in ("tempo", "pedal") or text in ("*",):
@@ -284,10 +303,11 @@ def _shape(p, name, symbol, x, y, s, color, variant):
         path.lineTo(x, y - 5 * s)
         path.lineTo(x + 4.5 * s, y + 4 * s)
     elif base == "fermata":
+        # The dot sits inside the arc, well above an octave dot's place.
         path.moveTo(x - 8 * s, y + 4 * s)
         path.cubicTo(x - 8 * s, y - 7 * s, x + 8 * s, y - 7 * s, x + 8 * s, y + 4 * s)
         p.setBrush(color)
-        p.drawEllipse(QPointF(x, y + 2.5 * s), 1.5 * s, 1.5 * s)
+        p.drawEllipse(QPointF(x, y + 1.0 * s), 1.6 * s, 1.6 * s)
         p.setBrush(Qt.BrushStyle.NoBrush)
     elif base == "tenuto":
         path.moveTo(x - 6 * s, y)

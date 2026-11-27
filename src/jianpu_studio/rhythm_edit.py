@@ -668,4 +668,4 @@ def _well_formed(score, part, notes) -> bool:
         trial.validate()
     except ValueError:
         return False
-    return trial.notation_error() is None or score.notation_error() is not None
+    return trial.edit_error() is None or score.edit_error() is not None

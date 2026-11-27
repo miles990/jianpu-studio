@@ -85,7 +85,7 @@ class NotationActions:
                 raise ValueError(tr("三連音的總拍數不一致，未修改原譜。"))
             def update(project):
                 project.score.parts[part_index].notes[start:end] = replacement
-                if error := project.score.notation_error():
+                if error := project.score.edit_error():
                     raise ValueError(error)
             merged_rows = set(range(start + 1, end)) if collapse else set()
 
@@ -178,7 +178,7 @@ class NotationActions:
                     notes[rows[0]] = replace(notes[rows[0]], **{start_field: action if name == "hairpin" else True})
                     notes[rows[-1]] = replace(notes[rows[-1]], **{end_field: True})
             if any(action not in ("keep", "remove") for action in ranges.values()):
-                if error := project.score.notation_error():
+                if error := project.score.edit_error():
                     raise ValueError(error)
         def explicit(item):
             # The dialog sets marks, lines and grace notes of the selected notes on purpose.

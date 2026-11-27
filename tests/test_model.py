@@ -135,11 +135,19 @@ def test_complete_erhu_marks_and_page_settings_roundtrip():
     ([Note(1, tie=True)], "相同音高"),
     ([Note(1), Note(2, repeat_start=True)], "小節開頭"),
     ([Note(1, repeat_start=True, repeat_end=True)], "完整小節末"),
-    ([Note(1, duration=1, repeat_end=True)], "前面沒有反覆起點"),
-    ([Note(1, duration=1, repeat_start=True)], "缺少反覆終點"),
+    ([Note(1, duration=1, repeat_start=True)], "還需要反覆止"),
 ])
 def test_invalid_connections_and_repeats(notes, message):
     assert message in Score(notes=notes).notation_error()
+
+
+def test_a_lone_repeat_end_repeats_from_the_beginning():
+    # Round 6: :‖ without ‖: is "repeat from the beginning" (it was refused before).
+    score = Score(notes=[Note(1, duration=1, repeat_end=True), Note(2, duration=1)])
+    assert score.notation_error() is None
+    assert score.to_jianpu().split("\n")[4].startswith("R{ 1")
+    second = Score(notes=[Note(1, duration=1, repeat_start=True, repeat_end=True), Note(2, duration=1, repeat_end=True)])
+    assert "還需要反覆起" in second.notation_error() and second.edit_error() is None
 
 
 def test_fill_after_dotted_32nd_is_exact_and_failure_does_not_mutate():

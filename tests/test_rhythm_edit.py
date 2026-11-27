@@ -275,7 +275,8 @@ def test_editor_insert_mode_in_the_middle_uses_rests_or_asks(window, monkeypatch
 
 
 def test_editor_located_problem_jumps_and_fixes_orphan_mark(window):
-    notes = [Note(1), Note(2), Note(3), Note(4), Note(5), Note(5), Note(5), Note(5, bar_end=("bar.repeat_end",))]
+    # Round 6: a lone :‖ is legal (repeat from the beginning); an orphan 「房子結束」 is not.
+    notes = [Note(1), Note(2), Note(3), Note(4), Note(5), Note(5), Note(5), Note(5, bar_end=("volta.end",))]
     window.reset(Project(Score(notes=notes)))
     assert window.fill_button.isVisibleTo(window) and window.fill_button.text() == "移除孤立記號"
     window.goto_problem()
@@ -285,13 +286,73 @@ def test_editor_located_problem_jumps_and_fixes_orphan_mark(window):
     assert window.project.score.notes[7].bar_end == ()
 
 
-def test_meter_change_that_would_break_bars_is_refused(window, monkeypatch):
+def test_meter_change_that_would_break_bars_asks_and_can_be_cancelled(window, monkeypatch):
+    # Round 6: instead of a flat refusal the editor offers to re-bar, showing what changes.
     window.reset(demo_project())
-    errors = []
-    monkeypatch.setattr(window, "error", lambda title, exc: errors.append(str(exc)))
+    asked = []
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: asked.append(refused) or None)
+    before = window.project.to_dict()
     window.meter_field.setCurrentText("3/4")
     window.capture_fields()
-    assert window.project.score.meter == "4/4" and errors and "跨過小節線" in errors[0]
+    assert window.project.to_dict() == before and window.meter_field.currentText() == "4/4"
+    assert [c.key for c in asked[0].choices] == ["rebar"]
+    assert "小節 →" in str(asked[0]) and "延音線" in str(asked[0]) and "復原" in str(asked[0])
+
+
+def test_meter_change_rebars_with_ties_in_one_undo_step(window, monkeypatch):
+    window.reset(demo_project())
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: "rebar")
+    before = window.project.to_dict()
+    pitches = [(n.degree, n.octave) for n in window.project.score.notes if n.degree]
+    ticks = sum(n.ticks for n in window.project.score.notes)
+    window.meter_field.setCurrentText("3/4")
+    window.capture_fields()
+    score = window.project.score
+    assert score.meter == "3/4" and score.rhythm_error() is None and score.notation_error() is None
+    # Same music: the sounding notes (tied pieces joined) and length (plus rests to finish the bar).
+    joined, previous_tied = [], False
+    for n in score.notes:
+        if n.degree and not previous_tied:
+            joined.append((n.degree, n.octave))
+        previous_tied = n.tie
+    assert joined == pitches and sum(n.ticks for n in score.notes) >= ticks
+    window.undo()
+    assert window.project.to_dict() == before
+
+
+def test_pickup_on_an_all_rest_score_just_redraws_the_bars(window):
+    rests = [Note(0, duration=1)] * 8
+    window.reset(Project(Score(notes=rests)))
+    window.pickup_field.setCurrentIndex(window.pickup_field.findData(48))
+    score = window.project.score
+    assert score.pickup == 48 and len(score.part_bars(0)) == 8
+    assert score.rhythm_error() is None and score.notation_error() is None
+    window.undo()
+    assert window.project.score.pickup == 0 and window.project.score.notes == rests
+
+
+def test_pickup_on_written_music_offers_trim_or_a_pickup_bar(window, monkeypatch):
+    first = [Note(0, duration=2), Note(0), Note(5)]               # 3 beats of rest, then the upbeat 5
+    music = first + [Note(1), Note(2), Note(3), Note(4)] * 2
+    window.reset(Project(Score(notes=music)))
+    asked = []
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: asked.append(refused) or "trim")
+    window.pickup_field.setCurrentIndex(window.pickup_field.findData(48))
+    score = window.project.score
+    assert [c.key for c in asked[0].choices] == ["trim", "pad", "rebar"]
+    assert score.pickup == 48 and score.notes[0] == Note(5) and score.notes[1:5] == music[3:7]
+    assert score.rhythm_error() is None
+    window.undo()
+    # No leading rests: a pickup bar of rests in front, the bars after it unchanged.
+    music = [Note(1), Note(2), Note(3), Note(4)] * 2
+    window.reset(Project(Score(notes=music)))
+    asked.clear()
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: asked.append(refused) or "pad")
+    window.pickup_field.setCurrentIndex(window.pickup_field.findData(72))
+    score = window.project.score
+    assert [c.key for c in asked[0].choices] == ["pad", "rebar"]
+    assert score.pickup == 72 and score.notes[0].degree == 0 and score.notes[-8:] == music
+    assert score.part_bars(0)[1] == (1, 5)
 
 
 def test_rest_helpers_split_on_beats():

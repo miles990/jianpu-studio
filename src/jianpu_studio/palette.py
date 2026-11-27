@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QCursor, QFontMetricsF, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QButtonGroup,
@@ -43,6 +43,11 @@ FAVORITES, RECENTS = "favorites", "recents"
 SECTION_ORDER = (FAVORITES, RECENTS, *CATEGORY_ORDER)
 SECTION_SHORT = {FAVORITES: N_("常用"), RECENTS: N_("最近"), **CATEGORY_SHORT}  # catalog sources; show tr(value)
 STATE_BUDGET = 0.035     # seconds of validation per paint; the rest is computed on the next tick
+
+
+def base_sid(sid: str) -> str:
+    """A 「加上文字「…」」 result (``text.free:中速``) is the free-text symbol."""
+    return "text.free" if symbols_ui.text_word(sid) else sid
 
 
 def preview_path(symbol_id: str) -> Path:
@@ -271,7 +276,8 @@ class SymbolGrid(QAbstractScrollArea):
             p.setPen(halo)
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRoundedRect(rect.adjusted(-2, -2, 2, 2), radius + 2, radius + 2)
-        symbol = symbols.SYMBOLS[entry.sid]
+        word = symbols_ui.text_word(entry.sid)
+        symbol = symbols.SYMBOLS[base_sid(entry.sid)]
         ink, faint = QColor(c.ink), QColor(c.faint)
         if disabled:
             ink.setAlphaF(DISABLED_INK_ALPHA)
@@ -313,11 +319,14 @@ class SymbolGrid(QAbstractScrollArea):
             glyphs.symbol_preview(p, symbol, box, ink, faint, 0.62, self.palette.variant, True)
             font.setPixelSize(14)
             p.setFont(font)
+            name = tr("加上文字「{word}」").format(word=word) if word else symbol.display_name
             self._paint_highlighted(p, QRectF(rect.left() + 58, rect.top() + 4, rect.width() - 64, 22),
-                                    symbol.display_name, self.palette.query, name_color, c.accenttext, font)
+                                    name, self.palette.query, name_color, c.accenttext, font)
             font.setPixelSize(12)
             p.setFont(font)
-            second = self.palette.result_line(symbol, state)
+            second = (("⚠ " + state.reason) if state is not None and not state.available else
+                      tr("印在音符上方；加在曲首第一個音上時，印在調號速度那一行")) if word else \
+                self.palette.result_line(symbol, state)
             p.setPen(c.warn if disabled else c.accenttext if present else c.text2)
             area = QRectF(rect.left() + 58, rect.top() + 25, rect.width() - 64, 20)
             p.drawText(area, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -392,7 +401,8 @@ class SymbolGrid(QAbstractScrollArea):
         self.focus_index = index
         sid = self.entries[index].sid
         if event.button() == Qt.MouseButton.RightButton:
-            self.contextRequested.emit(sid, event.globalPosition().toPoint())
+            if not symbols_ui.text_word(sid):
+                self.contextRequested.emit(sid, event.globalPosition().toPoint())
             return
         if event.button() == Qt.MouseButton.LeftButton:
             how = "continuous" if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else "click"
@@ -714,9 +724,10 @@ class SymbolPalette(QWidget):
         self.detail.refresh()
 
     def cached_state(self, sid):
-        return self._states.get(sid)
+        return self._states.get(base_sid(sid))
 
     def state_of(self, sid):
+        sid = base_sid(sid)
         if sid not in self._states:
             self._states[sid] = self.state(sid)
         return self._states[sid]
@@ -738,6 +749,12 @@ class SymbolPalette(QWidget):
         self.query = text
         ids = [s.id for s in symbols_ui.search(text, instrument=self.instrument if self.instrument != "all" else "erhu",
                                                include_hidden=self.show_hidden)] if text.strip() else []
+        # Tempo/expression words, tunings and bow sections are text: offer 「加上文字「…」」
+        # (first when the query is exactly such a word), and any query that finds nothing.
+        words = symbols_ui.text_suggestions(text, found=bool(ids))
+        rows = [symbols_ui.TEXT_PREFIX + w for w in words]
+        exact = bool(words) and words[0] == text.strip()
+        ids = rows + ids if exact or not ids else ids + rows
         if text.strip():
             self.grid.show_results(ids)
             self.result_count.setText(tr("{count} 個結果").format(count=len(ids)))
@@ -797,11 +814,21 @@ class SymbolPalette(QWidget):
         self._save_lists()
         self.grid.relayout()
 
-    def toggle_favorite(self, sid):
+    def favorites_full(self) -> bool:
+        return len(self.favorites) >= symbols_ui.MAX_FAVORITES
+
+    def toggle_favorite(self, sid, replace=None):
+        """Star / unstar. 「常用」 holds 9 (Alt+1…9): when it is full, ``replace`` names the one
+        to swap out; without it the user is asked which one (never a silent no-op)."""
         if sid in self.favorites:
             self.favorites.remove(sid)
         elif len(self.favorites) < symbols_ui.MAX_FAVORITES:
             self.favorites.append(sid)
+        elif replace in self.favorites:
+            self.favorites[self.favorites.index(replace)] = sid
+        else:
+            self.choose_replacement(sid)
+            return
         self._save_lists()
         self.grid.relayout()
         self.detail.refresh()
@@ -810,13 +837,28 @@ class SymbolPalette(QWidget):
         visible = self.section_ids(FAVORITES)
         return str(visible.index(sid) + 1) if sid in visible else ""
 
+    def _replacement_menu(self, menu, sid):
+        menu.setToolTipsVisible(True)
+        title = menu.addAction(tr("常用已滿（最多 {count} 個，對應 Alt+1…9）。選一個換成「{name}」：").format(
+            count=symbols_ui.MAX_FAVORITES, name=symbols.SYMBOLS[sid].display_name))
+        title.setEnabled(False)
+        for index, old in enumerate(self.favorites):
+            menu.addAction(tr("取代 {n}. {name}").format(n=index + 1, name=symbols.SYMBOLS[old].display_name),
+                           lambda old=old: self.toggle_favorite(sid, replace=old))
+
+    def choose_replacement(self, sid, position=None):
+        menu = QMenu(self)
+        self._replacement_menu(menu, sid)
+        menu.exec(position or QCursor.pos())
+
     def _context_menu(self, sid, position):
         menu = QMenu(self)
         if sid in self.favorites:
             menu.addAction(tr("移出常用"), lambda: self.toggle_favorite(sid))
+        elif self.favorites_full():
+            self._replacement_menu(menu.addMenu(tr("加到常用（已滿，取代一個）")), sid)
         else:
-            action = menu.addAction(tr("加到常用"), lambda: self.toggle_favorite(sid))
-            action.setEnabled(len(self.favorites) < symbols_ui.MAX_FAVORITES)
+            menu.addAction(tr("加到常用"), lambda: self.toggle_favorite(sid))
         if sid in self.favorites:
             index = self.favorites.index(sid)
             up = menu.addAction(tr("往前移"), lambda: self._move_favorite(sid, -1))
@@ -844,7 +886,7 @@ class SymbolPalette(QWidget):
 
     def _stamp_toggled(self, checked):
         sid = self.grid.focused_sid() or self.detail_sid or self.last_applied
-        if checked and sid:
+        if checked and sid and not symbols_ui.text_word(sid):
             self.applyRequested.emit(sid, "continuous")
         elif not checked:
             self.continuousChanged.emit("")
@@ -852,7 +894,7 @@ class SymbolPalette(QWidget):
             self.stamp_button.setChecked(False)
 
     def _hovered(self, sid):
-        self.hoverChanged.emit(sid)
+        self.hoverChanged.emit(base_sid(sid))
         self.detail.refresh()
 
     def _focus_changed(self, sid):
@@ -873,10 +915,12 @@ class SymbolPalette(QWidget):
 
     def current_detail(self) -> str:
         hover = self.grid.entries[self.grid.hover_index].sid if 0 <= self.grid.hover_index < len(self.grid.entries) else ""
-        return hover or self.grid.focused_sid() or self.continuous or self.last_applied
+        return base_sid(hover or self.grid.focused_sid() or self.continuous or self.last_applied)
 
     # ---- texts
     def tooltip(self, sid) -> str:
+        if word := symbols_ui.text_word(sid):
+            return tr("加上文字「{word}」").format(word=word)
         symbol = symbols.SYMBOLS[sid]
         state = self.state_of(sid)
         lines = [symbol.display_name, symbols_ui.usage(sid)]
@@ -885,6 +929,8 @@ class SymbolPalette(QWidget):
         return "\n".join(lines)
 
     def accessible_text(self, sid) -> str:
+        if word := symbols_ui.text_word(sid):
+            return tr("加上文字「{word}」").format(word=word)
         symbol = symbols.SYMBOLS[sid]
         state = self.state_of(sid)
         category = tr(CATEGORY_SHORT.get(symbol.category, symbol.category))
@@ -1029,7 +1075,8 @@ class DetailStrip(QFrame):
         self.favorite.setEnabled(True)
         starred = sid in pal.favorites
         icons.attach(self.favorite, "star-filled" if starred else "star", "accent" if starred else "text2", 16)
-        self.favorite.setToolTip(tr("移出常用") if starred else tr("加到常用"))
+        self.favorite.setToolTip(tr("移出常用") if starred else tr("加到常用（已滿 9 個：點了選一個取代）")
+                                 if pal.favorites_full() else tr("加到常用"))
         self._set_preview(symbol)
 
     def _set_preview(self, symbol):

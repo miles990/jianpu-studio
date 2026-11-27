@@ -222,7 +222,7 @@ def test_unsaved_new_cancel_failed_save_and_discard(window, qtbot, monkeypatch):
     assert window.project == original
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Discard)
     window.new_project()
-    assert window.project == Project()
+    assert window.project == Project(Score(staff_size=24))     # round 6: new scores print at 24
     assert not window.dirty
     assert window.input_mode.currentData() == "insert"
     qtbot.keyClicks(window.notes, "1")
@@ -279,7 +279,7 @@ def test_background_render_keeps_editor_live_and_discards_stale_result(window, q
         assert window.project.score.notes[1].degree == 7
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.Discard)
         window.new_project()
-        assert window.project == Project()
+        assert window.project == Project(Score(staff_size=24))     # round 6: new scores print at 24
     finally:
         release.set()
         qtbot.waitUntil(lambda: window.task is None)

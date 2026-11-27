@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import sys
 import tempfile
@@ -602,6 +603,7 @@ class MainWindow(EditActions, QMainWindow):
     def clear_recovery(self):
         if not self.recovery_protected:
             self.recovery_path.unlink(missing_ok=True)
+            self.recovery_path.with_suffix(".path").unlink(missing_ok=True)
 
     def guard_unsaved(self) -> bool:
         if self.task and self.task_blocks_edit:
@@ -629,6 +631,8 @@ class MainWindow(EditActions, QMainWindow):
         self.stop_playback()
         self.set_continuous("")
         self.project, self.path, self.dirty = project, path, dirty
+        # What is on disk: undoing back to it clears 「已修改」.
+        self.saved_project = None if dirty else project.snapshot()
         self.editor_stack.setCurrentIndex(0)
         self.notes.reset_selection()
         self.notes.set_score(project.score, 0)
@@ -657,10 +661,20 @@ class MainWindow(EditActions, QMainWindow):
         self.sync(selection=[], current=-1)
         if self.print_preview_active and self.auto_check.isChecked():
             self.autopreview.start()
+        # Keys go to the score, not the title field (a stray key must not rename the piece).
+        self.notes.setFocus(Qt.FocusReason.OtherFocusReason)
+        QTimer.singleShot(0, self._focus_score_if_unfocused)
+
+    def _focus_score_if_unfocused(self):
+        focus = QApplication.focusWidget()
+        if self.editor_stack.currentIndex() == 0 and (focus is None or focus is self.title_field):
+            self.notes.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def new_project(self):
         if self.guard_unsaved():
-            self.reset(Project())
+            from .editing import NEW_SCORE_STAFF_SIZE
+            from .model import Score
+            self.reset(Project(Score(staff_size=NEW_SCORE_STAFF_SIZE)))
 
     def load_demo(self):
         if self.guard_unsaved():
@@ -693,6 +707,7 @@ class MainWindow(EditActions, QMainWindow):
             save_project(self.path, self.project)
             self.remember_recent(self.path)
             self.dirty = False
+            self.saved_project = self.project.snapshot()
             self.clear_recovery()
             self.sync()
             self.statusBar().showMessage(tr("已儲存：{path}").format(path=self.path), 6000)
@@ -716,6 +731,8 @@ class MainWindow(EditActions, QMainWindow):
         if self.dirty and not self.recovery_protected:
             try:
                 save_project(self.recovery_path, self.project)
+                # Which file the work belongs to, so a recovered score saves back to it.
+                atomic_write(self.recovery_path.with_suffix(".path"), str(self.path) if self.path else "")
             except (OSError, ValueError):
                 # The previous recovery copy is left untouched (atomic, validated before writing).
                 self.statusBar().showMessage(tr("自動復原暫存失敗，請手動儲存專案。"), 5000)
@@ -745,7 +762,15 @@ class MainWindow(EditActions, QMainWindow):
         if QMessageBox.question(self, tr("復原未儲存樂譜"), tr("上次有未儲存的樂譜，現在復原嗎？")) == QMessageBox.StandardButton.Yes:
             # The file stays until the restored work is saved or discarded: a second crash
             # before the next autosave must not lose the only copy.
-            self.reset(recovered, dirty=True, keep_recovery=True)
+            path = None
+            try:
+                saved = self.recovery_path.with_suffix(".path").read_text(encoding="utf-8").strip()
+                path = Path(saved) if saved else None
+            except OSError:
+                pass
+            self.reset(recovered, path, dirty=True, keep_recovery=True)
+            if path is not None:
+                self.statusBar().showMessage(tr("已復原「{name}」未儲存的修改；按儲存會寫回原檔。").format(name=path.name), 10000)
             return True
         self.clear_recovery()
         self.autopreview.start()
@@ -1014,30 +1039,64 @@ class MainWindow(EditActions, QMainWindow):
             self.update_transport()
             return
         self.capture_fields()
-        if not self.result or self.rendered_revision != self.revision:
+        midi, order, note = self.preview_file()
+        if midi is None and (not self.result or self.rendered_revision != self.revision):
             self.play_after_render = True
             self.update_transport()
             self.render_score(True, create_pdf=False)
             return
         result = self.result
-        if result and result.midi:
+        if midi is not None or (result and result.midi):
             from .playmap import PlayMap
             try:
-                self.play_map = PlayMap(self.project.score, self.part)
+                self.play_map = PlayMap(self.project.score, self.part, order)
             except Exception:
                 self.play_map = None   # position display is optional: never block playback
+            if note:
+                self.statusBar().showMessage(note, 8000)
+                self.toast.show_text(note)
             start = 0.0
             bars = self.selected_measures()
             if bars and self.play_map is not None:
                 start = self.play_map.first_time_of_bar(bars[0]) or 0.0
+            path = midi if midi is not None else result.midi
             try:
-                self.player.play(result.midi, start) if start else self.player.play(result.midi)
+                self.player.play(path, start) if start else self.player.play(path)
             except RuntimeError as exc:
                 self.error(tr("無法播放 MIDI"), exc)
                 return
             self.guide.mark(4)
             self.play_timer.start()
             self.update_transport()
+
+    def preview_file(self):
+        """(path, bar order, notice) of the preview MIDI written straight from the score, so
+        playback never waits for LilyPond; (None, None, "") when the score cannot be played
+        that way (then the engine's MIDI is used). An unfinished repeat or jump plays the
+        bars as written, and the notice says so."""
+        from .preview_midi import playing_order, preview_midi
+        score = self.project.score
+        try:
+            score.validate()
+            if not any(p.notes for p in score.parts) or score.edit_error() is not None:
+                return None, None, ""
+            order, structured = playing_order(score)
+            data = preview_midi(score, order)
+            folder = self.data_dir / "preview"
+            folder.mkdir(parents=True, exist_ok=True)
+            # A new name each time: Windows MCI may still hold the previous file open.
+            self._preview_serial = getattr(self, "_preview_serial", 0) + 1
+            for old in folder.glob("preview-*.mid"):
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            path = folder / f"preview-{os.getpid()}-{self._preview_serial}.mid"
+            path.write_bytes(data)
+        except (OSError, ValueError, KeyError, IndexError):
+            return None, None, ""
+        notice = "" if structured else tr("反覆或跳躍記號還沒完成，這次試聽依書寫順序播放（不反覆、不跳躍）。")
+        return path, order, notice
 
     def stop_playback(self):
         self.player.stop()

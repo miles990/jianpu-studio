@@ -35,6 +35,7 @@ class Problem(str):
     def __new__(cls, text, part=0, row=None, bar=None, fix=None):
         obj = str.__new__(cls, text)
         obj.part, obj.row, obj.bar, obj.fix = part, row, bar, fix
+        obj.incomplete = obj.structure = False
         return obj
 
 
@@ -228,117 +229,186 @@ def bar_items(score):
 
 
 def _structure(score):
-    """Validate repeats, voltas and navigation on parts[0]; return regions of repeat structures.
+    """Raise LocatedError with the first structure problem (repeats, endings, jumps)."""
+    problems = structure_problems(score)
+    if problems:
+        first = problems[0]
+        raise LocatedError(str(first), first.row, first.bar, first.fix)
 
-    Returns a list of (first_bar, last_bar) regions: a repeat body plus its alternatives.
-    """
-    items = bar_items(score)
+
+def _problem(score, text, bar, edge=None, item=None, fix=None, incomplete=False) -> Problem:
     ranges = score.part_bars(0)
+    row = None if bar is None or not ranges else (
+        ranges[bar][0] if edge == "bar_start" else ranges[bar][1] - 1)
+    if fix is None and item and not incomplete:
+        fix = (edge, item)          # remove the sign that conflicts
+    problem = Problem(text, 0, row, bar, fix)
+    problem.incomplete = incomplete
+    problem.structure = True
+    return problem
+
+
+def structure_problems(score) -> list[Problem]:
+    """Every repeat/ending/jump problem of parts[0], in score order.
+
+    A structure is built one sign at a time, so an unfinished one is a legal state of the
+    score: these are listed (and drawn next to the sign) but never refuse an edit. Export and
+    playback of the structure need it complete (``notation_error``). ``incomplete`` problems
+    name the next step ("尚未完成：還需要 …"); a fix ``("add", bar, item)`` adds the missing
+    counterpart where its place is unambiguous, ``(edge, item)`` removes an orphan."""
+    items = bar_items(score)
+    out: list[Problem] = []
+    if not items:
+        return out
     regions = []
     open_repeat = None
     volta_open, expected, last_repeat_end, region_start = False, 0, None, None
     final_bar = None
+    last = len(items) - 1
 
-    def fail(message, bar, edge=None, item=None):
-        row = None if bar is None else (ranges[bar][0] if edge == "bar_start" else ranges[bar][1] - 1)
-        raise LocatedError(message, row, bar, (edge, item) if item else None)
+    def add(*args, **kwargs):
+        out.append(_problem(score, *args, **kwargs))
 
     for bar, (starts, ends) in enumerate(items):
         label = bar_label(score, bar)
         if "bar.repeat_start" in starts or (bar and "bar.repeat_both" in items[bar - 1][1]):
             if open_repeat is not None or volta_open:
-                fail(tr("{bar}的反覆起點和前一段反覆重疊；反覆不能巢狀。").format(bar=label), bar,
-                     "bar_start", "bar.repeat_start" if "bar.repeat_start" in starts else None)
+                add(tr("{bar}的反覆起點和前一段反覆重疊；反覆不能巢狀。").format(bar=label), bar,
+                    "bar_start", "bar.repeat_start" if "bar.repeat_start" in starts else None)
             open_repeat = bar
         voltas = [s for s in starts if s.startswith("volta.") and s[6:].isdigit()]
         if "volta.final" in starts and not voltas:
-            fail(tr("{bar}的「最後結尾（結）」須和結尾編號一起使用。").format(bar=label), bar, "bar_start", "volta.final")
+            add(tr("{bar}的「最後結尾（結）」須和結尾編號一起使用。").format(bar=label), bar, "bar_start", "volta.final")
         for volta in voltas:
             number = int(volta[6:])
             if number == 1:
                 if last_repeat_end != bar - 1 or volta_open:
-                    fail(tr("{bar}的第一結尾須緊接在反覆終點的小節之後。").format(bar=label), bar)
+                    fix = ("add", bar - 1, "bar.repeat_end") if bar > 0 and not volta_open else None
+                    add(tr("尚未完成：{bar}的第一結尾前面還需要反覆止 :‖（加在前一小節結尾）。").format(bar=label),
+                        bar, "bar_start", fix=fix, incomplete=True)
+                    region_start = bar if open_repeat is None else open_repeat
+                    open_repeat = None
+                else:
+                    region_start = regions.pop()[0]
                 volta_open, expected = True, 2
-                region_start = regions.pop()[0]
             elif not volta_open or number != expected:
-                fail(tr("{bar}的結尾編號不連續；請依序設定第一結尾、第二結尾…").format(bar=label), bar)
+                add(tr("{bar}的結尾編號不連續；請依序設定第一結尾、第二結尾…").format(bar=label), bar)
             else:
                 expected += 1
             final_bar = bar if "volta.final" in starts else final_bar
         if "bar.repeat_end" in ends or "bar.repeat_both" in ends:
-            if open_repeat is None and not volta_open:
-                fail(tr("{bar}結尾的反覆終點（:‖）前面沒有反覆起點（‖:）。請在反覆段落開頭加「反覆起」，或移除這個反覆終點。").format(
-                    bar=label), bar, "bar_end", "bar.repeat_end" if "bar.repeat_end" in ends else None)
+            start = open_repeat
             if volta_open:
-                fail(tr("{bar}的反覆終點放在結尾段裡；最後一個結尾的末端請用「房子結束」。").format(bar=label), bar)
-            regions.append((open_repeat, bar))
-            last_repeat_end, open_repeat = bar, None
+                add(tr("{bar}的反覆終點放在結尾段裡；最後一個結尾的末端請用「房子結束」。").format(bar=label), bar)
+                start = bar
+            elif open_repeat is None:
+                if regions:
+                    # A lone :‖ repeats from the beginning; after an earlier repeat it is ambiguous.
+                    add(tr("尚未完成：{bar}結尾的反覆止 :‖ 還需要反覆起 ‖:（前面已有反覆，請在這段反覆開頭的小節加「反覆起」）。").format(
+                        bar=label), bar, "bar_end", "bar.repeat_end" if "bar.repeat_end" in ends else None, incomplete=True)
+                    start = regions[-1][1] + 1
+                else:
+                    start = 0
+            if not volta_open:
+                regions.append((start, bar))
+                last_repeat_end = bar
+            open_repeat = None
             if "bar.repeat_both" in ends and bar + 1 >= len(items):
-                fail(tr("{bar}的雙向反覆後面需要再有小節。").format(bar=label), bar, "bar_end", "bar.repeat_both")
+                add(tr("尚未完成：{bar}的雙向反覆後面還需要小節。").format(bar=label), bar, "bar_end", "bar.repeat_both",
+                    incomplete=True)
         if "volta.end" in ends:
             if not volta_open:
-                fail(tr("{bar}的「房子結束」前面沒有結尾段。").format(bar=label), bar, "bar_end", "volta.end")
-            if final_bar is not None and final_bar != _last_volta_start(items, bar):
-                fail(tr("「最後結尾（結）」只能標在最後一個結尾（{bar}）。").format(bar=bar_label(score, final_bar)), final_bar,
-                     "bar_start", "volta.final")
-            volta_open, final_bar = False, None
-            regions.append((region_start, bar))
+                add(tr("{bar}的「房子結束」前面沒有結尾段。").format(bar=label), bar, "bar_end", "volta.end")
+            else:
+                if final_bar is not None and final_bar != _last_volta_start(items, bar):
+                    add(tr("「最後結尾（結）」只能標在最後一個結尾（{bar}）。").format(bar=bar_label(score, final_bar)),
+                        final_bar, "bar_start", "volta.final")
+                volta_open, final_bar = False, None
+                regions.append((region_start, bar))
     if open_repeat is not None:
-        fail(tr("{bar}開始的反覆段落缺少反覆終點（:‖）。請在段落最後一小節加「反覆止」，或移除反覆起點。").format(
+        add(tr("尚未完成：{bar}開始的反覆（‖:）還需要反覆止 :‖。請點這段反覆最後一小節的小節線，加「反覆止」。").format(
             bar=bar_label(score, open_repeat)), open_repeat, "bar_start",
-            "bar.repeat_start" if "bar.repeat_start" in items[open_repeat][0] else None)
+            "bar.repeat_start" if "bar.repeat_start" in items[open_repeat][0] else None, incomplete=True)
     if volta_open:
-        fail(tr("最後一個結尾缺少「房子結束」。"), len(items) - 1)
-    _navigation(items, regions, score)
-    return regions
+        add(tr("尚未完成：最後一個結尾還需要「房子結束」。"), last, fix=("add", last, "volta.end"), incomplete=True)
+    out += _navigation(items, regions, score)
+    return out
 
 
 def _last_volta_start(items, end_bar):
     return max(b for b in range(end_bar + 1) if any(s.startswith("volta.") and s[6:].isdigit() for s in items[b][0]))
 
 
-def _navigation(items, regions, score):
+def _navigation(items, regions, score) -> list[Problem]:
     pickup = bool(score.pickup)
+    out: list[Problem] = []
+    last = len(items) - 1
+
+    def add(*args, **kwargs):
+        out.append(_problem(score, *args, **kwargs))
+
     where = {}
     for bar, (starts, ends) in enumerate(items):
         for item in (*starts, *ends):
             if item.startswith("nav.") and not symbols.SYMBOLS[item].print_only:
                 if item in where:
-                    raise LocatedError(tr("「{name}」整首只能出現一次（第二個在{bar}）。").format(
-                        name=symbols.SYMBOLS[item].display_name, bar=bar_label(score, bar)), bar=bar)
+                    edge = "bar_start" if symbols.SYMBOLS[item].bar_edge == "start" else "bar_end"
+                    add(tr("「{name}」整首只能出現一次（第二個在{bar}）。").format(
+                        name=symbols.SYMBOLS[item].display_name, bar=bar_label(score, bar)), bar, edge, item)
+                    continue
                 where[item] = bar
     jumps = [j for j in symbols.JUMPS if j in where]
     if len(jumps) > 1:
-        raise LocatedError(tr("D.S. 和 D.C. 不能同時使用；整首只能有一個跳躍。"), bar=where[jumps[1]])
+        add(tr("D.S. 和 D.C. 不能同時使用；整首只能有一個跳躍。"), where[jumps[1]], "bar_end", jumps[1])
     jump = where.get(jumps[0]) if jumps else None
-    segno, tocoda, fine = where.get("nav.segno"), where.get("nav.tocoda"), where.get("nav.fine")
-    if ("nav.ds" in where) != (segno is not None):
-        raise LocatedError(tr("D.S. 需要一個 D.S. 記號（𝄋），而且記號要在 D.S. 之前。"),
-                           bar=where.get("nav.ds", segno))
-    if segno is not None and segno > jump:
-        raise LocatedError(tr("D.S. 需要一個 D.S. 記號（𝄋），而且記號要在 D.S. 之前。"), bar=segno)
-    if tocoda is not None and ("nav.ds" not in where or not segno <= tocoda < jump):
-        raise LocatedError(tr("To Coda 須放在 D.S. 記號和 D.S. 之間。"), bar=tocoda)
+    segno, tocoda, fine, ds = where.get("nav.segno"), where.get("nav.tocoda"), where.get("nav.fine"), where.get("nav.ds")
+    if segno is not None and ds is None:
+        if "nav.dc" in where:
+            add(tr("{bar}的 Segno 只給 D.S. 用；有 D.C. 時請移除它，或把 D.C. 換成 D.S.。").format(
+                bar=bar_label(score, segno)), segno, "bar_start", "nav.segno")
+        else:
+            fix = ("add", last, "nav.ds") if tocoda is None and last >= segno else None
+            add(tr("尚未完成：{bar}有 Segno，還需要 D.S.（演奏到那裡跳回 Segno；通常加在最後一小節結尾）。").format(
+                bar=bar_label(score, segno)), segno, "bar_start", fix=fix, incomplete=True)
+    if ds is not None and segno is None:
+        add(tr("尚未完成：{bar}的 D.S. 還需要 Segno：請點要跳回的那一小節，加「Segno 記號」。").format(
+            bar=bar_label(score, ds)), ds, "bar_end", incomplete=True)
+    elif ds is not None and segno > ds:
+        add(tr("Segno（{bar}）須在 D.S. 之前。").format(bar=bar_label(score, segno)), segno, "bar_start", "nav.segno")
+    if tocoda is not None:
+        begin = segno if ds is not None and segno is not None else 0
+        if jump is None:
+            add(tr("尚未完成：{bar}的 To Coda 還需要跳回記號：在 Segno 之後加 D.S.，或加 D.C.。").format(
+                bar=bar_label(score, tocoda)), tocoda, "bar_end", incomplete=True)
+        elif not begin <= tocoda < jump:
+            add(tr("To Coda 須放在 D.S. 記號（或 D.C. 的曲首）和跳回記號之間。"), tocoda, "bar_end", "nav.tocoda")
+        elif jump == last:
+            add(tr("尚未完成：To Coda 會跳到{bar}後面的尾聲（Coda），還需要在那裡加尾聲的小節。").format(
+                bar=bar_label(score, jump)), jump, "bar_end", incomplete=True)
     if fine is not None and jump is not None and not ((segno or 0) <= fine < jump):
-        raise LocatedError(tr("Fine 須放在跳躍記號（D.C./D.S.）之前。"), bar=fine)
+        add(tr("Fine 須放在跳躍記號（D.C./D.S.）之前。"), fine, "bar_end", "nav.fine")
     if fine is not None and tocoda is not None:
-        raise LocatedError(tr("Fine 和 To Coda 不能同時使用。"), bar=fine)
+        add(tr("Fine 和 To Coda 不能同時使用。"), fine, "bar_end", "nav.fine")
     if tocoda is not None and {"bar.repeat_end", "bar.repeat_both"} & set(items[tocoda][1]):
         # Upstream writes To Coda as an alternative of the repeat that just closed (prints a
         # volta bracket and plays the bars in the wrong order).
-        raise LocatedError(tr("To Coda 不能和反覆終點（:‖）放在同一條小節線；請改放在其他小節線，或改用「僅文字」記號。"), bar=tocoda)
-    if fine is not None and jump is not None and jump != len(items) - 1:
+        add(tr("To Coda 不能和反覆終點（:‖）放在同一條小節線；請改放在其他小節線，或改用「僅文字」記號。"),
+            tocoda, "bar_end", "nav.tocoda")
+    if fine is not None and jump is not None and jump != last:
         # The return pass stops at Fine, so bars after the jump are never played; LilyPond
-        # would play them anyway ("found music after \fine").
-        raise LocatedError(tr("有 Fine 時，D.C./D.S. 須放在最後一小節：跳回後在 Fine 結束，"
-                            "後面的第 {bar} 小節起永遠不會演奏。請刪除這些小節，或把跳躍記號移到最後一小節。").format(
-            bar=jump + 2 - pickup), bar=jump)
+        # would play them anyway ("found music after \\fine").
+        add(tr("有 Fine 時，D.C./D.S. 須放在最後一小節：跳回後在 Fine 結束，"
+               "後面的第 {bar} 小節起永遠不會演奏。請刪除這些小節，或把跳躍記號移到最後一小節。").format(
+            bar=jump + 2 - pickup), jump)
     for item, bar in where.items():
         start_item = symbols.SYMBOLS[item].bar_edge == "start"
-        for first, last in regions:
-            if first <= bar < last or (start_item and bar == last) or (start_item and bar == first):
-                raise LocatedError(tr("{bar}的「{name}」不能放在反覆段落或結尾段裡面；可改用「僅文字」或「僅符號」記號。").format(
-                    bar=bar_label(score, bar), name=symbols.SYMBOLS[item].display_name), bar=bar)
+        for first, end in regions:
+            if first <= bar < end or (start_item and bar == end) or (start_item and bar == first):
+                add(tr("{bar}的「{name}」不能放在反覆段落或結尾段裡面；可改用「僅文字」或「僅符號」記號。").format(
+                    bar=bar_label(score, bar), name=symbols.SYMBOLS[item].display_name), bar,
+                    "bar_start" if start_item else "bar_end", item)
+                break
+    return out
 
 
 def _bar_positions(score, notes) -> list[int]:
@@ -349,8 +419,16 @@ def _bar_positions(score, notes) -> list[int]:
     return positions
 
 
-def notation_error(score) -> str | None:
-    """The first relational problem as a ``Problem`` (a str that knows its part, row, bar and fix)."""
+def edit_error(score) -> str | None:
+    """What an edit may never produce (lines, ties, tuplets, bar-item placement, 8va blocks).
+
+    An unfinished repeat or jump structure is not one of them: see ``structure_problems``."""
+    return notation_error(score, structure=False)
+
+
+def notation_error(score, structure: bool = True) -> str | None:
+    """The first relational problem as a ``Problem`` (a str that knows its part, row, bar and fix);
+    with ``structure`` also the repeat/ending/jump structure, which export and playback need."""
     from .model import tuplet_ranges
     index = 0
     try:
@@ -386,9 +464,10 @@ def notation_error(score) -> str | None:
         index = 0
         if error := _bar_rules(score):
             return error
-        _structure(score)
         if error := _ottava_blocks(score):
             return error
+        if structure and (problems := structure_problems(score)):
+            return problems[0]
     except LocatedError as exc:
         return Problem(str(exc), index, exc.row, exc.bar, exc.fix)
     except ValueError as exc:

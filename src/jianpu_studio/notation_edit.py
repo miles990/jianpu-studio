@@ -238,8 +238,7 @@ def _bar_targets(score: Score, target: Target, symbol) -> tuple[list[int], str]:
     if target.kind == SELECT_NONE or count == 0:
         return [], tr("請先點小節號或小節線。")
     if target.kind == SELECT_BARLINE:
-        if symbol.id in VOLTAS or symbol.id == "volta.final":
-            return [], tr("結尾段要選小節：請點小節號。")
+        # An ending starts at the bar right of the line (like every start sign).
         bar = target.barline - 1 if symbol.bar_edge == "end" else target.barline
         if not 0 <= bar < count:
             return [], tr("這條小節線的這一側沒有小節；請點另一條小節線或小節號。")
@@ -303,21 +302,26 @@ def _place_volta(score: Score, first: int, last: int, symbol_id: str) -> None:
         if group is None or first != g_last_start(group):
             raise ValueError(tr("「最後結尾（結）」要加在最後一個結尾的小節上：請先加上結尾編號。"))
         set_bar_item(score, first, "volta.final")
-        return
+        return ""
     number = VOLTAS.index(symbol_id) + 1
     if number == 1:
-        if first > 0 and _bar_has(score, first - 1, "bar.repeat_end"):
+        if first == 0:
+            raise ValueError(tr("第一結尾前面要有反覆的小節：請把第一結尾加在第 2 小節以後。"))
+        notice = ""
+        if _bar_has(score, first - 1, "bar.repeat_end"):
             pass
         elif _bar_has(score, last, "bar.repeat_end"):
             set_bar_item(score, last, "bar.repeat_end", present=False)
-            if first == 0:
-                raise ValueError(tr("第一結尾前面要有反覆：請先加反覆起與反覆止 :‖。"))
             set_bar_item(score, first - 1, "bar.repeat_end")
         else:
-            raise ValueError(tr("第一結尾前面要有反覆：請先在第一結尾的末端加反覆止 :‖。"))
+            # The :‖ prints at the end of the first ending; it goes back to ‖: (or the beginning).
+            for other in BAR_STYLE_SLOT - {"bar.repeat_end"}:
+                set_bar_item(score, first - 1, other, present=False)
+            set_bar_item(score, first - 1, "bar.repeat_end")
+            notice = tr("已一併加上反覆止 :‖：第一結尾奏完回到反覆起 ‖:（沒有反覆起時回到曲首）。")
         set_bar_item(score, first, "volta.1")
         set_bar_item(score, last, "volta.end")
-        return
+        return notice
     group = next((g for g in _volta_groups(score) if g["starts"].get(number - 1) is not None
                   and g["starts"][number - 1] < first), None)
     if group is None:
@@ -332,6 +336,7 @@ def _place_volta(score: Score, first: int, last: int, symbol_id: str) -> None:
         set_bar_item(score, group["final"], "volta.final", present=False)
     set_bar_item(score, first, symbol_id)
     set_bar_item(score, last, "volta.end")
+    return ""
 
 
 def g_last_start(group: dict) -> int:
@@ -510,9 +515,8 @@ def _apply(score: Score, target: Target, symbol_id: str, remove: bool) -> str:
         if symbol_id in VOLTAS or symbol_id == "volta.final":
             if remove:
                 _remove_volta(score, bars[0], symbol_id)
-            else:
-                _place_volta(score, bars[0], bars[-1], symbol_id)
-            return ""
+                return ""
+            return _place_volta(score, bars[0], bars[-1], symbol_id)
         if symbol_id in ("bar.repeat_start", "bar.repeat_end") and len(bars) > 1:
             for bar, item in ((bars[0], "bar.repeat_start"), (bars[-1], "bar.repeat_end")):
                 if item == "bar.repeat_end" and not remove:
@@ -539,7 +543,7 @@ def _friendly(score: Score, target: Target, symbol, error: str) -> str:
                     return tr("整首只能有一個跳回記號：{bar}已有 {name}（到那裡移除）。").format(
                         bar=_bar_label(score, bar), name=symbols.SYMBOLS[other].display_name)
         if symbol.id == "nav.ds" and not any("nav.segno" in s for s, _ in bar_items(score)):
-            return tr("請先在要跳回的地方加 D.S. 記號 𝄋。")
+            return tr("請先在要跳回的地方加 Segno 記號。")
     return error
 
 
@@ -599,8 +603,8 @@ def symbol_state(score: Score, target: Target, symbol_id: str, *, check: bool = 
                 _check_marks(score, trial, target, symbol)
             else:
                 trial.validate()
-                error = score.notation_error() if base_error is _UNCHECKED else base_error
-                if error is None and (error := trial.notation_error()):
+                error = score.edit_error() if base_error is _UNCHECKED else base_error
+                if error is None and (error := trial.edit_error()):
                     raise ValueError(error)
         except ValueError as exc:
             return SymbolState(False, _friendly(score, target, symbol, str(exc)), present, total)

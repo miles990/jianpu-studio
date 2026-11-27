@@ -43,7 +43,7 @@ def _remove_legacy_fonts(text: str) -> str:
     return text
 
 
-def adapt_output(result: str, minor_version: int, paper_size: str) -> str:
+def adapt_output(result: str, minor_version: int, paper_size: str, fonts: tuple[str, str] | None = None) -> str:
     """Make jianpu-ly's LilyPond text valid for the selected LilyPond version."""
     result = _remove_legacy_fonts(result)
     if minor_version >= 25:
@@ -53,8 +53,11 @@ def adapt_output(result: str, minor_version: int, paper_size: str) -> str:
         result = result.replace(_LEGACY_TEMPO, "tempoWholesPerMinute = #21 ")
     result += '\n\\paper { #(set-paper-size "' + paper_size + '") }\n'
     # property-defaults.fonts exists since 2.24 and replaces set-global-fonts.
-    result += ('\\paper {\n  property-defaults.fonts.serif = "' + SERIF_FONTS + '"\n'
-               '  property-defaults.fonts.sans = "' + SANS_FONTS + '"\n}\n')
+    serif, sans = fonts or (SERIF_FONTS, SANS_FONTS)
+    result += ('\\paper {\n  property-defaults.fonts.serif = "' + serif + '"\n'
+               '  property-defaults.fonts.sans = "' + sans + '"\n}\n')
+    # No "LilyPond v2.26.0" footer on the user's pages.
+    result += '\\header { tagline = ##f }\n'
     return result
 
 
@@ -209,13 +212,15 @@ ENGRAVING = r"""
   \context { \Score
     dalSegnoTextFormatter = #js-jump-text
     codaMarkFormatter = #js-coda-mark
-    \override MetronomeMark.X-offset = #KEYWIDTH
+    \omit MetronomeMark
+    \override RehearsalMark.padding = #1.6
     \override JumpScript.font-size = #0
   }
   \context { \Voice
     \override DynamicText.extra-spacing-width = #'(-0.4 . 0.6)
     \override DynamicLineSpanner.padding = #1.2
     \override Fingering.script-priority = #-100
+    \override Script.padding = #0.8
   }
 }
 \paper { ragged-last = ##t }
@@ -237,12 +242,41 @@ def finish_output(ly: str, variant: str = "tc", parts: int = 1) -> str:
     """tech.md §3.2 a–d, after ``adapt_output``."""
     ly = insert_prelude(ly, variant, parts)
     index = ly.index("\\score {")
-    # The tempo sits right of the key mark "1=D" (one line, as jianpu writes it); a key with
-    # an accidental ("1=B♭") is wider.
-    key = re.search(r"\\mark \\markup\{1=([^}]*)\}", ly)
-    wide = key is not None and ("\\flat" in key[1] or "\\sharp" in key[1])
-    ly = ly[:index] + ENGRAVING.replace("KEYWIDTH", "9.5" if wide else "7") + ly[index:]
-    return midi_rewrite(fix_fine(attach_after_grace_text(engraving_rewrite(ly))))
+    ly = ly[:index] + ENGRAVING + ly[index:]
+    return midi_rewrite(fix_fine(attach_after_grace_text(engraving_rewrite(header_line(ly)))))
+
+
+_KEY_MARK = re.compile(r"\\mark \\markup\{1=([A-G])(\\flat|\\sharp)?\}")
+_TEMPO = re.compile(r"\\tempo 4=(\d+)")
+HEAD_TEXT = "\u2060"          # export marks free text of the first note for the header line
+_HEAD_TEXT = re.compile(r'\s*\^"' + HEAD_TEXT + r'([^"]*)"')
+
+
+def header_line(ly: str) -> str:
+    """The line printed jianpu puts at the top left, under the title: 「1=♭B  中速 稍自由  ♩=72」.
+
+    It becomes the header's ``meter`` line (left-aligned above the first system, so nothing of
+    the first bar is crammed under it) instead of upstream's rehearsal mark. The key is written
+    with its accidental before the letter, the first note's free text (tempo words) joins the
+    line, and the metronome mark is part of it (MetronomeMark is omitted from the layout; the
+    \\tempo stays for MIDI)."""
+    tempo = _TEMPO.search(ly)
+    text = _HEAD_TEXT.search(ly)
+    words = text[1] if text else ""
+    ly = _HEAD_TEXT.sub("", ly)
+    key = _KEY_MARK.search(ly)
+    if key is None:
+        return ly
+    sign = {"\\flat": "\\flat", "\\sharp": "\\sharp"}.get(key[2] or "")
+    parts = [f'\\concat {{ "1=" \\raise #0.75 \\fontsize #-3 {sign} "{key[1]}" }}' if sign else f'"1={key[1]}"']
+    if words:
+        parts.append(f'\\hspace #2 "{words}"')
+    if tempo:
+        parts.append('\\hspace #1.5 \\concat { \\fontsize #-2 \\general-align #Y #DOWN \\note {4} #1 '
+                     f'" = {tempo[1]}" }}')
+    line = "meter = \\markup { \\line { " + " ".join(parts) + " } }\n"
+    ly = _KEY_MARK.sub("", ly)
+    return re.sub(r"\\header\{\n(?=title=)", lambda m: m[0] + line, ly)
 
 
 def run(args: list[str]) -> int:

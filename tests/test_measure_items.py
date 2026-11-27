@@ -18,7 +18,7 @@ from jianpu_studio.measures import (
     replace_rest_input,
 )
 from jianpu_studio.model import Note, Part, Score
-from jianpu_studio.notation_rules import bar_items
+from jianpu_studio.notation_rules import bar_items, structure_problems
 
 RS, RE = ("bar.repeat_start",), ("bar.repeat_end",)
 
@@ -190,7 +190,11 @@ def test_measure_edits_keep_bar_items_with_their_bars(name, parts):
             assert "記號" in str(exc) or "小節" in str(exc), (label, exc)
             continue
         after = applied(score, result)
-        assert after.notation_error() is None and after.rhythm_error() is None, label
+        # Round 6: a bar edit may leave a repeat/jump unfinished (a listed problem, e.g. a
+        # deleted coda bar), never a broken score.
+        assert after.edit_error() is None and after.rhythm_error() is None, label
+        if structure_problems(after):          # listed with its place, never silent
+            assert after.notation_error() is not None, label
         assert len({len(after.part_bars(i)) for i in range(parts)}) == 1, label
         items = bar_items(after)
         if kind in ("clear", "fill"):

@@ -142,6 +142,8 @@ def note_words(note, ctx: dict) -> list[str]:
     first_part = ctx.get("part", 0) == 0
     starts_bar, ends_bar = ctx.get("bar_start", note.bar_start), ctx.get("bar_end", note.bar_end)
     w: list[str] = []
+    if ctx.get("implicit_repeat"):
+        w.append("R{")      # a lone :‖ repeats from the beginning (nothing printed at the start)
     # 1. bar-start items
     for item in starts_bar:
         if item == "bar.repeat_start":
@@ -184,7 +186,8 @@ def note_words(note, ctx: dict) -> list[str]:
                 w.append(word)
     if note.text:
         # Free text above the note (中速、深情地、引子…), as a literal string (never markup).
-        w.append('^"' + note_text(note.text) + '"')
+        # On the very first note it is a tempo word: the worker moves it into the header line.
+        w.append('^"' + ("\u2060" if ctx.get("head_text") else "") + note_text(note.text) + '"')
     # 8.-13. dashes, after-grace, tie, after marks, after line ends, tuplet end
     w += continuation
     if note.grace_after:
@@ -234,6 +237,25 @@ def effective_bar_items(score) -> list[tuple[tuple, tuple]]:
     return out
 
 
+def header_words(text: str) -> bool:
+    """Text on the first note that prints in the header line (1=D 中速 稍自由 ♩=72): only
+    when every word is a tempo/expression word or a tuning; any other label stays on its note."""
+    from .text_words import TEXT_WORDS
+    known = {t for tc, sc, _ in TEXT_WORDS for w in (tc, sc) for t in w.split()}
+    words = text.split()
+    return bool(words) and all(w in known for w in words)
+
+
+def implicit_repeat_start(items) -> bool:
+    """True when the first repeat has only its end :‖ -- it repeats from the beginning."""
+    for starts, ends in items:
+        if "bar.repeat_start" in starts:
+            return False
+        if "bar.repeat_end" in ends:
+            return True
+    return False
+
+
 def to_jianpu(score) -> str:
     """Export a validated score (``Score.to_jianpu`` checks it first)."""
     from .notation_rules import normalized_parts
@@ -247,6 +269,7 @@ def to_jianpu(score) -> str:
         lines.append("WithStaff")
     items = effective_bar_items(score)
     has_jump = any(item in symbols.JUMPS for _, ends in items for item in ends)
+    implicit = implicit_repeat_start(items)
     for index, part in enumerate(parts):
         if index:
             lines.append("NextPart")
@@ -260,6 +283,8 @@ def to_jianpu(score) -> str:
             words = []
             for row in range(start, end):
                 ctx = {"part": index, "has_jump": has_jump, "bar_index": bar, "last": bar == len(ranges) - 1,
+                       "implicit_repeat": implicit and bar == 0 and row == start,
+                       "head_text": index == 0 and row == 0 and header_words(part.notes[row].text),
                        "bar_start": starts if row == start else (), "bar_end": ends if row == end - 1 else (),
                        "next_bar_start": next_starts if row == end - 1 else ()}
                 words += note_words(part.notes[row], ctx)

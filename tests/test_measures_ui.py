@@ -321,8 +321,9 @@ def test_editing_is_local_and_midi_pdf_are_prepared_on_demand(qtbot, tmp_path, m
     monkeypatch.setattr(window.player, "play", lambda path: played.append(path.read_bytes()))
     window.play_midi()
     qtbot.waitUntil(lambda: window.task is None and bool(played))
-    assert calls == [False]
-    assert not window.result.pdf.exists()
+    # Round 6: the preview MIDI is written from the score, so playing starts the engine for
+    # nothing (no MIDI-only render, no PDF).
+    assert calls == [] and played[0][:4] == b"MThd"
     assert window.notes.isVisible()
     assert not window.pdf_view.isVisible()
 
@@ -330,14 +331,14 @@ def test_editing_is_local_and_midi_pdf_are_prepared_on_demand(qtbot, tmp_path, m
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(destination), "PDF"))
     window.export("pdf")
     qtbot.waitUntil(lambda: window.task is None and destination.exists())
-    assert calls == [False, True]
+    assert calls == [True]
     assert destination.read_bytes() == pdf_bytes
     assert window.project == before
     assert not window.pdf_view.isVisible()
     window.show_print_preview()
     assert window.pdf_view.isVisible()
     assert window.pdf_document.pageCount() == 1
-    assert calls == [False, True], "the same current PDF can be reused for print preview"
+    assert calls == [True], "the same current PDF can be reused for print preview"
     window.change_workspace(0)
     assert window.notes.isVisible()
     assert window.project == before

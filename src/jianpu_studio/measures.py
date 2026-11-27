@@ -71,7 +71,7 @@ def measure_ranges(score: Score, part: int = 0) -> list[tuple[int, int]]:
 
 def _context(score: Score) -> tuple[list[list[tuple[int, int]]], list[list[Entry]]]:
     ranges = [measure_ranges(score, index) for index in range(len(score.parts))]
-    if error := score.notation_error():
+    if error := score.edit_error():
         raise ValueError(tr("請先修正連線或反覆記號，再編輯小節：{detail}").format(detail=error))
     if len({len(r) for r in ranges}) > 1:
         raise ValueError(tr("各聲部的小節數不同；請先補齊各聲部，再編輯小節。"))
@@ -149,6 +149,9 @@ def bar_connections(score: Score) -> list[Connection]:
         if group and closes:
             out.append(Connection(tuple(sorted({b for b, _, _ in group})), tuple(group), True, False))
             group = []
+    if group:
+        # An unfinished repeat (‖: still waiting for its :‖) is kept like a finished one.
+        out.append(Connection(tuple(sorted({b for b, _, _ in group})), tuple(group), True, False))
     # Segno/To Coda/D.S. belong together; D.C. and Fine stand alone (Fine becomes print-only).
     linked = [item for item in navigation if item[2] in ("nav.segno", "nav.tocoda", "nav.ds")]
     if linked:
@@ -293,7 +296,7 @@ def _finish(score: Score, entries: list[list[Entry]], bar_origins: list[BarOrigi
     result_score = replace(score, parts=[replace(p, notes=n) for p, n in zip(score.parts, parts)])
     for index in range(len(parts)):
         measure_ranges(result_score, index)
-    if error := result_score.notation_error():
+    if error := result_score.edit_error():
         raise ValueError(tr("這項小節修改無法安全保留原有記號：{detail}").format(detail=error))
     selection = tuple(selection)
     current = selection[0] if current is None and selection else -1 if current is None else current
@@ -502,7 +505,7 @@ def clip_notes(score: Score, part: int, rows: Iterable[int]) -> list[Note]:
     for row in rows:
         if notes[row].tie and row + 1 in index:
             out[index[row]] = replace(out[index[row]], tie=True)
-    if part == 0 and not score.notation_error():
+    if part == 0 and not score.edit_error():
         ranges = score.part_bars(0)
         items = bar_items(score)
         whole = {bar for bar, (a, b) in enumerate(ranges) if all(r in index for r in range(a, b))}

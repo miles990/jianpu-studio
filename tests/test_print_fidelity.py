@@ -43,6 +43,25 @@ def pdf_text(path):
     return text
 
 
+def ink(path, scale=2.0):
+    """Dark pixels of page 1 rendered by QtPdf (independent of the PDF's text layer)."""
+    from PySide6.QtCore import QSize
+    document = QPdfDocument(None)
+    document.load(str(path))
+    size = document.pagePointSize(0)
+    image = document.render(0, QSize(int(size.width() * scale), int(size.height() * scale)))
+    document.close()
+    # QtPdf renders ink on a transparent page: count pixels that are mostly opaque and dark.
+    argb = image.convertToFormat(image.Format.Format_ARGB32)
+    data = bytes(argb.constBits())[:argb.bytesPerLine() * argb.height()]
+    return sum(1 for k in range(0, len(data), 4) if data[k + 3] > 128 and data[k + 1] < 128)
+
+
+def ink_per_glyph(path):
+    """A small lower bound for one printed CJK character at the default text size."""
+    return 50
+
+
 def svg_items(lilypond, ly: Path):
     """(kind, text-or-path-start, x, y, font-size) of every placed glyph, page by page."""
     subprocess.run([str(lilypond), "-dbackend=svg", "-dno-point-and-click", "-o", str(ly.parent / "print"), str(ly)],
@@ -101,10 +120,14 @@ def test_note_text_with_unicode_spaces_renders_pdf_and_midi(qtbot, tmp_path, lil
     assert [n.text for n in score.parts[0].notes[:len(texts)]] == texts
     result = render(Project(score).notation(), (tmp_path / "text").resolve(), lilypond)
     assert no_warnings(result) == []
-    printed = pdf_text(result.pdf)
-    assert printed.count("中速") == len(texts) and printed.count("深情") == len(texts)
+    # Every text is placed as one markup (SVG output keeps the characters) ...
+    placed = [t for kind, t, *_ in svg_items(lilypond, result.lilypond) if kind == "text"]
+    assert sum("中速" in t for t in placed) == len(texts) and sum("深情" in t for t in placed) == len(texts)
+    # ... and really inks the page. PDF text extraction is not used: with the bundled Noto CJK
+    # font (CI, installers) QtPdf returns no usable CJK text, with system fonts it does.
     plain = render(Project(Score(notes=[Note(1 + i % 7) for i in range(len(texts))] + [Note(1), Note(2)])).notation(),
-                   (tmp_path / "plain").resolve(), lilypond, create_pdf=False)
+                   (tmp_path / "plain").resolve(), lilypond)
+    assert ink(result.pdf) - ink(plain.pdf) > len(texts) * 4 * ink_per_glyph(result.pdf)
     assert midi_note_onsets(result.midi) == midi_note_onsets(plain.midi)
 
 

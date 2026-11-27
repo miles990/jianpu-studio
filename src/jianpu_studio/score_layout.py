@@ -211,9 +211,15 @@ class LayoutMixin:
                 start_tick = 0 if bar == 0 else score.first_bar_ticks + (bar - 1) * score.bar_ticks
                 length = score.first_bar_ticks if bar == 0 else score.bar_ticks
                 segments = bar_grids[bar]
-                inner = w - 32 * s
+                # The dots of a ‖: take room at the bar's start: keep the first note's slide
+                # or accidental clear of them.
+                starts = items[bar][0] if bar < len(items) else ()
+                dots = "bar.repeat_start" in starts or (bar > 0 and bar - 1 < len(items)
+                                                         and "bar.repeat_both" in items[bar - 1][1])
+                lead = (26 if dots else 16) * s
+                inner = w - 16 * s - lead
                 total = sum(sw for _, sw in segments) or 1
-                xs, cx = {}, x + 16 * s
+                xs, cx = {}, x + lead
                 for tick, sw in segments:
                     xs[tick] = cx
                     cx += inner * sw / total
@@ -360,7 +366,7 @@ class LayoutMixin:
                     base += 12
                 if r in under_tuplet:
                     base += 14
-                stack = base + sum(glyphs.mark_height(sym) + 2 for sym in above)
+                stack = base + sum(glyphs.mark_height(sym) + 2 for sym in above) + sum(glyphs.stack_gaps(above))
                 above_need = max(above_need, stack + 6)
                 low = 22 + 4 * beams(note) + 6 * max(0, -note.octave)
                 below_need = max(below_need, low + 4)
@@ -502,7 +508,8 @@ class LayoutMixin:
         y += height + max(4, int(8 * s))
         small = QFont(ui_font_family())
         small.setPixelSize(max(7, int(12 * s)))
-        meta = f"1 = {score.key}    {score.meter}    ♩ = {score.tempo}"
+        from .model import key_label
+        meta = f"1 = {key_label(score.key)}    {score.meter}    ♩ = {score.tempo}"
         line_top = y
         bottom = y + QFontMetrics(small).height()
         if score.composer:

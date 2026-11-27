@@ -165,8 +165,8 @@ def test_names_and_groups_from_the_review():
     names = {sid: symbols.SYMBOLS[sid].name for sid in
              ("caesura", "orn.reverseturn", "nav.segno_sign", "nav.segno", "volta.1", "volta.final", "line.tie",
               "gz.chan")}
-    assert names == {"caesura": "停頓記號 //", "orn.reverseturn": "逆迴音", "nav.segno_sign": "Segno 𝄋（僅符號）",
-                     "nav.segno": "Segno 記號 𝄋（D.S. 跳回處）", "volta.1": "第一結尾（1.）",
+    assert names == {"caesura": "停頓記號 //", "orn.reverseturn": "逆迴音", "nav.segno_sign": "Segno 記號（僅符號）",
+                     "nav.segno": "Segno 記號（D.S. 跳回處）", "volta.1": "第一結尾（1.）",
                      "volta.final": "最後結尾（結）", "line.tie": "連結線（延音線）", "gz.chan": "顫音（左手按揉）"}
     erhu = {s.id for s in symbols_ui.palette_symbols() if symbols_ui.group_matches(s, "erhu")}
     assert "finger.5" not in erhu and not erhu & {f"string.{k}" for k in range(1, 6)}
