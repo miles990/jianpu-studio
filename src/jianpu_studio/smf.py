@@ -48,12 +48,18 @@ def _chunk(kind: bytes, payload: bytes) -> bytes:
     return kind + struct.pack(">I", len(payload)) + payload
 
 
-def write(tracks: list[Track], *, division: int, tempo_us: int, numerator=4, denominator=4, length: int = 0) -> bytes:
+def write(tracks: list[Track], *, division: int, tempo_us: int, numerator=4, denominator=4, length: int = 0,
+          lead: tuple[int, int] | None = None) -> bytes:
     """Format-1 SMF: a tempo track, then one track per part. Every track ends at ``length``
-    ticks or at its last event, whichever is later (trailing rests are part of the music)."""
+    ticks or at its last event, whichever is later (trailing rests are part of the music).
+    ``lead`` = (ticks, µs per quarter): the first ``ticks`` run at that tempo, then ``tempo_us``."""
     log2 = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}.get(denominator, 2)
-    head = (b"\x00\xff\x51\x03" + tempo_us.to_bytes(3, "big")
-            + b"\x00\xff\x58\x04" + bytes([numerator, log2, 24, 8]) + _vlq(max(0, length)) + b"\xff\x2f\x00")
+    first, change = (lead[1], lead[0]) if lead and lead[0] > 0 else (tempo_us, 0)
+    head = (b"\x00\xff\x51\x03" + first.to_bytes(3, "big")
+            + b"\x00\xff\x58\x04" + bytes([numerator, log2, 24, 8]))
+    if change:
+        head += _vlq(change) + b"\xff\x51\x03" + tempo_us.to_bytes(3, "big")
+    head += _vlq(max(0, length - change)) + b"\xff\x2f\x00"
     chunks = [_chunk(b"MTrk", head)]
     for track in tracks:
         channel = track.channel & 0x0F

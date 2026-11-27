@@ -13,17 +13,28 @@ tests/test_preview_equivalence.py compare both note by note.
   the tie stands between them (``_join``); the joined note carries the marks of every piece.
   Other tied notes stay separate pieces that LilyPond plays as one note: velocity of the
   first piece, end at the end of the last piece (after that piece's own shortening);
-* velocity: dynamics ppp…ffff are LilyPond's absolute volumes × 127 (no dynamic: 90);
-  a hairpin moves the volume in time from its start to the note that ends it, toward the
-  next absolute dynamic when that one lies in the hairpin's direction (and no other hairpin
-  comes first), else by ±0.225; accent and sf-type dynamics +20, sfzz and marcato +40,
-  staccato +4, staccatissimo +6; fp/sfp/sfpp change the level, +20 on their own note;
+* velocity: LilyPond's Dynamic_performer (lily/dynamic-performer.cc, ported in
+  ``_dynamics``): dynamics ppp…ffff are absolute volumes (no dynamic: 90/127); a hairpin
+  changes the volume linearly in time up to the step that ends it; consecutive hairpins
+  share the change toward the next dynamic by their durations, and a hairpin without a
+  dynamic in its direction departs by 25 % of the 0.1–1 range (7 % beyond the nearer end
+  when it turns back); velocity = volume × 127 plus accent and sf-type +20, sfzz and
+  marcato +40, staccato +4, staccatissimo +6 (fp/sfp/sfpp also set a level); grace notes
+  take the volume at their own moment;
 * length: staccato = min(half, 0.5 s), staccatissimo = 0.125 s, portato (▽) 3/4, all of
-  the sounding note; breath marks change nothing;
-* grace notes: 1/18 quarter each (2/3 of that in a triplet), taken from the end of the
-  previous note (not after a rest; notation_rules refuses more than that note's length); after-grace notes end at 3/4 of the last quarter (or of the note when
-  shorter), and the main note ends where they begin. A grace note before the very first
-  note starts the file: everything else is later by that lead-in (as in LilyPond's file);
+  the sounding note (two on a joined note apply one after the other); breath marks change
+  nothing; ticks are rounded down like LilyPond's;
+* grace notes: a sixteenth lasts 9/40 of its value (21.6 ticks; 2/3 of that in a
+  triplet), taken from the end of the previous note (not after a rest; notation_rules
+  refuses more than that note's length); after-grace notes end at 3/4 of the last quarter
+  (or of the note when shorter), and the main note ends where they begin. A grace note
+  before the very first note starts the file: everything else is later by that lead-in (as
+  in LilyPond's file; the score's tempo starts with the first part's grace notes, anything
+  before them plays at jianpu-ly's default 84 quarters per minute);
+* LilyPond lets go of a tie whose first note was shortened when any part takes a step
+  (a note, rest, grace group or measure start, counting measures as LilyPond does across
+  repeats) before the tied note: then the tied note sounds again;
+* a note still sounding when its pitch starts again ends there;
 * sustain pedal: CC64 127/0 at the marked notes; each part is its own track and channel;
 * the file lasts as long as the written music, trailing rests included.
 
@@ -36,14 +47,16 @@ raises ``PreviewError`` with the place of the problem.
 """
 from __future__ import annotations
 
+import math
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 
 from . import smf, symbols
 from .i18n import tr
 from .model import TICKS_PER_QUARTER, Note
-from .playmap import unfold_bars
+from .notation_rules import bar_items
+from .playmap import unfold, unfold_bars
 
 DIVISION = 384
 SCALE = DIVISION // TICKS_PER_QUARTER
@@ -59,8 +72,12 @@ EXTRA = {"art.accent": 20, "art.marcato": 40, "art.staccato": 4, "art.staccatiss
          "dyn.sf": 20, "dyn.fz": 20, "dyn.sfz": 20, "dyn.sfzz": 40, "dyn.rf": 20, "dyn.rfz": 20,
          "dyn.fp": 20, "dyn.sfp": 20, "dyn.sfpp": 20}
 DEFAULT_VELOCITY = 90
-HAIRPIN_STEP = 0.225
-GRACE = DIVISION / 18
+# A grace note (a sixteenth) lasts 9/40 of its written length in LilyPond's MIDI time
+# (moment_to_real): 21.6 ticks.
+GRACE = 4 * DIVISION / 16 * 9 / 40
+# Grace notes before the first beat come before the score's \tempo: LilyPond plays them at
+# jianpu-ly's default tempoWholesPerMinute (21 whole notes = 84 quarters per minute).
+LEAD_TEMPO_US = 60_000_000 // 84
 # Marks whose jianpu-ly word does not stand between a note and its tie (so the tied notes
 # can still be joined): breath marks come after the tie, slides before the note.
 TRANSPARENT_SLOTS = ("breath", "slide")
@@ -150,7 +167,7 @@ class _Piece:
     solid: bool = False         # something stands between it and its tie (no join)
     clean_after: bool = True    # nothing at all between its tie and the next piece
     open_after: bool = True     # only words that may move (marks, text) before the next piece
-    marks: set = field(default_factory=set)
+    marks: list = field(default_factory=list)     # in the order the words are written
 
 
 def _pieces(score, part: int) -> list[_Piece]:
@@ -183,7 +200,7 @@ def _pieces(score, part: int) -> list[_Piece]:
             # the first one. A long rest is crotchet rests (jianpu's "0 0").
             piece = _Piece(position, size, [row] if k == 0 else [], row=row, first=k == 0, rest=rest, key=key,
                            token=token if token[0] else None, tie=False if rest else (note.tie if last else True),
-                           marks=set(note.marks) if k == 0 else set())
+                           marks=list(note.marks) if k == 0 else [])
             if last and note.grace_after:
                 piece.after_grace, piece.token = True, None
             if not last:
@@ -224,7 +241,7 @@ def _join(pieces: list[_Piece]) -> list[_Piece]:
                 joined = _Piece(group[0].onset, sum(p.length for p in group), [r for p in group for r in p.rows],
                                 row=group[0].row, first=group[0].first, rest=group[0].rest, key=group[0].key, token=None, tie=last.tie, solid=last.solid,
                                 clean_after=last.clean_after, open_after=last.open_after,
-                                marks=set().union(*(p.marks for p in group)))
+                                marks=[m for p in group for m in p.marks])
                 out.append(joined)
                 index += count
             else:
@@ -239,61 +256,139 @@ def _seconds_ticks(score) -> float:
 
 
 def _shortened(length: int, marks, score) -> int:
-    """LilyPond's midi-length of the articulations (ly/script-init.ly): staccato half the
-    note but at most 0.5 s, staccatissimo always 1/8 s, portato 3/4. Breath marks do not
-    shorten the note in the exported MIDI (measured), so they do not here either."""
+    """LilyPond's midi-length of the articulations (ly/script-init.ly), applied one after the
+    other in the written order (a joined note can carry two): staccato half the note but at
+    most 0.5 s, staccatissimo 1/8 s (even past the note's end), portato 3/4. Breath marks do not shorten the note
+    in the exported MIDI (measured), so they do not here either."""
     per_second = _seconds_ticks(score)
-    if "art.staccato" in marks:
-        length = min(length // 2, int(0.5 * per_second))
-    elif "art.staccatissimo" in marks:
-        length = int(0.125 * per_second)
-    elif "art.staccato_hollow" in marks:
-        length = length * 3 // 4
+    for mark in marks:
+        if mark == "art.staccato":
+            length = min(length // 2, int(0.5 * per_second))
+        elif mark == "art.staccatissimo":
+            length = int(0.125 * per_second)        # even when longer than the note
+        elif mark == "art.staccato_hollow":
+            length = length * 3 // 4
     return length
 
 
-def _levels(notes, performed) -> list[float | None]:
-    """Volume (0..1) at each performed piece: the last dynamic; a hairpin moves in time
-    from its first piece to the piece that ends it (see the module notes for the target)."""
-    count = len(performed)
-    explicit, starts, ends = [], [], []
-    for _, piece in performed:
-        rows = piece.rows
-        explicit.append(next((VOLUME[m] for r in rows for m in notes[r].marks if m in VOLUME), None))
-        starts.append(next((s for r in rows for s in notes[r].spans_start if s.startswith("hairpin.")), None))
-        ends.append(any(s.startswith("hairpin.") for r in rows for s in notes[r].spans_end))
-    out: list[float | None] = [None] * count
-    level = None
-    index = 0
-    while index < count:
-        if explicit[index] is not None:
-            level = explicit[index]
-        sid = starts[index]
-        end = next((k for k in range(index + 1, count) if ends[k]), None) if sid else None
-        if end is None:
-            out[index] = level
-            index += 1
-            continue
-        louder = "cresc" in sid
-        begin = level if level is not None else DEFAULT_VELOCITY / 127
-        target = None
-        for k in range(end, count):
-            if explicit[k] is not None:
-                target = explicit[k]
-                break
-            if starts[k] is not None:
-                break
-        if target is None or (target <= begin if louder else target >= begin):
-            target = min(1.0, max(0.0, begin + (HAIRPIN_STEP if louder else -HAIRPIN_STEP)))
-        t0, t1 = performed[index][0], performed[end][0]
-        for k in range(index, end + 1):
-            fraction = (performed[k][0] - t0) / (t1 - t0) if t1 > t0 else 1.0
-            out[k] = begin + (target - begin) * fraction
-        if explicit[end] is not None:
-            out[end] = explicit[end]
-        level = out[end]
-        index = end + 1
-    return out
+class _Span:
+    """LilyPond's Audio_span_dynamic: a volume that changes linearly over its duration."""
+    __slots__ = ("start", "volume", "gain", "duration", "grow")
+
+    def __init__(self, start: float, volume: float, grow: int):
+        self.start, self.volume, self.gain, self.duration, self.grow = start, volume, 0.0, 0.0, grow
+
+    def at(self, time: float) -> float:
+        when = time - self.start
+        if when <= 0:
+            return self.volume
+        if when >= self.duration:
+            return self.volume + self.gain
+        return self.volume + self.gain * when / self.duration
+
+
+class _Queue:
+    def __init__(self):
+        self.spans: list[_Span] = []
+        self.change = 0.0
+
+    def push(self, span: _Span) -> None:
+        if span.grow:
+            self.change += span.duration
+        self.spans.append(span)
+
+    def set_volume(self, start: float, target: float) -> None:
+        """Every (de)crescendo gets its share of the change by its share of the time."""
+        gain, done, volume = target - start, 0.0, start
+        for span in self.spans:
+            previous = volume
+            if span.grow:
+                done += span.duration
+                volume = start + gain * (done / self.change)
+            span.volume, span.gain = previous, volume - previous
+        self.spans, self.change = [], 0.0
+
+
+MIN_TARGET, MAX_TARGET = 0.1, 1.0       # Dynamic_performer's target range (piano: no equalizer)
+
+
+def _departure(direction: int, start: float, end: float) -> float:
+    """``Dynamic_performer::calc_departure_volume``: 25 % of the range beyond the farther
+    end, 7 % beyond the nearer one, whichever goes further, within the range."""
+    if not direction:
+        return start
+    low, high = min(MIN_TARGET, start, end), max(MAX_TARGET, start, end)
+    span = high - low
+    if direction > 0:
+        value = max(max(start, end) + 0.07 * span, min(start, end) + 0.25 * span)
+    else:
+        value = min(min(start, end) - 0.07 * span, max(start, end) - 0.25 * span)
+    return max(min(value, high), low)
+
+
+def _dynamics(notes, steps, end: float):
+    """LilyPond 2.26's Dynamic_performer, step by step (lily/dynamic-performer.cc).
+
+    ``steps``: (time, rows) in LilyPond's order, rows = model rows whose dynamics and
+    hairpin starts/ends act at that time (none for a grace-note step); ``end``: the end of
+    the music. Returns the span in effect at each step; its volume at a time is final once
+    every step has been taken."""
+    queues = {"depart": _Queue(), "return": _Queue()}
+    state, depart_dir, open_span = "initial", 0, None
+    linked: list[_Span] = []
+
+    def finish(next_volume: float) -> float:
+        depart, back = queues["depart"], queues["return"]
+        if not depart.spans:
+            return next_volume
+        start = depart.spans[0].volume
+        if not back.spans:
+            target = next_volume
+            if next_volume < 0 or depart_dir != (1 if next_volume > start else -1 if next_volume < start else 0):
+                target = _departure(depart_dir, start, start)
+            depart.set_volume(start, target)
+            return next_volume if next_volume >= 0 else target
+        returning = next_volume if next_volume >= 0 else start
+        target = _departure(depart_dir, start, returning)
+        depart.set_volume(start, target)
+        back.set_volume(target, returning)
+        return returning
+
+    def close(time: float) -> None:
+        nonlocal open_span
+        open_span.duration = max(0.0, time - open_span.start)
+        queues["return" if state == "return" else "depart"].push(open_span)
+        open_span = None
+
+    for time, rows in steps:
+        script = next((VOLUME[m] for r in rows for m in notes[r].marks if m in VOLUME), None)
+        grow = next((1 if "cresc" in sid else -1 for r in rows for sid in notes[r].spans_start
+                     if sid.startswith("hairpin.")), 0)
+        stop = any(sid.startswith("hairpin.") for r in rows for sid in notes[r].spans_end)
+        volume = script if script is not None else (-1.0 if open_span else DEFAULT_VELOCITY / 127)
+        if open_span and (grow or stop or script is not None):
+            close(time)
+            if script is not None:
+                state = "initial"
+                volume = finish(volume)
+        if open_span is None:
+            restart = False
+            if state == "initial" and grow:
+                state, depart_dir = "depart", grow
+            elif state == "depart" and grow == -depart_dir:
+                state = "return"
+            elif state == "return" and grow == depart_dir:
+                state, restart = "depart", True
+            if restart:
+                volume = finish(volume)
+            if volume < 0:
+                volume = DEFAULT_VELOCITY / 127
+            open_span = _Span(time, volume, grow)
+        linked.append(open_span)
+    if open_span is not None:
+        close(end)
+    finish(-1.0)
+    return linked
 
 
 def _performed(score, part: int, order: list[int]) -> list[tuple[int, _Piece]]:
@@ -320,27 +415,64 @@ def _performed(score, part: int, order: list[int]) -> list[tuple[int, _Piece]]:
     return out
 
 
-def _steps(score, performed_parts) -> list[float]:
+def _steps(score, performed_parts, total: int, back: int | None = None) -> tuple[list[float], list[float]]:
     """Every moment at which LilyPond's performers take a step (a note, rest or grace note
-    starts in any part), in performance ticks; a grace note's step comes just before its
-    main note's moment."""
+    starts in any part, or a measure starts), in performance ticks, and the moments of grace
+    groups before a note (LilyPond takes those steps just before the moment itself; an
+    after-grace counts at 3/4 of its note). LilyPond counts measures on from the pickup and never
+    re-aligns them, so after a repeat that replays the pickup its measures start mid-bar;
+    ``back``: tick where a D.C. return starts."""
+    bar = score.bar_ticks * SCALE
+    first = score.pickup * SCALE % bar
     steps = set()
+    if score.pickup and back is not None and "nav.dc" in {i for _, edge in bar_items(score) for i in edge}:
+        # A D.C. return replays the start, \partial included, so measures count from the
+        # return again. When the piece opens with a repeat, the measures of the old count go
+        # on as well (measured: LilyPond keeps both); otherwise the new count replaces them.
+        # Known gap: with a pickup, a repeat from the start, Fine and D.C., a few staccato
+        # ties on the return still differ (2 of 7,140 randomized scores; equivalence test).
+        from .export import effective_bar_items, implicit_repeat_start
+        items = effective_bar_items(score)
+        keep = bool(items) and ("bar.repeat_start" in items[0][0] or implicit_repeat_start(items))
+        steps.update(float(t) for t in range(first, (total if keep else back - 1) + 1, bar))
+        steps.update(float(t) for t in range(back + score.pickup * SCALE, total + 1, bar))
+    else:
+        steps.update(float(t) for t in range(first, total + 1, bar))
+    graces = set()
     for performed in performed_parts:
         for start, piece in performed:
             steps.add(float(start))
             head = score.parts[piece.part].notes[piece.row]
-            if piece.first and (head.grace_before or (piece.after_grace and head.grace_after)):
-                steps.add(start - 1e-6)
+            if piece.first and head.grace_before and not piece.rest:
+                graces.add(float(start))
             if piece.after_grace:
-                steps.add(start + piece.length * 3 / 4 - 1e-6)
-    return sorted(steps)
+                steps.add(start + piece.length * 3 / 4)
+    return sorted(steps), sorted(graces)
 
 
-def _events(score, part: int, performed, steps: list[float]):
+def _events(score, part: int, performed, steps: tuple[list[float], list[float]], total: int):
     """([start, end, pitch, velocity] floats, controls) of one part, before the lead-in."""
     notes = score.parts[part].notes
     shifts = _ottava(notes)
-    levels = _levels(notes, performed)
+    # LilyPond's time steps of this part: (main moment, grace order, time, rows, what)
+    timeline = []
+    for index, (start, piece) in enumerate(performed):
+        head = notes[piece.row]
+        grace = GRACE * (2 / 3 if head.tuplet else 1)
+        if piece.first and head.grace_before and not piece.rest:
+            count = len(_grace_pitches(score, head.grace_before))
+            for k in range(count):
+                timeline.append((start, k - count, start - (count - k) * grace, [], ("before", index, k)))
+        timeline.append((start, 0, float(start), piece.rows, ("main", index, 0)))
+        if piece.after_grace:
+            count = len(_grace_pitches(score, head.grace_after))
+            stop = start + piece.length * 3 / 4
+            for k in range(count):
+                timeline.append((stop, k - count, stop - (count - k) * grace, [], ("after", index, k)))
+    timeline.sort(key=lambda step: (step[0], step[1]))
+    spans = _dynamics(notes, [(time, rows) for _, _, time, rows, _ in timeline], total)
+    volume = {what: span.at(time) for (_, _, time, _, what), span in zip(timeline, spans)}
+
     events: list[list] = []
     controls = []
     chain = None        # (event a tie continues, end of its last written piece, end as played)
@@ -363,64 +495,83 @@ def _events(score, part: int, performed, steps: list[float]):
         if graces:
             first = start - lead
             for k, value in enumerate(graces):
-                events.append([first + k * grace, first + (k + 1) * grace, value + shifts[piece.row], None])
+                events.append([first + k * grace, first + (k + 1) * grace, value + shifts[piece.row],
+                               int(volume["before", index, k] * 127)])
             if previous is not None and previous[1] > first:
                 # the note just before gives up the time (after a rest nothing is cut)
                 previous[1] = max(previous[0] + 1, first)
         end = start + _shortened(piece.length, piece.marks, score)
         # LilyPond drops a tie whose first note was shortened (staccato…) when any part
-        # takes a step after that note stops sounding and before the tied note starts.
+        # takes a step after that note stops sounding and before the tied note starts (a
+        # grace group counts just before its moment, so also one at the tied note's moment).
         tied = chain is not None and chain[0][2] == key and chain[1] == start and not any(
-            chain[2] <= step < start for step in steps[bisect_left(steps, chain[2]):bisect_left(steps, start)])
+            chain[2] <= step < start for step in steps[0][bisect_left(steps[0], chain[2]):bisect_left(steps[0], start)]) \
+            and not any(chain[2] < step <= start for step in steps[1][bisect_left(steps[1], chain[2]):bisect_right(steps[1], start)])
         if tied:
             event = chain[0]
             event[1] = end - lead
         else:
-            level = levels[index]
-            velocity = int(level * 127 + 1e-6) if level is not None else DEFAULT_VELOCITY
-            velocity += sum(EXTRA.get(m, 0) for m in piece.marks)
+            velocity = int(volume["main", index, 0] * 127 + sum(EXTRA.get(m, 0) for m in piece.marks))
             event = [start, end, key, velocity]
             events.append(event)
-        for grace_event in events[len(events) - len(graces) - (0 if tied else 1):]:
-            if grace_event[3] is None:
-                grace_event[3] = event[3]
         if piece.after_grace:
             after = _grace_pitches(score, head.grace_after)
             stop = start + piece.length * 3 / 4
             first = stop - len(after) * grace
             event[1] = min(event[1], first)
             for k, value in enumerate(after):
-                events.append([first + k * grace, first + (k + 1) * grace, value + shifts[piece.row], event[3]])
+                events.append([first + k * grace, first + (k + 1) * grace, value + shifts[piece.row],
+                               int(volume["after", index, k] * 127)])
         chain = (event, start + piece.length, end) if piece.tie and not piece.after_grace else None
-        previous = events[-1]
+        # after its after-grace notes nothing is cut (measured)
+        previous = None if piece.after_grace else event
     return events, controls
 
 
-def lead_in(score, order: list[int] | None = None) -> float:
-    """Ticks (384 per quarter) of grace notes before the first beat: LilyPond's file starts
-    with them and everything else is that much later."""
-    order = playing_order(score)[0] if order is None else order
-    if not order or order[0] != 0:
-        return 0.0
-    earliest = 0.0
+def _leads(score, order) -> list[float]:
+    """Ticks of grace notes before the first beat in each part (0 without)."""
+    out = []
     for part in score.parts:
         notes = part.notes
-        if notes and notes[0].degree and notes[0].grace_before:
-            count = len(_grace_pitches(score, notes[0].grace_before))
-            earliest = min(earliest, -count * GRACE * (2 / 3 if notes[0].tuplet else 1))
-    return -earliest
+        first = notes[0] if notes and order and order[0] == 0 else None
+        if first is not None and first.degree and first.grace_before:
+            out.append(len(_grace_pitches(score, first.grace_before)) * GRACE * (2 / 3 if first.tuplet else 1))
+        else:
+            out.append(0.0)
+    return out
 
 
-def part_track(score, part: int, performed, steps, channel: int, shift: float = 0.0) -> smf.Track:
-    events, controls = _events(score, part, performed, steps)
+def lead_in(score, order: list[int] | None = None) -> tuple[float, float]:
+    """(ticks, seconds) of grace notes before the first beat: LilyPond's file starts with
+    them and everything else is that much later. The score's tempo starts with the first
+    part's own grace notes; anything earlier plays at jianpu-ly's default 84 per minute."""
+    order = playing_order(score)[0] if order is None else order
+    leads = _leads(score, order) or [0.0]
+    shift = max(leads)
+    early = math.floor(shift - leads[0] + 1e-9)
+    seconds = early * LEAD_TEMPO_US / DIVISION / 1e6 + (math.floor(shift + 1e-9) - early) * 60 / score.tempo / DIVISION
+    return shift, seconds
+
+
+def part_track(score, part: int, performed, steps, channel: int, shift: float = 0.0, total: int = 0) -> smf.Track:
+    events, controls = _events(score, part, performed, steps, total)
+    # A note still sounding when the same pitch starts again ends there (as in LilyPond's file).
+    following: dict[int, float] = {}
+    for event in sorted(events, key=lambda ev: ev[0], reverse=True):
+        nxt = following.get(event[2])
+        if nxt is not None and event[1] > nxt > event[0]:
+            event[1] = nxt
+        following[event[2]] = event[0]
     notes_out = []
     for s, e, p, v in events:
-        begin, finish = round(s + shift), round(e + shift)
+        # LilyPond's ticks: the start and the length, each rounded down (moment_to_ticks)
+        begin = math.floor(s + shift + 1e-9)
+        finish = begin + math.floor(e - s + 1e-9)
         if begin < 0:
             raise PreviewError(tr("無法產生試聽：{part}的倚音早於樂曲開頭。").format(
                 part=score.parts[part].name or str(part + 1)), part)
         notes_out.append(smf.NoteEvent(begin, max(begin + 1, finish), p, max(1, min(127, v))))
-    controls_out = [(round(t + shift), c, v) for t, c, v in controls]
+    controls_out = [(math.floor(t + shift + 1e-9), c, v) for t, c, v in controls]
     return smf.Track(notes_out, channel=channel, controls=controls_out, name=score.parts[part].name)
 
 
@@ -441,11 +592,15 @@ def total_ticks(score, order: list[int]) -> int:
 def preview_midi(score, order: list[int] | None = None) -> bytes:
     """The preview MIDI of ``score`` in ``order`` (default: ``playing_order``)."""
     order = playing_order(score)[0] if order is None else order
-    shift = lead_in(score, order)
+    shift, _ = lead_in(score, order)
+    early = math.floor(shift - _leads(score, order)[0] + 1e-9)
     performed = [_performed(score, index, order) for index in range(len(score.parts))]
-    steps = _steps(score, performed)
-    tracks = [part_track(score, index, performed[index], steps, index, shift) for index in range(len(score.parts))]
+    unfolded, back = unfold(score)
+    back = total_ticks(score, order[:back]) if back is not None and order == unfolded else None
+    steps = _steps(score, performed, total_ticks(score, order), back)
+    total = total_ticks(score, order)
+    tracks = [part_track(score, index, performed[index], steps, index, shift, total) for index in range(len(score.parts))]
     numerator, denominator = (int(v) for v in score.meter.split("/"))
     return smf.write(tracks, division=DIVISION, tempo_us=round(60_000_000 / score.tempo),
                      numerator=numerator, denominator=denominator,
-                     length=round(total_ticks(score, order) + shift))
+                     length=math.floor(total_ticks(score, order) + shift + 1e-9), lead=(early, LEAD_TEMPO_US))

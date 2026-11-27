@@ -44,9 +44,15 @@ def _structure(score):
 
 def unfold_bars(score) -> list[int]:
     """Bar indices in the order the preview MIDI plays them."""
+    return unfold(score)[0]
+
+
+def unfold(score) -> tuple[list[int], int | None]:
+    """(``unfold_bars``, index in it where a D.C./D.S. return starts, or None)."""
     count, repeats, nav = _structure(score)
     if count == 0:
-        return []
+        return [], None
+    back = None
     by_end = {r["end"]: r for r in repeats}
     volta_bars = {}
     for r in repeats:
@@ -104,9 +110,10 @@ def unfold_bars(score) -> list[int]:
         if jump is not None and bar == jump and not returning:
             returning = True
             bar = jump_target
+            back = len(order)
             continue
         bar += 1
-    return order
+    return order, back
 
 
 @dataclass(frozen=True)
@@ -125,7 +132,7 @@ class PlayMap:
 
     def __init__(self, score, part: int = 0, order: list[int] | None = None):
         from .model import TICKS_PER_QUARTER
-        from .preview_midi import DIVISION, lead_in, playing_order
+        from .preview_midi import lead_in, playing_order
         self.part = part
         self.tempo = score.tempo
         self.ticks_per_quarter = TICKS_PER_QUARTER
@@ -133,7 +140,7 @@ class PlayMap:
         notes = score.parts[part].notes
         lengths = [sum(n.ticks for n in score.parts[0].notes[a:b]) for a, b in score.part_bars(0)]
         self.order = playing_order(score)[0] if order is None else list(order)
-        self.lead_in = lead_in(score, self.order) / DIVISION * 60.0 / self.tempo
+        self.lead_in = lead_in(score, self.order)[1]
         self.onsets: list[Onset] = []
         self.bar_starts: list[tuple[int, int]] = []   # (tick, bar) per visit
         tick = 0

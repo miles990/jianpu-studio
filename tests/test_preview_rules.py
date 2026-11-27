@@ -47,17 +47,31 @@ def test_vlq_refuses_a_negative_or_huge_delta_instead_of_looping():
 
 def test_a_grace_note_before_the_first_note_starts_the_file():
     """Review 3 P0: a negative tick froze Play (endless VLQ loop on the GUI thread).
-    LilyPond starts its file with the grace note and plays everything that much later;
-    the play map follows."""
+    LilyPond starts its file with the grace note and plays everything that much later (when
+    a later part's grace notes come first, those play at jianpu-ly's default 84 per minute,
+    before the tempo of the first part starts); the play map follows."""
+    lead = 21 / 384                    # measured: 21 ticks at the score tempo
     score = Score(tempo=60, notes=[Note(1, grace_before="2"), Note(3), Note(4), Note(5)])
-    close(track(score), [(0, 21, 62, 90), (21, 384, 60, 90), (405, 384, 64, 90), (789, 384, 65, 90), (1173, 384, 67, 90)])
+    got = [(round(n.start, 3), round(n.end, 3), n.pitch) for n in notes_of(score)]
+    assert got == [(0.0, round(lead, 3), 62)] + [(round(lead + k, 3), round(lead + k + 1, 3), p)
+                                                 for k, p in enumerate((60, 64, 65, 67))]
     play = PlayMap(score)
-    assert play.lead_in == pytest.approx(64 / 3 / 384)
-    assert play.at(0.01) is None and play.at(0.06).row == 0 and play.at(1.06).row == 1
+    assert play.lead_in == pytest.approx(lead)
+    assert play.at(0.01) is None and play.at(lead + 0.01).row == 0 and play.at(lead + 1.01).row == 1
+    assert play.total_seconds == pytest.approx(lead + 4)
     two = Score(tempo=60, parts=[Part("a", [Note(1, grace_before="23"), Note(2), Note(3, duration=2)]),
                                  Part("b", [Note(5), Note(6, grace_before="7"), Note(3, duration=2)])])
-    close(sorted(track(two), key=lambda n: (n[0], n[2])), sorted([(0, 21, 62, 90), (21, 21, 64, 90), (43, 384, 60, 90), (427, 384, 62, 90), (811, 768, 64, 90),
-                       (43, 362, 67, 90), (405, 21, 71, 90), (427, 384, 69, 90), (811, 768, 64, 90)], key=lambda n: (n[0], n[2])))
+    lead = 43 / 384
+    starts = sorted((round(n.start, 3), n.pitch) for n in notes_of(two))
+    assert starts == sorted([(0.0, 62), (round(21 / 384, 3), 64), (round(lead, 3), 60), (round(lead, 3), 67),
+                             (round(lead + 1 - 22 / 384, 3), 71), (round(lead + 1, 3), 62), (round(lead + 1, 3), 69),
+                             (round(lead + 2, 3), 64), (round(lead + 2, 3), 64)])
+    # Only a later part has grace notes first: they play before the tempo starts (84 per minute).
+    later = Score(tempo=60, parts=[Part("a", [Note(1), Note(2), Note(3, duration=2)]),
+                                   Part("b", [Note(5, grace_before="7"), Note(6), Note(3, duration=2)])])
+    early = 21 * (60 / 84) / 384
+    assert [round(n.start, 4) for n in notes_of(later)][:3] == [0.0, round(early, 4), round(early, 4)]
+    assert PlayMap(later).lead_in == pytest.approx(early)
 
 
 def review_scores():
@@ -234,3 +248,84 @@ def test_the_check_reader_uses_the_written_tempo_above_120_bpm():
     tick 0, so a fast piece was read at 120 bpm (preview and export agreed at the wrong speed)."""
     score = Score(tempo=240, notes=[Note(1), Note(2), Note(3), Note(4)])
     assert [n.start for n in notes_of(score)] == [0.0, 0.25, 0.5, 0.75]
+
+
+# ---------------------------------------------------------------- the join rule × the catalog
+def _converted_midi_staff(score, tmp_path) -> str:
+    """The MIDI staff jianpu-ly writes for ``score`` (the real converter, in this process)."""
+    import re
+
+    from jianpu_studio import worker
+    source, target = tmp_path / "s.jly", tmp_path / "s.ly"
+    source.write_text(Project(score).notation(), encoding="utf-8")
+    assert worker.run(["convert", str(source), str(target), "26"]) == 0
+    return re.findall(r"(?s)% === BEGIN MIDI STAFF ===(.*?)% === END MIDI STAFF ===", target.read_text(encoding="utf-8"))[0]
+
+
+def _tie_cases():
+    from jianpu_studio import symbols
+    for sid, symbol in symbols.SYMBOLS.items():
+        if symbol.storage == "marks" and symbol.kind in ("point", "pre"):
+            for where in (0, 1):
+                notes = [Note(1, tie=True), Note(1), Note(3), Note(4)]
+                notes[where] = replace(notes[where], marks=(sid,))
+                yield f"{sid}-{where}", notes
+        elif symbol.storage == "spans" and symbol.family not in ("gliss",):
+            notes = [Note(1, tie=True, spans_start=(sid,)), Note(1), Note(3, spans_end=(sid,)), Note(4)]
+            yield f"{sid}-start", notes
+            notes = [Note(2, spans_start=(sid,)), Note(1, tie=True, spans_end=(sid,)), Note(1), Note(4)]
+            yield f"{sid}-end", notes
+    yield "text-0", [Note(1, tie=True, text="甲"), Note(1), Note(3), Note(4)]
+    yield "text-1", [Note(1, tie=True), Note(1, text="甲"), Note(3), Note(4)]
+    yield "grace-1", [Note(2), Note(1, tie=True), Note(1, grace_before="5"), Note(4)]
+
+
+@pytest.mark.parametrize("name, notes", list(_tie_cases()), ids=[name for name, _ in _tie_cases()])
+def test_the_preview_joins_tied_crotchets_exactly_when_jianpu_ly_does(tmp_path, name, notes):
+    """Every catalog mark and line, on either note of a tied pair of crotchets: the preview's
+    join decision (which decides length, velocity and shortening) equals the converter's."""
+    from jianpu_studio.preview_midi import _pieces
+    score = Score(tempo=60, notes=notes)
+    if score.edit_error():
+        pytest.skip(f"not a valid combination: {score.edit_error()}")
+    pieces = [p for p in _pieces(score, 0) if not p.rest]
+    tied_row = next(i for i, n in enumerate(notes) if n.tie)
+    joined = any(tied_row in p.rows and tied_row + 1 in p.rows for p in pieces)
+    staff = _converted_midi_staff(score, tmp_path)
+    assert joined == ("c'2" in staff), staff
+
+
+@pytest.mark.parametrize("change", [dict(spans_start=("line.8vb",)), dict(marks=("slide.up",))])
+def test_an_octave_line_or_slide_right_after_an_after_grace_is_a_located_problem(change):
+    """jianpu-ly writes the next note's leading command inside the after-grace block; across
+    an ending boundary the exported MIDI then played the repeat an octave low (found by the
+    equivalence sweep, seed 115607). Refused with its place instead."""
+    notes = [Note(1, duration=2, grace_after="5"), Note(2, **change), Note(3, spans_end=change.get("spans_start", ())), Note(4)]
+    problem = Score(notes=notes).edit_error()
+    assert problem is not None and "後倚音" in problem and problem.row == 1
+    later = [notes[0], Note(2), Note(2, **change), Note(3, spans_end=change.get("spans_start", ()))]
+    assert Score(notes=later).edit_error() is None
+
+
+def _hairpins(start, chain, final, lengths):
+    notes = []
+    for k, (direction, length) in enumerate(zip(chain, lengths)):
+        sid = "hairpin.cresc" if direction == "<" else "hairpin.dim"
+        notes += [Note(1 + k % 7, marks=(start,) if k == 0 and start else (), spans_start=(sid,))]
+        notes += [Note(2)] * (length - 2) + [Note(3, spans_end=(sid,))]
+    score = Score(tempo=60, notes=notes + [Note(5, marks=(final,) if final else ())] + [Note(6)] * 3)
+    score.fill_last_bar()
+    return score
+
+
+@pytest.mark.parametrize("start, chain, final, lengths, lily", [
+    # measured from the exported MIDI; LilyPond 2.26's Dynamic_performer
+    ("dyn.p", "<>", "dyn.pp", (3, 3), [69, 80, 90, 90, 76, 62, 62, 62, 62, 62]),
+    ("dyn.p", "<<", "dyn.mf", (4, 2), [69, 73, 78, 82, 82, 86, 86, 86, 86, 86]),
+    ("dyn.f", "><", "dyn.ff", (4, 2), [95, 87, 80, 73, 73, 101, 101, 101, 101, 101]),
+    (None, "<><", None, (3, 3, 3), [90, 104, 118, 118, 104, 90, 90, 104, 118, 118, 118, 118, 118]),
+])
+def test_successive_hairpins_share_the_change_like_lilypond(start, chain, final, lengths, lily):
+    """Review 3 #9 class: consecutive hairpins divide the change by duration, and one that
+    turns back departs by LilyPond's padding (25 % / 7 % of the 0.1–1 range)."""
+    assert [n.velocity for n in notes_of(_hairpins(start, chain, final, lengths))] == lily

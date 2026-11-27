@@ -587,6 +587,9 @@ def _notation_error(score, structure: bool = True) -> str | None:
                                   "" if notes[i+1].accidental == "n" else notes[i+1].accidental)):
                     return Problem(prefix + tr("{where}的延音線須接到下一個相同音高的音符。").format(where=where(i)),
                                    index, i, None, ("tie", True))
+            if (row := _after_grace_neighbour(notes)) is not None:
+                return Problem(prefix + tr("{where}緊接在後倚音之後，不能開始高／低八度線或加滑音記號；請改從下一個音開始，或移除前一個音的後倚音。").format(
+                    where=where(row)), index, row)
             if (row := _grace_overflow(notes)) is not None:
                 return Problem(prefix + tr("{where}的倚音比前一個音還長：請減少倚音，或加長前一個音。").format(
                     where=where(row)), index, row)
@@ -601,6 +604,20 @@ def _notation_error(score, structure: bool = True) -> str | None:
         return Problem(str(exc), index, exc.row, exc.bar, exc.fix)
     except ValueError as exc:
         return Problem(str(exc), index)
+    return None
+
+
+def _after_grace_neighbour(notes) -> int | None:
+    """The first note right after an after-grace note that starts an 8va/8vb line or has a
+    slide. jianpu-ly writes such a note's leading command inside the previous note's
+    after-grace block, so the octave shift (or slide) starts there -- and when an ending or
+    repeat boundary comes between them, the exported MIDI plays the wrong bars an octave off."""
+    for i in range(1, len(notes)):
+        note = notes[i]
+        if notes[i - 1].grace_after and (
+                any(symbols.SYMBOLS[s].family == "ottava" for s in note.spans_start)
+                or any(symbols.SYMBOLS[m].slot == "slide" for m in note.marks)):
+            return i
     return None
 
 
