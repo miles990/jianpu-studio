@@ -1,3 +1,4 @@
+import re
 import struct
 import sys
 import threading
@@ -236,3 +237,164 @@ def test_cjk_fingering_and_marks_have_real_glyphs(tmp_path):
     assert "c1 \\jsFingerZero" in lilypond_text and "宀" not in lilypond_text
     assert "no glyph for character" not in result.log
     assert "warning:" not in result.log.lower(), result.log
+
+
+# A stand-in for a tool: counts its runs in a file, then behaves as the test asks.
+FAKE_TOOL = """
+import os, signal, sys, time
+counter, crashes, then = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+runs = int(open(counter).read()) + 1 if os.path.exists(counter) else 1
+open(counter, "w").write(str(runs))
+print("Processing `score.ly'\\nParsing...\\nInterpreting music...", flush=True)
+if runs <= crashes:
+    if os.name == "nt":
+        os._exit(0xC0000005 - 2 ** 32)          # what Windows reports for an access violation
+    signal.signal(signal.SIGSEGV, signal.SIG_DFL)
+    os.kill(os.getpid(), signal.SIGSEGV)
+if then == "error":
+    print("score.ly:3:1: error: syntax error, unexpected '}'")
+    sys.exit(1)
+if then == "hang":
+    time.sleep(30)
+print("Success: compilation successfully completed")
+"""
+
+
+def fake_tool(tmp_path, crashes, then="ok"):
+    script = tmp_path / "fake_tool.py"
+    script.write_text(FAKE_TOOL, encoding="utf-8")
+    counter = tmp_path / "runs.txt"
+    return [sys.executable, str(script), str(counter), str(crashes), then], lambda: int(counter.read_text())
+
+
+def test_failure_keeps_the_exit_code(tmp_path):
+    with pytest.raises(ToolError) as caught:
+        run_tool([sys.executable, "-c", "import sys; print('bad score'); sys.exit(2)"], tmp_path, threading.Event())
+    assert caught.value.returncode == 2 and not caught.value.crashed
+    assert str(caught.value).startswith("bad score") and str(caught.value).endswith("工具結束碼：2")
+    assert caught.value.output.strip() == "bad score"
+    with pytest.raises(ToolError, match="^工具結束碼：3$") as caught:
+        run_tool([sys.executable, "-c", "import sys; sys.exit(3)"], tmp_path, threading.Event())
+    assert caught.value.returncode == 3
+
+
+def test_silent_crash_is_named_with_its_code(tmp_path):
+    args, runs = fake_tool(tmp_path, crashes=1)
+    with pytest.raises(ToolError) as caught:
+        run_tool(args, tmp_path, threading.Event())
+    assert caught.value.crashed and runs() == 1
+    code = "0xC0000005" if sys.platform == "win32" else "-11 (SIGSEGV)"
+    assert str(caught.value).startswith("Processing")
+    assert str(caught.value).endswith(f"工具意外結束，沒有回報錯誤（結束碼 {code}）。")
+
+
+@pytest.mark.parametrize("name, code, output, crashed, text", [
+    ("nt", 0xC0000005, "Interpreting music...", True, "0xC0000005"),
+    ("nt", 0xC0000409, "", True, "0xC0000409"),
+    ("nt", 0xC0000005, "fatal error: failed files", False, "0xC0000005"),      # it explained itself
+    ("nt", 1, "Interpreting music...", False, "1"),
+    ("nt", 0xFFFFFFFF, "", False, "0xFFFFFFFF"),                               # exit(-1), not a fault
+    ("posix", -11, "Interpreting music...", True, "-11 (SIGSEGV)"),
+    ("posix", -6, "", True, "-6 (SIGABRT)"),
+    ("posix", -9, "", False, "-9 (SIGKILL)"),                                  # someone killed it
+    ("posix", -15, "", False, "-15 (SIGTERM)"),
+    ("posix", -11, "x.ly:1:1: error: bad", False, "-11 (SIGSEGV)"),
+    ("posix", 1, "", False, "1"),
+])
+def test_crash_signature_and_code_text(monkeypatch, name, code, output, crashed, text):
+    if name == "posix" and sys.platform == "win32":
+        pytest.skip("Windows Python does not know the POSIX signal names")
+    monkeypatch.setattr(engine.os, "name", name)
+    assert engine.crashed_silently(code, output) is crashed
+    assert engine.exit_code_text(code) == text
+
+
+def test_lilypond_is_run_again_after_a_silent_crash(tmp_path):
+    args, runs = fake_tool(tmp_path, crashes=1)
+    log = engine.run_lilypond(args, tmp_path, threading.Event())
+    assert runs() == 2
+    assert log.count("已自動重試") == 1 and "結束碼" in log.splitlines()[0]
+    assert log.rstrip().endswith("Success: compilation successfully completed")
+    assert not re.search("warning|error", log, re.I)        # the note must not read as a LilyPond problem
+
+
+def test_lilypond_crashing_every_time_stops_after_the_bounded_retries(tmp_path):
+    args, runs = fake_tool(tmp_path, crashes=99)
+    with pytest.raises(ToolError) as caught:
+        engine.run_lilypond(args, tmp_path, threading.Event())
+    assert runs() == engine.CRASH_RETRIES + 1 and engine.CRASH_RETRIES <= 3
+    assert caught.value.crashed and str(caught.value).count("已自動重試") == engine.CRASH_RETRIES
+    assert "沒有回報錯誤" in str(caught.value)
+
+
+def test_a_reported_lilypond_error_is_never_retried(tmp_path):
+    args, runs = fake_tool(tmp_path, crashes=0, then="error")
+    with pytest.raises(ToolError, match="syntax error") as caught:
+        engine.run_lilypond(args, tmp_path, threading.Event())
+    assert runs() == 1 and caught.value.returncode == 1 and "重試" not in str(caught.value)
+
+
+def test_a_reported_error_after_a_crash_is_not_retried_again(tmp_path):
+    args, runs = fake_tool(tmp_path, crashes=1, then="error")
+    with pytest.raises(ToolError, match="syntax error") as caught:
+        engine.run_lilypond(args, tmp_path, threading.Event())
+    assert runs() == 2 and str(caught.value).count("已自動重試") == 1
+
+
+def test_no_retry_after_timeout_or_cancel(tmp_path, monkeypatch):
+    args, runs = fake_tool(tmp_path, crashes=0, then="hang")
+    with pytest.raises(ToolError, match="超過") as caught:
+        engine.run_lilypond(args, tmp_path, threading.Event(), timeout=1.5)
+    assert runs() == 1 and caught.value.returncode is None and not caught.value.crashed
+
+    (tmp_path / "runs.txt").unlink()
+    args, runs = fake_tool(tmp_path, crashes=99)
+    cancel = threading.Event()
+    real = engine.run_tool
+
+    def cancel_after_the_crash(*a, **k):
+        try:
+            return real(*a, **k)
+        finally:
+            cancel.set()
+
+    monkeypatch.setattr(engine, "run_tool", cancel_after_the_crash)
+    with pytest.raises(Cancelled):
+        engine.run_lilypond(args, tmp_path, cancel)
+    assert runs() == 1
+
+
+def test_render_logs_the_retry_and_retries_only_lilypond(tmp_path, monkeypatch):
+    calls = []
+
+    def tool(args, cwd, *unused, **options):
+        calls.append(args)
+        if "--version" in args:
+            return "GNU LilyPond 2.26.0"
+        if "--worker" in args:
+            raise ToolError("converter died", returncode=-11 if sys.platform != "win32" else 0xC0000005)
+        return ""
+
+    monkeypatch.setattr(engine, "run_tool", tool)
+    with pytest.raises(ToolError, match="converter died"):
+        render(demo_project().notation(), tmp_path / "a", tmp_path / "lilypond")
+    assert len(calls) == 2                                   # the converter is not retried
+
+    calls.clear()
+
+    def crash_once(args, cwd, *unused, **options):
+        calls.append(args)
+        if "--version" in args:
+            return "GNU LilyPond 2.26.0"
+        if "--worker" in args:
+            return ""
+        if len(calls) == 3:
+            raise ToolError("Interpreting music...", returncode=-11 if sys.platform != "win32" else 0xC0000005,
+                            output="Interpreting music...")
+        (cwd / "score.pdf").write_bytes(b"%PDF")
+        return "Success"
+
+    monkeypatch.setattr(engine, "run_tool", crash_once)
+    result = render(demo_project().notation(), tmp_path / "b", tmp_path / "lilypond")
+    assert len(calls) == 4 and calls[2] == calls[3]
+    assert "已自動重試" in result.log and "已自動重試" in (tmp_path / "b/render.log").read_text(encoding="utf-8")

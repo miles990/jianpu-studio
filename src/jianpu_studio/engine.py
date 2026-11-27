@@ -20,7 +20,17 @@ from .model import atomic_write
 
 
 class ToolError(RuntimeError):
-    pass
+    """``returncode`` is the exit status of a tool that ran and failed (None for a timeout, a
+    cancel or a failure found afterwards); ``output`` is everything it printed."""
+
+    def __init__(self, message: str = "", *, returncode: int | None = None, output: str = ""):
+        super().__init__(message)
+        self.returncode = returncode
+        self.output = output
+
+    @property
+    def crashed(self) -> bool:
+        return self.returncode is not None and crashed_silently(self.returncode, self.output)
 
 
 class Cancelled(ToolError):
@@ -110,9 +120,39 @@ def run_tool(args: list[str], cwd: Path, cancel: threading.Event, timeout: float
             terminate_tree(process)
             process.communicate()
     text = output.decode("utf-8", errors="replace")
-    if process.returncode:
-        raise ToolError(text[-16000:] or tr("工具結束碼：{code}").format(code=process.returncode))
+    code = process.returncode
+    if code:
+        status = tr("工具結束碼：{code}").format(code=exit_code_text(code))
+        if crashed_silently(code, text):
+            status = tr("工具意外結束，沒有回報錯誤（結束碼 {code}）。").format(code=exit_code_text(code))
+        # The tool's own text stays first: the status bar and the message box show its start.
+        raise ToolError((text[-16000:].rstrip() + "\n\n" if text.strip() else "") + status, returncode=code, output=text)
     return text
+
+
+def exit_code_text(code: int) -> str:
+    """An exit status as people search for it: 0xC0000005 on Windows, -11 (SIGSEGV) elsewhere."""
+    if os.name == "nt":
+        return str(code) if 0 <= code <= 255 else f"0x{code & 0xFFFFFFFF:08X}"
+    if code < 0:
+        try:
+            return f"{code} ({signal.Signals(-code).name})"
+        except ValueError:
+            pass
+    return str(code)
+
+
+def crashed_silently(code: int, output: str) -> bool:
+    """True when a tool died of a native fault and printed no error of its own.
+
+    Windows reports a fault as an NTSTATUS error (0xC0000005 access violation, 0xC0000409, …);
+    elsewhere the process is ended by a fault signal (not by someone's kill). A tool that
+    explains itself ("error:") did not crash silently, whatever its status."""
+    if os.name == "nt":
+        native = 0xC0000000 <= (code & 0xFFFFFFFF) <= 0xCFFFFFFF
+    else:
+        native = -code in [getattr(signal, name, None) for name in ("SIGSEGV", "SIGBUS", "SIGABRT", "SIGILL", "SIGFPE")]
+    return native and not re.search(r"\berror\b", output, re.I)
 
 
 def worker_command(*args: str) -> list[str]:
@@ -145,6 +185,32 @@ def lilypond_env() -> dict:
     env.pop("LANGUAGE", None)
     env["LC_MESSAGES"] = "C"
     return env
+
+
+# Measured on windows-2022 runners: an affected score crashed in up to 24 % of single runs, and
+# one render needed two retries. Three keep a wrong failure near 0.3 % even for such a score.
+CRASH_RETRIES = 3
+
+
+def run_lilypond(args: list[str], cwd: Path, cancel: threading.Event, timeout: float = 120) -> str:
+    """Run LilyPond; run it again when it crashed without reporting anything.
+
+    LilyPond 2.26.0 for Windows sometimes dies of an access violation (0xC0000005) while
+    interpreting a score that the same program, given the same file again, then sets correctly.
+    Only that signature is retried, at most CRASH_RETRIES times: never a reported LilyPond
+    error, a timeout or a cancel. Each retry is written to the log.
+    """
+    notes = ""
+    for attempt in range(CRASH_RETRIES + 1):
+        try:
+            return notes + run_tool(args, cwd, cancel, timeout=timeout, env=lilypond_env())
+        except ToolError as exc:
+            if not exc.crashed or attempt == CRASH_RETRIES:
+                if notes and not isinstance(exc, Cancelled):
+                    exc.args = (notes + str(exc),)
+                raise
+            notes += tr("排譜引擎意外結束（結束碼 {code}），已自動重試。").format(code=exit_code_text(exc.returncode)) + "\n"
+    raise AssertionError("unreachable")
 
 
 def validate_source(source: str) -> None:
@@ -209,8 +275,8 @@ def render(source: str, output: Path, lilypond: Path,
             raise ToolError(error.read_text(encoding="utf-8")) from None
         raise
     output_option = "--pdf" if create_pdf else "-dno-print-pages"
-    log += run_tool([str(lilypond), "-dno-point-and-click", output_option, "-o", str(output / "score"),
-                     str(output / "score.ly")], output, cancel, timeout=120, env=lilypond_env())
+    log += run_lilypond([str(lilypond), "-dno-point-and-click", output_option, "-o", str(output / "score"),
+                         str(output / "score.ly")], output, cancel)
     pdf = output / "score.pdf"
     if create_pdf and not pdf.is_file():
         raise ToolError(tr("排譜引擎未產生 PDF。") + "\n" + log[-12000:])
