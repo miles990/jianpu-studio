@@ -308,6 +308,29 @@ def test_workspace_controls_reachable_at_supported_sizes(window, size):
     assert window.notes.viewport().height() >= 100
 
 
+def test_undo_to_the_saved_state_discards_the_recovery_copy(window, qtbot, tmp_path, monkeypatch):
+    """Review 3 #16: after undoing back to the saved file, a crash must not bring the undone
+    title back through recovery."""
+    from jianpu_studio.model import save_project
+    path = tmp_path / "曲 一.jps"
+    save_project(path, Project(Score(title="原名", notes=[Note(1)] * 4)))
+    window.open_file(path=path)
+    window.title_field.setText("取消的修改")
+    window.title_field.editingFinished.emit()
+    window.capture_fields()
+    assert window.dirty and window.project.score.title == "取消的修改"
+    window.write_recovery()
+    assert load_project(window.recovery_path).score.title == "取消的修改"
+    window.undo()
+    assert window.project.score.title == "原名" and not window.dirty
+    window.write_recovery()                                   # the next autosave tick
+    assert not window.recovery_path.exists() and not window.recovery_path.with_suffix(".path").exists()
+    window.redo()                                             # editing again saves recovery again
+    assert window.dirty
+    window.write_recovery()
+    assert load_project(window.recovery_path).score.title == "取消的修改"
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("output", ["export-pdf", "export-midi", "open-pdf"])
 def test_an_automatic_draft_preview_never_skips_the_draft_question(window, qtbot, monkeypatch, tmp_path, output):

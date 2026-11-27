@@ -145,10 +145,12 @@ class EditActions(NotationActions):
         self.sync(selection=rows, current=current)
 
     def mark_saved_state(self):
-        """Undo/redo back to what was last saved (or opened) is not 「已修改」."""
+        """Undo/redo back to what was last saved (or opened) is not 「已修改」, and the recovery
+        copy of the undone edits goes too (else a crash would bring them back)."""
         saved = getattr(self, "saved_project", None)
         if saved is not None and self.project == saved:
             self.dirty = False
+            self.clear_recovery()
 
     def redo(self):
         if not self.future or (self.task and self.task_blocks_edit):
