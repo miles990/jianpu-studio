@@ -176,6 +176,13 @@ _OTTAVA_MIDI = {"\\jsOttavaUp": "\\transposition c''", "\\jsOttavaDown": "\\tran
 
 
 _SEGNO_BEFORE_KEY = re.compile(r"\\repeat segno (\d+) \{ (\\transpose \S+ \S+ \{)")
+_STRINGS = re.compile(r'("(?:[^"\\]|\\.)*")')
+
+
+def _without_bar_checks(text: str) -> str:
+    """``text`` with its bar checks (`` | ``, outside strings) removed."""
+    return "".join(piece if index % 2 else re.sub(r"(?<=\s)\|(?=\s)", " ", piece)
+                   for index, piece in enumerate(_STRINGS.split(text)))
 
 
 def midi_rewrite(ly: str) -> str:
@@ -185,10 +192,17 @@ def midi_rewrite(ly: str) -> str:
     MIDI staff's key wrapper ``\\transpose c X {``; the jump's closing brace then closes the
     key wrapper instead, and every bar after the D.C. joined the repeated body (played on
     both passes). Opening the key wrapper first restores the nesting the braces were written for.
+
+    With a pickup, unfolding a repeat or Segno that starts on it replays the pickup where a bar
+    begins, so every later bar check fails ("bar check failed at: 1/4") although the timing is
+    right. Bar checks mean nothing to MIDI (the printed staff keeps them), so a MIDI staff with a
+    pickup drops them.
     """
     twins = "|".join(sorted(symbols.midi_twins(), key=len, reverse=True))
     def fix(match):
         text = _SEGNO_BEFORE_KEY.sub(r"\2 \\repeat segno \1 {", match.group(0))
+        if "\\partial" in text:
+            text = _without_bar_checks(text)
         for word, replacement in _OTTAVA_MIDI.items():
             text = text.replace(word, replacement)
         return re.sub(r"\\(" + twins + r")(?![A-Za-z])", r"\\\1Midi", text) if twins else text

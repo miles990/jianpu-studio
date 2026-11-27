@@ -133,3 +133,40 @@ def test_a_short_title_prints_on_one_line_at_its_size(tmp_path, lilypond):  # no
     title = [item for item in items if item[0] == "text" and item[1] == "賽馬"]
     composer = [item for item in items if item[0] == "text" and item[1] == "黃海懷 曲"]
     assert len(title) == 1 and len(composer) == 1 and title[0][4] > composer[0][4]
+
+
+# ---------------------------------------------------------------- 24. structure over a pickup
+PICKUP_CASES = {   # (score, pitches of part 1 in playing order: a quarter pickup C, then whole notes)
+    "repeat from the pickup": (bars({0: ("bar.repeat_start",)}, {1: ("bar.repeat_end",)}, parts=1, pickup=48),
+                               [60, 62, 60, 62, 64]),
+    "repeat from the pickup, two parts": (bars({0: ("bar.repeat_start",)}, {1: ("bar.repeat_end",)}, pickup=48,
+                                               with_staff=True), [60, 62, 60, 62, 64]),
+    "implicit repeat over the pickup": (bars(ends={1: ("bar.repeat_end",)}, parts=1, pickup=48), [60, 62, 60, 62, 64]),
+    "Segno on the pickup": (bars({0: ("nav.segno",)}, {2: ("nav.ds",)}, n=4, parts=1, pickup=48),
+                            [60, 62, 64, 60, 62, 64, 65]),
+    "Segno on the pickup, two parts": (bars({0: ("nav.segno",)}, {2: ("nav.ds",)}, n=4, pickup=48),
+                                       [60, 62, 64, 60, 62, 64, 65]),
+    "D.C. with a pickup, two parts": (bars(ends={2: ("nav.dc",)}, n=4, pickup=48), [60, 62, 64, 60, 62, 64, 65]),
+    "repeat and endings over the pickup": (bars({0: ("bar.repeat_start",), 2: ("volta.1",), 3: ("volta.2",)},
+                                                {1: ("bar.repeat_end",), 3: ("volta.end",)}, n=5, pickup=48),
+                                           [60, 62, 64, 60, 62, 65, 67]),
+}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", list(PICKUP_CASES))
+def test_a_structure_over_a_pickup_typesets_without_bar_check_warnings(name, tmp_path, lilypond):  # noqa: F811
+    from jianpu_studio import smf
+    score, pitches = PICKUP_CASES[name]
+    assert score.notation_error() is None, name
+    result = render(Project(score).notation(), tmp_path.resolve(), lilypond, create_pdf=True)
+    assert no_warnings(result) == [], name
+    notes = [n for n in smf.read(result.midi.read_bytes())[0] if n.track == 1]
+    assert [n.pitch for n in notes] == pitches
+    beat = 60 / score.tempo
+    starts = [round(n.start / beat, 3) for n in notes]
+    beats = [1 if pitch == 60 else 4 for pitch in pitches]            # the pickup is a quarter
+    assert starts == [sum(beats[:k]) for k in range(len(beats))], starts   # back to back, in order
+    ly = result.lilypond.read_text(encoding="utf-8")
+    printed = ly.split("% === BEGIN JIANPU STAFF ===")[1].split("% === END JIANPU STAFF ===")[0]
+    assert " | " in printed                                           # the printed staff keeps its bar checks
