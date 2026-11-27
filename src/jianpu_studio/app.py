@@ -877,11 +877,14 @@ class MainWindow(EditActions, QMainWindow):
         try:
             source = self.project.notation()
         except ValueError as exc:
-            self.drop_pending_output()
-            self.preview_status.setText(str(exc))
-            if manual:
-                self.error(tr("請先完成樂譜"), exc)
-            return
+            # An unfinished repeat/jump can still print as a draft (asked first).
+            source = self.draft_notation(manual) if self.unfinished_structure() else None
+            if source is None:
+                self.drop_pending_output()
+                self.preview_status.setText(str(exc))
+                if manual and not self.unfinished_structure():
+                    self.error(tr("請先完成樂譜"), exc)
+                return
         lilypond = self.current_tool("lilypond")
         if not lilypond:
             self.drop_pending_output()
@@ -928,6 +931,45 @@ class MainWindow(EditActions, QMainWindow):
         self.start_task(tr("正在準備列印 PDF；可繼續編輯…") if create_pdf else tr("正在準備 MIDI 試聽資料…"), job, complete, manual, blocks_edit=False, revision=revision)
         if self.task:
             self.task.creates_pdf = create_pdf
+
+    def unfinished_structure(self):
+        """The first repeat/jump problem when it is the only thing keeping the score from print."""
+        score = self.project.score
+        if self.project.mode != "visual" or score.rhythm_error() or score.edit_error():
+            return None
+        from .notation_rules import structure_problems
+        problems = structure_problems(score)
+        return problems[0] if problems else None
+
+    def draft_notation(self, manual):
+        """A draft print of an unfinished repeat/jump: asked once per version when the user asked
+        for output; the signs print as they stand and nothing repeats or jumps."""
+        problem = self.unfinished_structure()
+        if problem is None:
+            return None
+        if manual and getattr(self, "_draft_ok", None) != self.revision:
+            if not self.confirm_draft(problem):
+                self.goto_place(0, problem.row, problem.bar)
+                self.statusBar().showMessage(str(problem), 10000)
+                return None
+            self._draft_ok = self.revision
+        self.statusBar().showMessage(tr("草稿：反覆／跳躍還沒完成，記號照樣印出，但不反覆、不跳躍（試聽與 MIDI 也是）。"), 10000)
+        try:
+            return self.project.notation(draft=True)
+        except ValueError:
+            return None
+
+    def confirm_draft(self, problem) -> bool:
+        """Tests replace this method."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("反覆／跳躍還沒完成"))
+        box.setText(tr("{problem}\n\n要先印成草稿嗎？記號會照樣印出，但樂曲不會反覆或跳躍（試聽與 MIDI 也一樣）。").format(
+            problem=problem))
+        draft = box.addButton(tr("印成草稿"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(tr("先去完成"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return box.clickedButton() is draft
 
     def drop_pending_output(self):
         """A failed or impossible render: nothing will play or export, so the transport
@@ -1052,7 +1094,10 @@ class MainWindow(EditActions, QMainWindow):
                 self.play_map = PlayMap(self.project.score, self.part, order)
             except Exception:
                 self.play_map = None   # position display is optional: never block playback
-            if note:
+            if not note and order is not None and self.jump_with_repeats():
+                note = tr("試聽：D.C./D.S. 回頭那一遍會再奏一次中間的反覆（和匯出的 MIDI 相同；印出的譜不受影響）。")
+                self.statusBar().showMessage(note, 8000)
+            elif note:
                 self.statusBar().showMessage(note, 8000)
                 self.toast.show_text(note)
             start = 0.0
@@ -1097,6 +1142,12 @@ class MainWindow(EditActions, QMainWindow):
             return None, None, ""
         notice = "" if structured else tr("反覆或跳躍記號還沒完成，這次試聽依書寫順序播放（不反覆、不跳躍）。")
         return path, order, notice
+
+    def jump_with_repeats(self) -> bool:
+        from .notation_rules import bar_items
+        items = bar_items(self.project.score)
+        ends = {i for _, e in items for i in e}
+        return bool(ends & {"nav.dc", "nav.ds"}) and bool(ends & {"bar.repeat_end", "bar.repeat_both"})
 
     def stop_playback(self):
         self.player.stop()

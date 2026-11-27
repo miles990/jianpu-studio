@@ -166,10 +166,26 @@ def macro_names() -> list[str]:
     return sorted({name for s in SYMBOLS.values() for name in s.macros})
 
 
+# A draft print of an unfinished repeat/ending/jump (export ``draft``): the signs are printed as
+# they stand -- bar lines, ending brackets, texts -- without any repeat or jump structure, so
+# the score typesets while it is being built (and MIDI plays it as written).
+_DRAFT_LABELS = {"One": ("1.", "1."), "Two": ("2.", "2."), "Three": ("3.", "3."), "Four": ("4.", "4."),
+                 "Jie": ("結", "结")}
+# ``jsDraftVoltaX`` opens a bracket; ``jsDraftVoltaXNext`` closes the one before it at the same
+# moment (two separate \\set at one moment would overwrite each other).
+DRAFT_MACROS = {
+    **{f"jsDraftVolta{name}": tuple(f"\\set Score.repeatCommands = #'((volta \"{label}\"))" for label in labels)
+       for name, labels in _DRAFT_LABELS.items()},
+    **{f"jsDraftVolta{name}Next": tuple(f"\\set Score.repeatCommands = #'((volta #f) (volta \"{label}\"))"
+                                        for label in labels) for name, labels in _DRAFT_LABELS.items()},
+    "jsDraftVoltaEnd": "\\set Score.repeatCommands = #'((volta #f))",
+}
+
+
 def source_words() -> frozenset[str]:
     """``\\name`` words a jianpu source may contain: 0.3.x words, built-in dynamics and every
     word the registry exports or defines. MIDI-only twins are not included."""
-    names = set(V1_WORDS) | SOURCE_BUILTINS | set(macro_names())
+    names = set(V1_WORDS) | SOURCE_BUILTINS | set(macro_names()) | set(DRAFT_MACROS)
     for s in SYMBOLS.values():
         names |= set(re.findall(r"\\([A-Za-z]+)", s.export))
     return frozenset(names)
@@ -205,6 +221,8 @@ def prelude(variant: str = "tc", parts: int = 1) -> str:
                 out.append(f"{name} = {text}")
     for s in SYMBOLS.values():
         out.extend(f"{name} = {definition}" for name, definition in s.midi.items())
+    for name, definition in DRAFT_MACROS.items():
+        out.append(f"{name} = {definition if isinstance(definition, str) else definition[variant == 'sc']}")
     out.append("%% ---- end prelude ----")
     return "\n".join(out) + "\n"
 

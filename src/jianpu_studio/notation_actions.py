@@ -200,7 +200,7 @@ class NotationActions:
             (tr("合併三連音為首音"), lambda: self.triplet_action(True)),
             (tr("連音線／連弓線"), lambda: self.quick_notation(ranges={"slur": "add"})),
             (tr("延音線（相同音高）"), lambda: self.quick_notation(ranges={"tie": "add"})),
-            (tr("延長記號 𝄐"), lambda: self.quick_notation({"articulation": "fermata"})),
+            (tr("延長記號"), lambda: self.quick_notation({"articulation": "fermata"})),
             (tr("漸強 ＜"), lambda: self.quick_notation(ranges={"hairpin": "crescendo"})),
             (tr("漸弱 ＞"), lambda: self.quick_notation(ranges={"hairpin": "diminuendo"})),
         ):
@@ -242,7 +242,7 @@ class NotationActions:
         options = {
             "dynamic": (0, tr("力度"), [(tr("無"), "")] + [(s, s) for s in ("ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sfz")]),
             "articulation": (0, tr("演奏記號"), [(tr("無"), ""), (tr("跳音 ·"), "staccato"), (tr("保持音 —"), "tenuto"), (tr("重音 >"), "accent"),
-                (tr("延長記號 𝄐"), "fermata"), (tr("顫音 tr"), "trill"), (tr("波音"), "mordent"), (tr("換氣"), "breathe"),
+                (tr("延長記號"), "fermata"), (tr("顫音 tr"), "trill"), (tr("波音"), "mordent"), (tr("換氣"), "breathe"),
                 (tr("迴音"), "turn"), (tr("強重音 ∧"), "marcato"), (tr("極短奏"), "staccatissimo"), (tr("泛音 ○"), "harmonic")]),
             "finger": (2, tr("指法"), [(tr("無"), -1), (tr("空弦 0"), 0)] + [(tr("{n} 指").format(n=i), i) for i in range(1, 5)]),
             "bow": (2, tr("弓法"), [(tr("無"), ""), (tr("推弓 ∨"), "upbow"), (tr("拉弓 Π"), "downbow")]),

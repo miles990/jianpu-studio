@@ -154,3 +154,86 @@ def test_an_unfinished_jump_is_listed_with_a_one_click_counterpart(window):
     window.fix_problem()
     assert window.project.score.notation_error() is None
     assert "nav.ds" in window.project.score.notes[-1].bar_end
+
+
+@pytest.mark.parametrize("size", [(1380, 850), (1000, 630)])
+@pytest.mark.parametrize("language", ["zh_TW", "zh_CN"])
+def test_no_palette_name_is_clipped(window, size, language):
+    from jianpu_studio import i18n
+    from jianpu_studio.palette import LABEL_MIN_PX
+    previous = i18n.current_language()
+    i18n.set_language(language)
+    try:
+        window.resize(*size)
+        window.palette.set_instrument("all", save=False)
+        QApplication.processEvents()
+        grid = window.palette.grid
+        grid.relayout()
+        cells = [e for e in grid.entries if e.kind in ("cell", "chip")]
+        assert len(cells) > 100
+        clipped = [e.text for e in cells if grid.label_fit(e)[0] < LABEL_MIN_PX]
+        assert clipped == []
+    finally:
+        i18n.set_language(previous)
+
+
+def unfinished_score():
+    from dataclasses import replace
+    notes = [Note(k % 7 + 1, duration=1) for k in range(8)]
+    notes[1] = replace(notes[1], bar_start=("bar.repeat_start",))
+    notes[2] = replace(notes[2], bar_start=("nav.segno",))
+    notes[4] = replace(notes[4], bar_end=("nav.tocoda",))
+    return Score(key="D", notes=notes)
+
+
+def test_an_unfinished_structure_exports_as_a_draft_of_plain_signs():
+    score = unfinished_score()
+    assert score.notation_error() and score.edit_error() is None
+    with pytest.raises(ValueError):
+        score.to_jianpu()
+    text = score.to_jianpu(draft=True)
+    assert '\\bar ".|:" 2' in text and "\\jsSegnoSign 3" in text and "\\jsToCodaText" in text
+    assert "R{" not in text and "Segno" not in text.replace("jsSegnoSign", "") and "ToCoda " not in text
+
+
+@pytest.mark.integration
+def test_draft_print_renders_without_warnings_and_plays_as_written(tmp_path):
+    import threading
+
+    from jianpu_studio import smf
+    from jianpu_studio.engine import find_tool, render
+    lilypond = find_tool("lilypond")
+    if not lilypond:
+        pytest.skip("JIANPU_LILYPOND not configured")
+    from dataclasses import replace
+    score = unfinished_score()
+    notes = score.parts[0].notes
+    notes[5] = replace(notes[5], bar_start=("volta.1",))
+    notes[6] = replace(notes[6], bar_start=("volta.2",), bar_end=("volta.end",))
+    result = render(Project(score).notation(draft=True), tmp_path.resolve(), lilypond.resolve(), threading.Event())
+    assert [line for line in result.log.splitlines() if "warning" in line.lower()] == []
+    assert len(smf.read(result.midi.read_bytes())[0]) == 8                  # no repeat, no jump
+
+
+def test_print_asks_before_a_draft_and_goes_to_the_problem_on_no(window, monkeypatch):
+    window.reset(Project(unfinished_score()))
+    answers = []
+    monkeypatch.setattr(window, "confirm_draft", lambda problem: answers.append(str(problem)) or False)
+    assert window.draft_notation(True) is None and answers and "尚未完成" in answers[0]
+    monkeypatch.setattr(window, "confirm_draft", lambda problem: True)
+    assert "\\jsSegnoSign" in window.draft_notation(True)
+
+
+def test_canvas_header_line_shows_first_note_tempo_words_like_the_print(window):
+    window.reset(Project(Score(key="Bb", notes=[Note(1, text="中速 稍自由")] + [Note(2)] * 7)))
+    QApplication.processEvents()
+    meta = [block[1] for block in window.notes.header_blocks if "1 =" in block[1]][0]
+    assert "♭B" in meta and "中速 稍自由" in meta
+    assert window.notes.part_labels[0][0] is None                         # not also above the note
+    window.reset(Project(Score(notes=[Note(1, text="主音")] + [Note(2)] * 7)))
+    QApplication.processEvents()
+    assert window.notes.part_labels[0][0] is not None                     # a label stays on its note
+
+
+def test_searching_huanba_leads_to_the_position_marks():
+    assert [s.id for s in symbols_ui.search("換把")][:5] == ["pos.1", "pos.2", "pos.3", "pos.4", "pos.5"]

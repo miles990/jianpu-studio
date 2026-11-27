@@ -97,9 +97,15 @@ def note_head_need(note, graces, variant) -> float:
 class LayoutMixin:
     """Computes ``systems`` and the 0.3.x geometry names the tests and hit-testing use."""
 
+    _header_text = ""      # first-note tempo words shown in the header line (as printed)
+
     def relayout(self):
         s = self.scale
         score = self.score_model.score
+        # As the print: tempo words on the very first note join the header line (export.header_words).
+        from .export import header_words
+        first = score.parts[0].notes[0] if score.parts and score.parts[0].notes else None
+        self._header_text = first.text if first is not None and header_words(first.text) else ""
         variant = score.print_variant
         parts = score.parts
         active = self.score_model.part
@@ -358,7 +364,7 @@ class LayoutMixin:
             a, b = ranges[bar]
             for r in range(a, b):
                 note = notes[r]
-                has_text = has_text or bool(note.text)
+                has_text = has_text or (bool(note.text) and not (part == 0 and r == 0 and self._header_text))
                 above, left, right, below = _marks_by_place(note)
                 base = 22 + 6 * max(0, note.octave)
                 if r in under_arc:
@@ -442,8 +448,8 @@ class LayoutMixin:
         out, row_ends = {}, {}
         for (p, r), (_, _, left, right) in sorted(spans.items()):
             text = part_notes[p][r].text
-            if not text:
-                continue
+            if not text or (p, r) == (0, 0) and self._header_text:
+                continue        # tempo words on the first note print in the header line
             graces = self.part_graces[p][r]
             prefix = (14 * len(graces[0]) + 16) * s if graces[0] else 0
             ornament = sum((14 * len(group) + 16) * s for group in graces if group)
@@ -509,7 +515,8 @@ class LayoutMixin:
         small = QFont(ui_font_family())
         small.setPixelSize(max(7, int(12 * s)))
         from .model import key_label
-        meta = f"1 = {key_label(score.key)}    {score.meter}    ♩ = {score.tempo}"
+        words = self._header_text
+        meta = f"1 = {key_label(score.key)}    {score.meter}    " + (f"{words}    " if words else "") + f"♩ = {score.tempo}"
         line_top = y
         bottom = y + QFontMetrics(small).height()
         if score.composer:

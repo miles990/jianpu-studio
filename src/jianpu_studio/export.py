@@ -141,6 +141,8 @@ def note_words(note, ctx: dict) -> list[str]:
     reg = symbols.SYMBOLS
     first_part = ctx.get("part", 0) == 0
     starts_bar, ends_bar = ctx.get("bar_start", note.bar_start), ctx.get("bar_end", note.bar_end)
+    if ctx.get("draft"):
+        return _draft_words(note, ctx)
     w: list[str] = []
     if ctx.get("implicit_repeat"):
         w.append("R{")      # a lone :‖ repeats from the beginning (nothing printed at the start)
@@ -225,6 +227,48 @@ def note_words(note, ctx: dict) -> list[str]:
     return w
 
 
+_DRAFT_VOLTA = {"volta.1": "\\jsDraftVoltaOne", "volta.2": "\\jsDraftVoltaTwo", "volta.3": "\\jsDraftVoltaThree",
+                "volta.4": "\\jsDraftVoltaFour"}
+_DRAFT_END = {"nav.tocoda": "nav.tocoda_text", "nav.ds": "nav.ds_text", "nav.dc": "nav.dc_text", "nav.fine": "nav.fine_text"}
+
+
+def _draft_words(note, ctx) -> list[str]:
+    """``note_words`` for a draft print: every repeat, ending and jump is printed as a plain
+    sign (bar line glyph, bracket, text) and none of them repeats or jumps."""
+    reg = symbols.SYMBOLS
+    first_part = ctx.get("part", 0) == 0
+    starts, ends = ctx.get("bar_start", ()), ctx.get("bar_end", ())
+    pre = []
+    for item in starts:
+        if item == "bar.repeat_start":
+            pre += ["\\bar", '".|:"']
+        elif item in _DRAFT_VOLTA and first_part:
+            word = "\\jsDraftVoltaJie" if "volta.final" in starts else _DRAFT_VOLTA[item]
+            pre.append(word + ("Next" if ctx.get("volta_open") else ""))
+        elif item == "nav.segno" and first_part:
+            pre.append(reg["nav.segno_sign"].bar_word())
+        elif item not in ("volta.final",) and item not in _DRAFT_VOLTA and item != "nav.segno" \
+                and first_part and reg[item].print_only:
+            pre.append(reg[item].bar_word())
+    plain = dict(ctx, draft=False, bar_start=(), bar_end=(), implicit_repeat=False)
+    w = pre + note_words(note, plain)
+    for item in ends:
+        if item in symbols.LINE_STYLES and not (item == "bar.final" and ctx.get("last")):
+            if not {"bar.repeat_end", "bar.repeat_both"} & set(ends):
+                w.append(reg[item].bar_word())
+        elif item == "bar.repeat_end":
+            w += ["\\bar", '":|."']
+        elif item == "bar.repeat_both":
+            w += ["\\bar", '":|.|:"']
+        elif item == "volta.end" and first_part:
+            w.append("\\jsDraftVoltaEnd")
+        elif item in _DRAFT_END and first_part:
+            w.append(reg[_DRAFT_END[item]].bar_word())
+        elif item not in _DRAFT_END and item != "volta.end" and first_part and reg[item].print_only:
+            w.append(reg[item].bar_word())
+    return w
+
+
 def effective_bar_items(score) -> list[tuple[tuple, tuple]]:
     """parts[0] bar items with a both-ways repeat split into an end and the next bar's start."""
     items = bar_items(score)
@@ -256,8 +300,9 @@ def implicit_repeat_start(items) -> bool:
     return False
 
 
-def to_jianpu(score) -> str:
-    """Export a validated score (``Score.to_jianpu`` checks it first)."""
+def to_jianpu(score, draft: bool = False) -> str:
+    """Export a validated score (``Score.to_jianpu`` checks it first); ``draft`` prints an
+    unfinished repeat/jump structure as plain signs."""
     from .notation_rules import normalized_parts
     parts = normalized_parts(score)
     lines = [f"title={literal(score.title)}", f"composer={literal(score.composer)}", "NoIndent"]
@@ -269,7 +314,14 @@ def to_jianpu(score) -> str:
         lines.append("WithStaff")
     items = effective_bar_items(score)
     has_jump = any(item in symbols.JUMPS for _, ends in items for item in ends)
-    implicit = implicit_repeat_start(items)
+    implicit = implicit_repeat_start(items) and not draft
+    open_before, is_open = [], False          # a draft ending bracket still open at each bar's start
+    for starts, ends in items:
+        open_before.append(is_open)
+        if any(v in starts for v in _DRAFT_VOLTA):
+            is_open = True
+        if "volta.end" in ends:
+            is_open = False
     for index, part in enumerate(parts):
         if index:
             lines.append("NextPart")
@@ -285,6 +337,7 @@ def to_jianpu(score) -> str:
                 ctx = {"part": index, "has_jump": has_jump, "bar_index": bar, "last": bar == len(ranges) - 1,
                        "implicit_repeat": implicit and bar == 0 and row == start,
                        "head_text": index == 0 and row == 0 and header_words(part.notes[row].text),
+                       "draft": draft, "volta_open": draft and row == start and open_before[bar],
                        "bar_start": starts if row == start else (), "bar_end": ends if row == end - 1 else (),
                        "next_bar_start": next_starts if row == end - 1 else ()}
                 words += note_words(part.notes[row], ctx)

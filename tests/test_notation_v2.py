@@ -67,7 +67,8 @@ def test_registry_is_complete_and_consistent():
 
 def test_source_whitelist_is_generated_from_the_registry():
     words = symbols.source_words()
-    assert words - symbols.V1_WORDS == SPEC_NEW_WORDS
+    # Round 6: plus the draft-print words for an unfinished repeat/ending (app-defined macros).
+    assert words - symbols.V1_WORDS == SPEC_NEW_WORDS | set(symbols.DRAFT_MACROS)
     assert not any(w.endswith("Midi") for w in words)
     validate_source("1=D 4/4\nc5 \\jsErhuInner c6 \\jsSfz \\startTrillSpan c1' \\stopTrillSpan c2'")
     for bad in ("1=D 4/4\nc5 \\jsSfzMidi", "1=D 4/4\nslide=⌒ c5", "1=D 4/4\nFr=1 c5", "c5 \\jsUnknown"):

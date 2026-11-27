@@ -29,7 +29,7 @@ def key_label(key: str) -> str:
     return key
 METERS = ("4/4", "3/4", "2/4", "6/8", "3/8", "2/2", "9/8", "12/8")
 DURATIONS = {1: N_("全音符 · 4 拍"), 2: N_("二分 · 2 拍"), 4: N_("四分 · 1 拍"), 8: N_("八分 · ½ 拍"),
-             16: N_("十六分 · ¼ 拍"), 32: N_("三十二分 · ⅛ 拍")}  # values are catalog sources; show tr(value)
+             16: N_("十六分 · ¼ 拍"), 32: N_("三十二分 · 1/8 拍")}  # values are catalog sources; show tr(value)
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_NOTES = 10000
 MAX_PARTS = 4
@@ -478,16 +478,18 @@ class Score:
             position += step
         return out
 
-    def to_jianpu(self) -> str:
+    def to_jianpu(self, draft: bool = False) -> str:
+        """``draft``: an unfinished repeat/jump structure is printed as plain signs instead of
+        refusing (the user confirmed a draft print)."""
         self.validate()
         if not self.notes:
             raise ValueError(tr("請先加入音符。"))
         if error := self.rhythm_error():
             raise ValueError(error)
-        if error := self.notation_error():
+        if error := (self.edit_error() if draft else self.notation_error()):
             raise ValueError(error)
         from .export import to_jianpu
-        return to_jianpu(self)
+        return to_jianpu(self, draft)
 
     def to_dict(self) -> dict:
         from .notation_rules import normalized_parts
@@ -550,11 +552,11 @@ class Project:
         except (KeyError, TypeError, AttributeError) as exc:
             raise ValueError(tr("專案資料不完整或欄位格式錯誤。")) from exc
 
-    def notation(self) -> str:
+    def notation(self, draft: bool = False) -> str:
         """jianpu-ly text for the engine; visual scores carry their print options in a comment."""
         if self.mode != "visual":
             return self.source
-        text = self.score.to_jianpu()
+        text = self.score.to_jianpu(draft)
         options = render_options(self.score)
         return (directive(options) + text) if options else text
 

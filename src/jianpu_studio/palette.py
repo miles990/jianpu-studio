@@ -40,6 +40,7 @@ INSTRUMENT_NAMES = {"erhu": N_("二胡"), "guzheng": N_("古箏"), "pipa": N_("�
                     "common": N_("通用"), "ruan": N_("中阮"), "hulusi": N_("葫蘆絲"), "yangqin": N_("揚琴"),
                     "all": symbols_ui.ALL_GROUP}  # catalog sources; show tr(value)
 FAVORITES, RECENTS = "favorites", "recents"
+LABEL_MIN_PX = 10           # smallest cell-label type before a name would be clipped
 SECTION_ORDER = (FAVORITES, RECENTS, *CATEGORY_ORDER)
 SECTION_SHORT = {FAVORITES: N_("常用"), RECENTS: N_("最近"), **CATEGORY_SHORT}  # catalog sources; show tr(value)
 STATE_BUDGET = 0.035     # seconds of validation per paint; the rest is computed on the next tick
@@ -285,26 +286,23 @@ class SymbolGrid(QAbstractScrollArea):
         p.save()
         name_color = getattr(c, DISABLED_NAME_ROLE) if disabled else c.text
         font = self.font()
-        if entry.kind == "cell" and rect.height() > 50:
-            glyphs.symbol_preview(p, symbol, QRectF(rect.left(), rect.top() + 2, rect.width(), rect.height() - 22),
-                                  ink, faint, 0.82, self.palette.variant)
-            font.setPixelSize(12)
+        if entry.kind in ("cell", "chip"):
+            if entry.kind == "cell" and rect.height() > 50:
+                glyphs.symbol_preview(p, symbol, QRectF(rect.left(), rect.top() + 2, rect.width(), rect.height() - 22),
+                                      ink, faint, 0.82, self.palette.variant)
+            else:
+                icon_w = 30 if entry.kind == "cell" else 26
+                glyphs.symbol_preview(p, symbol, QRectF(rect.left() + 2, rect.top(), icon_w, rect.height()),
+                                      ink, faint, 0.55 if entry.kind == "chip" else 0.62, self.palette.variant, True)
+            text_rect, align = self.label_rect(entry)
+            size, wrap = self.label_fit(entry)
+            font.setPixelSize(size)
             p.setFont(font)
             p.setPen(name_color)
-            text_rect = QRectF(rect.left() + 3, rect.bottom() - 20, rect.width() - 6, 18)
-            p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter,
-                       QFontMetricsF(font).elidedText(entry.text, Qt.TextElideMode.ElideRight, text_rect.width()))
-        elif entry.kind in ("cell", "chip"):
-            icon_w = 30 if entry.kind == "cell" else 26
-            glyphs.symbol_preview(p, symbol, QRectF(rect.left() + 2, rect.top(), icon_w, rect.height()),
-                                  ink, faint, 0.55 if entry.kind == "chip" else 0.62, self.palette.variant, True)
-            font.setPixelSize(12 if entry.kind == "cell" else 13)
-            p.setFont(font)
-            p.setPen(name_color)
-            right = rect.right() - (16 if entry.key else 6)
-            text_rect = QRectF(rect.left() + icon_w + 4, rect.top(), right - rect.left() - icon_w - 4, rect.height())
-            p.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                       QFontMetricsF(font).elidedText(entry.text, Qt.TextElideMode.ElideRight, text_rect.width()))
+            flags = align | (Qt.TextFlag.TextWordWrap if wrap else Qt.AlignmentFlag(0))
+            text = entry.text if size >= LABEL_MIN_PX or wrap else \
+                QFontMetricsF(font).elidedText(entry.text, Qt.TextElideMode.ElideRight, text_rect.width())
+            p.drawText(text_rect, flags, text)
             if entry.key:
                 small = self.font()
                 small.setPixelSize(11)
@@ -347,6 +345,32 @@ class SymbolGrid(QAbstractScrollArea):
             p.setPen(c.text2)
             p.drawText(QRectF(rect.left() + 4, rect.top() + 2, 30, 14), Qt.AlignmentFlag.AlignLeft, tr("只印"))
         p.restore()
+
+    def label_rect(self, entry):
+        """Where a cell's / chip's name is drawn, and its alignment."""
+        rect = entry.rect
+        if entry.kind == "cell" and rect.height() > 50:
+            return QRectF(rect.left() + 2, rect.bottom() - 21, rect.width() - 4, 20), Qt.AlignmentFlag.AlignCenter
+        icon_w = 30 if entry.kind == "cell" else 26
+        right = rect.right() - (16 if entry.key else 6)
+        return (QRectF(rect.left() + icon_w + 4, rect.top() + 1, right - rect.left() - icon_w - 4, rect.height() - 2),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+    def label_fit(self, entry) -> tuple[int, bool]:
+        """(pixel size, wrap) so the whole name shows: never clipped with … at the default size
+        (design: names are not elided); smaller type first, then two lines where there is room."""
+        text_rect, _ = self.label_rect(entry)
+        base = 13 if entry.kind == "chip" else 12
+        font = self.font()
+        for size in range(base, LABEL_MIN_PX - 1, -1):
+            font.setPixelSize(size)
+            metrics = QFontMetricsF(font)
+            if metrics.horizontalAdvance(entry.text) <= text_rect.width():
+                return size, False
+            if metrics.height() * 2 <= text_rect.height() + 1 and metrics.boundingRect(
+                    text_rect, int(Qt.TextFlag.TextWordWrap), entry.text).height() <= text_rect.height() + 1:
+                return size, True
+        return LABEL_MIN_PX - 1, False
 
     @staticmethod
     def _paint_highlighted(p, rect, text, query, color, accent, font):
