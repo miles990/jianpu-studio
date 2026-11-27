@@ -20,6 +20,24 @@ from .widgets import label, tool
 OCTAVE_NAMES = {-2: N_("倍低音區"), -1: N_("低音區"), 0: N_("中音區"), 1: N_("高音區"), 2: N_("倍高音區")}
 DURATION_NAMES = {1: N_("全音符"), 2: N_("二分音符"), 4: N_("四分音符"), 8: N_("八分音符"), 16: N_("十六分音符"),
                   32: N_("三十二分音符")}  # catalog sources; show tr(value)
+REST_NAMES = {1: N_("全休止符"), 2: N_("二分休止符"), 4: N_("四分休止符"), 8: N_("八分休止符"), 16: N_("十六分休止符"),
+              32: N_("三十二分休止符")}  # catalog sources; show tr(value)
+ACCIDENTAL_WORDS = {"#": N_("升"), "b": N_("降"), "n": N_("還原")}  # read aloud; the canvas draws ♯ ♭ ♮
+
+
+def rest_name(note) -> str:
+    """全休止符, 四分休止符（附點）…"""
+    return tr(REST_NAMES[note.duration]) + (tr("（附點）") if note.dotted else "")
+
+
+def spoken_note(note) -> str:
+    """A note in words for screen readers and tooltips -- never the engine's code (c5, q6'):
+    「升 4，八分音符，高音區」 or 「四分休止符」."""
+    if note.degree == 0:
+        return rest_name(note)
+    sign = tr(ACCIDENTAL_WORDS[note.accidental]) + " " if note.accidental else ""
+    duration = tr(DURATION_NAMES[note.duration]) + (tr("（附點）") if note.dotted else "")
+    return "，".join((sign + str(note.degree), duration, tr(OCTAVE_NAMES[note.octave])))
 
 
 class FlowLayout(QLayout):
@@ -217,7 +235,7 @@ class SelectionInspector(QFrame):
     @staticmethod
     def note_props(note) -> str:
         if note.degree == 0:
-            return tr("休止符 · {duration}").format(duration=tr(DURATION_NAMES[note.duration]) + ("·" if note.dotted else ""))
+            return rest_name(note)
         accidental = {"#": "♯", "b": "♭", "n": "♮"}.get(note.accidental, "")
         duration = tr(DURATION_NAMES[note.duration]) + (tr("（附點）") if note.dotted else "")
         return " · ".join((accidental + str(note.degree), duration, tr(OCTAVE_NAMES[note.octave])))

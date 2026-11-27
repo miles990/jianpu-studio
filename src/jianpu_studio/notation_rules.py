@@ -143,9 +143,15 @@ def _rhythm_error(score) -> str | None:
             target = score.final_bar_targets(position)[0]
             if target != position:
                 last = len(part.notes) - 1
-                return Problem(_part_label(score, index) + tr("最後一小節（{bar}）還缺 {beats} 拍。按「補齊休止符」即可完成。").format(
-                    bar=bar_label(score, score.bar_index(position - 1)), beats=_beats(target - position)),
-                    index, last, score.bar_index(position - 1), ("fill",))
+                bar = score.bar_index(position - 1)
+                if score.pickup and bar == 0:
+                    # Only the pickup is written: what is missing is the bar that completes it.
+                    text = tr("弱起小節後面還缺 {beats} 拍的最後一小節（弱起和最後一小節合起來是一整小節）。"
+                              "按「補齊休止符」即可完成。").format(beats=_beats(target - position))
+                else:
+                    text = tr("最後一小節（{bar}）還缺 {beats} 拍。按「補齊休止符」即可完成。").format(
+                        bar=bar_label(score, bar), beats=_beats(target - position))
+                return Problem(_part_label(score, index) + text, index, last, bar, ("fill",))
     for index, total in enumerate(totals[1:], 1):
         if total != totals[0]:
             shorter = index if total < totals[0] else 0

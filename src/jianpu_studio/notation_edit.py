@@ -646,7 +646,7 @@ def _redundant_reason(score: Score, trial: Score, symbol_id: str) -> str:
     for (bar, sid), same in redundant_signs(bar_items(trial)).items():
         if sid == symbol_id and (bar, sid) not in before:
             if same == "coda":
-                return tr("{bar}開頭已經會自動印出「⊕ Coda」（尾聲從跳回記號的下一小節開始），不用再加 Coda 記號。").format(
+                return tr("{bar}開頭已經會自動印出 Coda 記號（尾聲從跳回記號的下一小節開始），不用再加一個。").format(
                     bar=_bar_label(score, bar))
             return tr("{bar}已經有「{name}」，會印出同樣的記號，不用再加只印的這一個。").format(
                 bar=_bar_label(score, bar), name=symbols.SYMBOLS[same].display_name)

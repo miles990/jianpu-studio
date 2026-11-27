@@ -610,7 +610,11 @@ class MainWindow(EditActions, QMainWindow):
         self.capture_fields()
         if not self.dirty:
             return True
-        answer = QMessageBox.question(self, tr("尚未儲存"), tr("要先儲存目前的樂譜嗎？"), QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Save)
+        name = self.path.name if self.path else (self.project.score.title or tr("未命名樂曲"))
+        answer = QMessageBox.question(
+            self, tr("尚未儲存"), tr("「{name}」有還沒儲存的修改，要先儲存嗎？").format(name=name),
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save)
         if answer == QMessageBox.StandardButton.Save:
             return self.save()
         return answer == QMessageBox.StandardButton.Discard
@@ -692,6 +696,13 @@ class MainWindow(EditActions, QMainWindow):
             self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
             if path.parent.name != "examples":
                 self.remember_recent(path)
+        except FileNotFoundError:
+            self.error(tr("無法開啟樂譜"), tr("找不到這個檔案，可能已經被移動、改名或刪除：\n{path}").format(path=path))
+        except PermissionError:
+            self.error(tr("無法開啟樂譜"), tr("沒有權限讀取這個檔案：\n{path}").format(path=path))
+        except OSError as exc:
+            self.error(tr("無法開啟樂譜"), tr("讀不到這個檔案（{reason}）：\n{path}").format(
+                reason=exc.strerror or type(exc).__name__, path=path))
         except Exception as exc:
             self.error(tr("無法開啟樂譜"), exc)
 

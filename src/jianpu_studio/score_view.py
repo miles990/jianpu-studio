@@ -101,11 +101,13 @@ class ScoreModel(QAbstractListModel):
         note = self._notes[row]
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.AccessibleTextRole,
                     Qt.ItemDataRole.AccessibleDescriptionRole, Qt.ItemDataRole.ToolTipRole):
-            bar = self.bar_of(self.positions[row]) + (0 if self.score.pickup else 1)
+            from .inspector import spoken_note
+            from .notation_rules import bar_label
             marks = describe_marks(note)
             description = "，" + "、".join(marks) if marks else ""
-            return tr("第 {bar} 小節，第 {n} 個音符：{token}，{beats} 拍{description}").format(
-                bar=bar, n=row + 1, token=note.token(), beats=note.beats, description=description)
+            return tr("{bar}，第 {n} 個音符：{pitch}，{beats} 拍{description}").format(
+                bar=bar_label(self.score, self.bar_of(self.positions[row])), n=row + 1, pitch=spoken_note(note),
+                beats=note.beats, description=description)
         if role == Qt.ItemDataRole.UserRole:
             return note
         return None

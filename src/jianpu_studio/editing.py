@@ -182,6 +182,7 @@ class EditActions(NotationActions):
             self.tempo_field.setValue(score.tempo)
             self.staff.setChecked(score.with_staff)
             self._sync_pickup(score)
+            self.palette.key = score.key
             self.notes.set_score(score, part)
             self.notes.select_rows(selection, current)
             if kind == "bars" and bars and not explicit:
@@ -271,7 +272,12 @@ class EditActions(NotationActions):
                 # A note across a bar line is not 'missing beats': filling would not fix it.
                 target = score.final_bar_targets(position)[0]
                 if target != position and ranges:
-                    problems[(p, len(ranges) - 1)] = tr("少 {beats} 拍").format(beats=_beats(target - position))
+                    missing = _beats(target - position)
+                    # Only the pickup is written: it is not short itself; the piece still needs
+                    # the last bar that completes it.
+                    problems[(p, len(ranges) - 1)] = (
+                        tr("後面還缺 {beats} 拍的最後一小節").format(beats=missing) if score.pickup and len(ranges) == 1
+                        else tr("少 {beats} 拍").format(beats=missing))
         for (p, bar), text in sorted(problems.items(), key=lambda item: (item[0][1], item[0][0])):
             bars_flagged.add(bar)
             found.append((p, bar, text, None))
@@ -315,9 +321,8 @@ class EditActions(NotationActions):
             first = found[0] if found else None
             if first and first[3] is None:
                 name = score.parts[first[0]].name if len(score.parts) > 1 else ""
-                text = tr("⚠ {count} 個問題：第 {bar} 小節{part}{what}").format(
-                    count=max(1, len(found)), bar=notation_edit.bar_number(score, first[1]),
-                    part=name, what=first[2])
+                text = tr("⚠ {count} 個問題：{bar}{part}{what}").format(
+                    count=max(1, len(found)), bar=bar_label(score, first[1]), part=name, what=first[2])
             else:
                 text = "⚠ " + error
             self.rhythm_label.setText(text)
@@ -1690,6 +1695,8 @@ class EditActions(NotationActions):
         if target.rows:
             self.notes.flash(target.rows[0])          # landing feedback (colour only, design §4.5)
         text = notice.get("text", "")
+        if sid == "finger.0" and (reminder := self.open_string_reminder(target)):
+            text = (text + " " if text else "") + reminder
         if symbol.storage == "bar":
             # Building a repeat or jump one sign at a time: say what it still needs.
             from .notation_rules import structure_problems
@@ -1700,6 +1707,23 @@ class EditActions(NotationActions):
             self.toast.show_text(text, self.undo)
         self.palette.invalidate()
         return True
+
+    def open_string_reminder(self, target) -> str:
+        """A soft reminder (the mark is applied all the same) when 空弦 0 was put on a note that
+        is not an open string: the tuning written on the first note, else D–A in this key."""
+        from .text_words import open_string_degrees
+        score = self.project.score
+        notes = score.parts[target.part].notes
+        first = score.parts[0].notes[0].text if score.parts[0].notes else ""
+        degrees = open_string_degrees(score.key, first)
+        if not degrees:
+            return ""
+        odd = [row for row in target.rows if row < len(notes) and "finger.0" in notes[row].marks and notes[row].degree
+               and (notes[row].degree not in degrees or notes[row].accidental in ("#", "b"))]
+        if not odd:
+            return ""
+        return tr("提醒：空弦 0 通常標在空弦音（內弦 {inner}、外弦 {outer}），{place}不是空弦音。").format(
+            inner=degrees[0], outer=degrees[1], place=notation_edit._note_place(score, target.part, odd[0]))
 
     @staticmethod
     def symbol_explicit(sid):

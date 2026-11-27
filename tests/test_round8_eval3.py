@@ -232,11 +232,11 @@ def test_a_coda_sign_on_the_automatic_coda_bar_is_refused_with_the_reason(window
     ds_al_coda(window)
     window.notes.select_bars([10])
     state = window.symbol_state("nav.coda_sign")
-    assert not state.available and "⊕ Coda" in state.reason and "第 11 小節" in state.reason
+    assert not state.available and "自動印出 Coda 記號" in state.reason and "第 11 小節" in state.reason
     before = window.project.snapshot()
     window.palette_apply("nav.coda_sign")
     assert window.project == before                                     # nothing added
-    assert window.toast.isVisible() and "⊕ Coda" in window.toast.text.text()
+    assert window.toast.isVisible() and "Coda 記號" in window.toast.text.text()
     # the same sign on another bar is still available (a second ending's coda, a rehearsal sign...)
     window.notes.select_bars([11])
     assert window.symbol_state("nav.coda_sign").available
@@ -251,3 +251,102 @@ def test_a_print_only_twin_of_a_working_sign_is_refused(window):
         assert not state.available and name in state.reason, sid
     window.notes.select_bars([2])                                        # a bar without the working sign
     assert window.symbol_state("nav.tocoda_text").available
+
+
+# ---------------------------------------------------------------- P2: messages
+def test_a_score_that_is_only_a_pickup_never_says_bar_0(window, qtbot):
+    """弱起 on an empty score, one note typed: the pickup is complete; the last bar is missing."""
+    window.reset(Project(Score(pickup=48, notes=[Note(5)])))
+    QApplication.processEvents()
+    status = window.rhythm_label.text()
+    assert "第 0 小節" not in status and "弱起小節" in status and "還缺 3 拍" in status
+    problem = str(window.project.score.rhythm_error())
+    assert "第 0 小節" not in problem and "弱起小節後面還缺 3 拍" in problem
+    window.fix_problem()                                           # 補齊休止符 still completes it
+    assert window.project.score.rhythm_error() is None and len(window.project.score.part_bars(0)) == 2
+
+
+def test_a_missing_file_gets_a_sentence_not_an_errno(window, tmp_path):
+    missing = tmp_path / "不見了 的譜.jps"
+    before = window.project.snapshot()
+    window.open_file(path=missing)
+    assert window.project == before
+    title, text = window.errors[-1]
+    assert title == "無法開啟樂譜" and "找不到這個檔案" in text and str(missing) in text
+    assert "Errno" not in text and "No such file" not in text
+
+
+def test_the_unsaved_question_names_the_file(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda parent, title, text, *a, **k: asked.append(text) or QMessageBox.StandardButton.Cancel)
+    window.reset(demo_project(), tmp_path / "春江 花月夜.jps")
+    window.notes.select_rows([0], 0)
+    mode(window, "edit")
+    window.input_pitch(3)
+    assert window.dirty
+    window.new_project()
+    assert asked and "春江 花月夜.jps" in asked[-1]
+    window.path = None                                             # never saved: the title stands in
+    window.new_project()
+    assert "小星星" in asked[-1]
+
+
+def test_a_whole_bar_rest_is_called_a_whole_rest(window):
+    window.new_from_template("blank")
+    assert window.inspector.props.text() == "全休止符"
+    from jianpu_studio.inspector import rest_name, spoken_note
+    assert rest_name(Note(0, duration=4, dotted=True)) == "四分休止符（附點）"
+    assert spoken_note(Note(4, octave=1, duration=8, accidental="#")) == "升 4，八分音符，高音區"
+
+
+def test_screen_reader_names_have_no_engine_codes(window):
+    notes = [Note(5), Note(6, octave=1, duration=8), Note(1, duration=8, accidental="b"), Note(0, duration=2)]
+    window.reset(Project(Score(pickup=48, notes=notes)))
+    model = window.notes.model()
+    texts = [model.data(model.index(row, 0), Qt.ItemDataRole.AccessibleTextRole) for row in range(len(notes))]
+    assert texts[0].startswith("弱起小節，第 1 個音符：5，四分音符，中音區")
+    assert texts[1].startswith("第 1 小節，第 2 個音符：6，八分音符，高音區")
+    assert "降 1" in texts[2] and "二分休止符" in texts[3]
+    import re
+    for text in texts:
+        assert not re.search(r"[cqsdhwb#]\d|\d'|- -", text), text          # no c5, q6', 1' - - -
+
+
+# ---------------------------------------------------------------- P2: tuning follows the key
+def test_tuning_suggestions_follow_the_key_and_any_tuning_prints_in_the_header(window):
+    from jianpu_studio import symbols_ui
+    from jianpu_studio.export import header_words
+    from jianpu_studio.symbols_ui import TEXT_PREFIX
+    from jianpu_studio.text_words import header_parts, open_string_degrees
+    assert symbols_ui.text_suggestions("定弦", key="Bb")[:2] == ["定弦 3–7", "37弦"]
+    assert symbols_ui.text_suggestions("dingxian", key="G")[:2] == ["定弦 5–2", "52弦"]
+    assert symbols_ui.text_suggestions("定弦", key="D")[:2] == ["定弦 1–5", "15弦"]
+    assert open_string_degrees("F") == (6, 3) and open_string_degrees("E") is None
+    assert header_words("37弦") and header_words("中速 定弦 3–7")
+    assert header_parts("中速 37弦 稍自由") == (["中速", "稍自由"], ["37弦"])
+    # in the window: 1=♭B, search 定弦, the first result is this key's tuning
+    window.reset(Project(Score(key="Bb", notes=[Note(3), Note(5), Note(6), Note(1)])))
+    window.palette.search.setText("定弦")
+    assert window.palette.grid.results[0] == TEXT_PREFIX + "定弦 3–7"
+    window.notes.select_rows([0], 0)
+    window.palette_apply(window.palette.grid.results[0])
+    QApplication.processEvents()
+    meta = [block[1] for block in window.notes.header_blocks if "1 =" in block[1]][0]
+    assert meta.endswith("（定弦 3–7）") and meta.index("2/4" if False else "4/4") < meta.index("♩")
+    assert window.notes.part_labels[0][0] is None                 # not also above the note
+
+
+def test_open_string_zero_on_another_pitch_is_applied_with_a_reminder(window):
+    window.reset(Project(Score(key="Bb", notes=[Note(3), Note(5), Note(7), Note(1)])))
+    mode(window, "edit")
+    window.notes.select_rows([1], 1)                              # 5 is not an open string in 1=♭B (3 and 7)
+    window.palette_apply("finger.0")
+    assert "finger.0" in window.project.score.notes[1].marks      # applied: only a reminder
+    text = window.toast.text.text()
+    assert "空弦" in text and "內弦 3" in text and "外弦 7" in text and "第 1 小節" in text
+    window.notes.select_rows([0], 0)                              # 3 is the inner string: no reminder
+    window.palette_apply("finger.0")
+    assert "finger.0" in window.project.score.notes[0].marks
+    assert not (window.toast.isVisible() and "空弦" in window.toast.text.text())
