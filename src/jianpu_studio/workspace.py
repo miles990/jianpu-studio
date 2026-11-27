@@ -445,8 +445,8 @@ def _notebar(self, column):
     self.dot_button.clicked.connect(lambda: self.note_command("dot"))
     row.addWidget(self.dot_button)
     row.addSpacing(4)
-    self.octave_up_button = tool("", "octave-up", tr("高八度（↑）"), name="octave_up_button")
-    self.octave_down_button = tool("", "octave-down", tr("低八度（↓）"), name="octave_down_button")
+    self.octave_up_button = tool("", "octave-up", tr("高八度（↑）"), name="octave_up_button", checkable=True)
+    self.octave_down_button = tool("", "octave-down", tr("低八度（↓）"), name="octave_down_button", checkable=True)
     for control, command in ((self.octave_up_button, "raise"), (self.octave_down_button, "lower")):
         control.setFixedSize(30, 30)
         control.clicked.connect(lambda checked=False, c=command: self.note_command(c))

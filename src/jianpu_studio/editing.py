@@ -34,6 +34,7 @@ from .notation_actions import NotationActions
 from .notation_rules import bar_label
 
 NEW_SCORE_STAFF_SIZE = 24
+PENDING_OCTAVES = {2: N_("高兩八度"), 1: N_("高八度"), -1: N_("低八度"), -2: N_("低兩八度")}
 
 NOTE_MIME = "application/x-jianpu-studio-notes"
 PICKUP_NAMES = {48 * 4: N_("全音符"), 96: N_("二分"), 144: N_("附點二分"), 48: N_("四分"), 72: N_("附點四分"),
@@ -518,6 +519,7 @@ class EditActions(NotationActions):
             self.inspector_loading = False
         self._sync_note_bar(values, editing, rows)
         self.selection_label.setText(self.context_hint(mode, rows))
+        self.selection_label.setToolTip(self.selection_label.text())
         if hasattr(self, "measure_controls"):
             measures = self.selected_measures()
             visual = self.project.mode == "visual"
@@ -536,11 +538,18 @@ class EditActions(NotationActions):
         for value, button in self.duration_buttons.items():
             button.setChecked(len(durations) == 1 and value in durations)
             button.setEnabled(not editing or bool(rows))
-        dotted = {n.dotted for n in values}
+        # ↑ ↓ . ♯ ♭ ♮ act on the selected notes in every mode; with none to act on (新增／填寫)
+        # they prepare the next note, and the buttons show that one-note state.
+        notes = self.part_notes()
+        dot_rows, pitch_rows = self.modifier_rows("dot"), self.modifier_rows("accidental")
+        dotted = {notes[r].dotted for r in dot_rows} if dot_rows else {n.dotted for n in values}
         self.dot_button.setChecked(dotted == {True})
-        accidentals = {n.accidental for n in values}
+        accidentals = {notes[r].accidental for r in pitch_rows} if pitch_rows else {n.accidental for n in values}
         for value, button in self.accidental_buttons.items():
             button.setChecked(accidentals == {value})
+        pending = self.next_note.octave if not editing and self.modifier_rows("octave") is None else 0
+        self.octave_up_button.setChecked(pending > 0)
+        self.octave_down_button.setChecked(pending < 0)
         for button in (self.dot_button, self.octave_up_button, self.octave_down_button, *self.accidental_buttons.values()):
             button.setEnabled(not editing or bool(rows))
         self.tie_button.setEnabled(bool(rows))
@@ -558,13 +567,73 @@ class EditActions(NotationActions):
             if rows:
                 return tr("修改所選 {count} 個音符 · 數字鍵改音高 · / 加記號 · Delete 刪除").format(count=len(rows))
             return tr("修改模式 · 請先選取音符（Shift 連選、Ctrl 加選）")
+        pending = self.pending_text()
         if mode == "fill":
+            if pending:
+                return tr("下一個音：{pending}（只加在一個音）· 填寫小節 · {beats} 拍").format(
+                    pending=pending, beats=self.next_note.beats)
             return tr("填寫小節 · 下一個音 {beats} 拍 · 點休止符 0 後按數字鍵").format(beats=self.next_note.beats)
         note = self.next_note
-        pitch = tr("休止 0") if note.degree == 0 else {"": "", "#": "♯", "b": "♭", "n": "♮"}[note.accidental] + str(note.degree)
         position = {"after": tr("所選之後"), "before": tr("所選之前"), "end": tr("曲尾")}[self.insert_position.currentData()]
+        if pending:
+            return tr("下一個音：{pending}（只加在一個音）· 新增模式 · {beats} 拍 · 插在{position}").format(
+                pending=pending, beats=note.beats, position=position if rows else tr("曲尾"))
+        pitch = tr("休止 0") if note.degree == 0 else str(note.degree)
         return tr("新增模式 · 下一個：{pitch} · {beats} 拍 · 插在{position} · Q–S 時值").format(
             pitch=pitch, beats=note.beats, position=position if rows else tr("曲尾"))
+
+    def pending_text(self) -> str:
+        """What ↑ ↓ . ♯ ♭ ♮ prepared for the next typed note ("" when nothing): shown in the
+        status hint while it lasts, and used up by one note."""
+        note = self.next_note
+        words = []
+        if note.octave:
+            words.append(tr(PENDING_OCTAVES[note.octave]))
+        if note.accidental:
+            words.append({"#": "♯", "b": "♭", "n": "♮"}[note.accidental])
+        if note.dotted:
+            words.append(tr("附點"))
+        return " ".join(words)
+
+    def modifier_rows(self, kind):
+        """The rows ↑ ↓ (``octave``), ``.`` (``dot``) and ♯ ♭ ♮ (``accidental``) change.
+
+        修改: the selection. 新增／填寫: the selected notes too -- pitched ones for octave and
+        accidental; for the dot every selected note, except that in 填寫 a selected rest is the
+        place being filled (the dot is then for the note about to be typed). With none, ↑ ↓ change
+        the note just typed (the caret has moved on to the next rest). ``None`` means there is
+        nothing to act on: the command prepares the next note instead."""
+        notes = self.part_notes()
+        rows = [r for r in self.notes.selected_rows() if r < len(notes)]
+        mode = self.input_mode.currentData()
+        if mode == "edit":
+            return rows
+        pitched = [r for r in rows if notes[r].degree]
+        chosen = rows if kind == "dot" and mode == "insert" else pitched
+        if chosen:
+            return chosen
+        if kind == "octave" and (row := self.just_typed_row()) is not None:
+            return [row]
+        return None
+
+    def just_typed_row(self):
+        """The note the last digit wrote, while nothing else has happened since."""
+        typed = getattr(self, "_typed", None)
+        notes = self.part_notes()
+        if (typed is None or typed[0] != self.revision or typed[1] != self.part or typed[2] >= len(notes)
+                or typed[3] != tuple(self.notes.selected_rows()) or not notes[typed[2]].degree):
+            return None
+        return typed[2]
+
+    def _remember_typed(self, row):
+        self._typed = (self.revision, self.part, row, tuple(self.notes.selected_rows()))
+
+    def clear_pending(self):
+        """One typed note uses up the prepared octave, accidental and dot."""
+        note = self.next_note
+        if note.octave or note.accidental or note.dotted:
+            self.next_note = replace(note, octave=0, accidental="", dotted=False)
+            self.update_selection()
 
     @staticmethod
     def replace_note(note, changes):
@@ -744,11 +813,23 @@ class EditActions(NotationActions):
         self.notes.setFocus()
 
     def accidental_clicked(self, value):
-        rows = self.notes.selected_rows()
+        rows = self.modifier_rows("accidental")
         notes = self.part_notes()
-        values = [notes[r] for r in rows] if self.input_mode.currentData() == "edit" else [self.next_note]
-        current = {n.accidental for n in values}
-        self.accidental.setCurrentIndex(self.accidental.findData("" if current == {value} else value))
+        if rows is None:
+            new = "" if self.next_note.accidental == value else value
+            self.next_note = self.replace_note(self.next_note, {"accidental": new})
+            self.update_selection()
+        elif rows:
+            new = "" if {notes[r].accidental for r in rows} == {value} else value
+            part = self.part
+
+            def update(project):
+                written = project.score.parts[part].notes
+                for row in rows:
+                    if written[row].degree:
+                        written[row] = self.replace_note(written[row], {"accidental": new})
+            if not self.mutate(update, explicit=self.retyped(part, rows)):
+                self.update_selection()
         self.notes.setFocus()
 
     def flash_control(self, control):
@@ -805,13 +886,18 @@ class EditActions(NotationActions):
         else:
             note = self.replace_note(self.next_note, {"degree": degree})
             revision = self.revision
+            self._typed_row = None
             self.fill_rest(note) if self.input_mode.currentData() == "fill" else self.insert_notes([note])
             self.guide.mark(2)
-            if self.revision != revision and self.next_note.dotted:
-                # A dot is for one note (as on paper: 5· then 6): the next note is plain again.
-                self.next_note = replace(self.next_note, dotted=False)
-                self.update_selection()
-                self.statusBar().showMessage(tr("附點只加在這一個音；下一個音不帶附點（要再加按 .）。"), 5000)
+            if self.revision != revision:
+                if self._typed_row is not None:
+                    self._remember_typed(self._typed_row)
+                dotted = self.next_note.dotted
+                # A dot, an octave or an accidental prepared for the next note is for one note
+                # (as on paper: 5· then 6): the note after it is plain again.
+                self.clear_pending()
+                if dotted:
+                    self.statusBar().showMessage(tr("附點只加在這一個音；下一個音不帶附點（要再加按 .）。"), 5000)
         if self.notes.currentRow() >= 0:
             self.notes.flash(self.notes.currentRow())
         self.notes.setFocus()
@@ -998,20 +1084,31 @@ class EditActions(NotationActions):
                 values = list(DURATIONS)
                 index = values.index(note.duration) + (1 if command == "shorter" else -1)
                 return replace(note, duration=values[max(0, min(len(values) - 1, index))])
-            if self.input_mode.currentData() != "edit":
+            kind = "octave" if command in ("raise", "lower") else "dot" if command == "dot" else "duration"
+            if self.input_mode.currentData() == "edit":
+                rows = self.notes.selected_rows()
+            else:
+                rows = None if kind == "duration" else self.modifier_rows(kind)
+            if rows is None:
                 self.next_note = change(self.next_note)
                 self.update_selection()
-            elif command in ("raise", "lower"):
-                rows = self.notes.selected_rows()
+            elif kind == "octave":
                 part = self.part
+                typed = self.just_typed_row()
 
                 def update(project):
                     notes = project.score.parts[part].notes
                     for row in rows:
                         notes[row] = change(notes[row])
-                self.mutate(update)
-            elif self.notes.selected_rows():
-                self.rhythm_change(self.notes.selected_rows(), change)
+                if self.mutate(update):
+                    if typed is not None and rows == [typed]:
+                        self._remember_typed(typed)          # ↑ ↑ raises the same note twice
+                        self.notes.flash(typed)
+                else:
+                    self.update_selection()
+            elif rows:
+                if not self.rhythm_change(rows, change):
+                    self.update_selection()
 
     def ask_note_text(self, current):
         """The text to put above the note (None = cancel). Tests replace this method."""
@@ -1234,6 +1331,7 @@ class EditActions(NotationActions):
         try:
             result = replace_rest_input(self.project.score, row, note, self.part)
             if self.apply_measure_edit(result, rows_are_active=True):
+                self._typed_row = result.current
                 # Advance only to an immediately following rest. Never skip
                 # existing melody or append time beyond the allocated measures.
                 following = result.current + 1
