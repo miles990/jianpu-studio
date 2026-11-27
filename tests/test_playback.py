@@ -1,4 +1,5 @@
 import ctypes
+import ctypes.util
 import sys
 import time
 
@@ -225,12 +226,34 @@ def test_app_transport_returns_to_idle_when_windows_playback_ends(qtbot, tmp_pat
     assert window.notes.play_note is None
 
 
+def _fourcc(code: str) -> int:
+    return int.from_bytes(code.encode("ascii"), "big")
+
+
+def macos_default_output_device() -> int:
+    """CoreAudio's default output device id; 0 when there is none or the HAL is unreachable
+    (e.g. a sandbox that denies coreaudiod, where MusicPlayerPreroll fails with -2005)."""
+    class Address(ctypes.Structure):
+        _fields_ = [("selector", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("element", ctypes.c_uint32)]
+
+    core_audio = ctypes.CDLL(ctypes.util.find_library("CoreAudio"))
+    # kAudioHardwarePropertyDefaultOutputDevice on kAudioObjectSystemObject (1), global scope, main element.
+    address = Address(_fourcc("dOut"), _fourcc("glob"), 0)
+    device, size = ctypes.c_uint32(0), ctypes.c_uint32(4)
+    status = core_audio.AudioObjectGetPropertyData(ctypes.c_uint32(1), ctypes.byref(address), ctypes.c_uint32(0),
+                                                   None, ctypes.byref(size), ctypes.byref(device))
+    return device.value if status == 0 else 0
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "darwin", reason="AudioToolbox is macOS-only")
 def test_real_macos_playback_advances_and_stops(tmp_path):
     tool = find_tool("lilypond")
     if not tool:
         pytest.skip("JIANPU_LILYPOND not configured")
+    # Only a missing output device is an environment limit; with a device, every failure counts.
+    if not macos_default_output_device():
+        pytest.skip("no macOS audio output device (CoreAudio reports none or is unreachable)")
     result = render(demo_project().notation(), (tmp_path / "試聽 中文").resolve(), tool.resolve(), create_pdf=False)
     player = playback.MidiPlayer()
     player.play(result.midi)
