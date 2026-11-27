@@ -524,7 +524,9 @@ class MainWindow(EditActions, QMainWindow):
             return self.save()
         return answer == QMessageBox.StandardButton.Discard
 
-    def reset(self, project: Project, path: Path | None = None, dirty=False):
+    def reset(self, project: Project, path: Path | None = None, dirty=False, *, keep_recovery=False):
+        """Show ``project``. The recovery copy is discarded unless ``keep_recovery``: restored
+        work keeps it on disk until it is saved or explicitly discarded."""
         project = self.prepare_visual_project(project)
         if self.task and not self.task_blocks_edit:
             self.task.cancel.set()
@@ -559,7 +561,8 @@ class MainWindow(EditActions, QMainWindow):
         self.measure_notice.hide()
         if self.print_preview_active:
             self.change_workspace(0)
-        self.clear_recovery()
+        if not keep_recovery:
+            self.clear_recovery()
         self.sync(selection=[], current=-1)
         if self.print_preview_active and self.auto_check.isChecked():
             self.autopreview.start()
@@ -622,7 +625,8 @@ class MainWindow(EditActions, QMainWindow):
         if self.dirty and not self.recovery_protected:
             try:
                 save_project(self.recovery_path, self.project)
-            except OSError:
+            except (OSError, ValueError):
+                # The previous recovery copy is left untouched (atomic, validated before writing).
                 self.statusBar().showMessage(tr("自動復原暫存失敗，請手動儲存專案。"), 5000)
 
     def restore_recovery(self):
@@ -647,7 +651,9 @@ class MainWindow(EditActions, QMainWindow):
                 self.error(tr("舊版復原暫存已保留"), tr("{detail}\n\n無法建立備份，原暫存保留於：{path}\n本次自動復原暫存暫停，請手動儲存新樂譜。").format(detail=exc, path=self.recovery_path))
             return
         if QMessageBox.question(self, tr("復原未儲存樂譜"), tr("上次有未儲存的樂譜，現在復原嗎？")) == QMessageBox.StandardButton.Yes:
-            self.reset(recovered, dirty=True)
+            # The file stays until the restored work is saved or discarded: a second crash
+            # before the next autosave must not lose the only copy.
+            self.reset(recovered, dirty=True, keep_recovery=True)
         else:
             self.clear_recovery()
             self.autopreview.start()

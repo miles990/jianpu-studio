@@ -212,15 +212,27 @@ def _v1_to_v2_words(text: str) -> list[list[str]]:
     return out
 
 
+def _segments(words: list[str]) -> list[tuple[str, list[str]]]:
+    """(note head, sorted words up to the next head); the first entry holds words before any head."""
+    out: list[tuple[str, list[str]]] = [("", [])]
+    for word in words:
+        if _HEAD.match(word):
+            out.append((word, []))
+        else:
+            out[-1][1].append(word)
+    return [(head, sorted(rest)) for head, rest in out]
+
+
 def same_music_text(v1_text: str, v2_text: str) -> bool:
     """True when ``v2_text`` is the v2 export of the score that produced ``v1_text``.
 
     Besides the documented differences above, v2 orders a note's post-event words by the
     registry (e.g. ``\\mf \\downbow`` instead of ``\\downbow \\mf``); LilyPond output is
-    the same, so words are compared per line as a multiset with the note heads in order.
+    the same. Such reordering never moves a word past a note head, so the words between
+    two heads are compared as a multiset and the heads in order: a mark that moved to a
+    different note (``1 \\mf 2`` vs ``1 2 \\mf``) is a different piece of music.
     """
     old, new = _v1_to_v2_words(v1_text), [line.split() for line in v2_text.strip().splitlines()]
     if len(old) != len(new):
         return False
-    return all(sorted(a) == sorted(b) and [w for w in a if _HEAD.match(w)] == [w for w in b if _HEAD.match(w)]
-               for a, b in zip(old, new))
+    return all(_segments(a) == _segments(b) for a, b in zip(old, new))

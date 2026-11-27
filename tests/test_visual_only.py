@@ -75,6 +75,45 @@ def test_divergent_legacy_file_keeps_current_unsaved_score_and_history(window, t
     assert path.read_bytes() == data
 
 
+@pytest.mark.parametrize("moved", [
+    ("c1 \\mf c2", "c1 c2 \\mf"),              # a dynamic moved to the next note
+    ("c2 c3", "c2 \\staccato c3"),           # a mark added to an unmarked note
+    ("c1 \\mf c2 c3", "c1 c2 c3 \\mf"),       # moved across two notes
+])
+def test_legacy_source_with_a_mark_on_a_different_note_is_refused(window, tmp_path, moved):
+    """Review P0.1: the stale draft must not replace the authoritative source."""
+    import json
+    draft = Score(notes=[Note(1, marks=("dyn.mf",)), Note(2), Note(3), Note(4)])
+    exported = draft.to_jianpu()
+    authoritative = exported.replace(*moved)
+    assert authoritative != exported
+    path = tmp_path / "舊原始碼 移動力度.jps"
+    path.write_text(json.dumps({
+        "format": "jianpu-studio", "version": 1, "mode": "source", "source": authoritative,
+        "score": {"notes": [{"degree": 1, "dynamic": "mf"}, {"degree": 2}, {"degree": 3}, {"degree": 4}]},
+    }, ensure_ascii=False), encoding="utf-8")
+    data = path.read_bytes()
+    original = window.project.snapshot()
+    window.open_file(path=path)
+    assert "原檔" in window.errors[-1][1]
+    assert window.project == original
+    assert window.path != path
+    assert path.read_bytes() == data
+    with pytest.raises(ValueError, match="未載入"):
+        MainWindow.prepare_visual_project(load_project(path))
+
+
+def test_legacy_source_with_only_reordered_marks_on_one_note_still_opens(window, tmp_path):
+    from jianpu_studio import migrate
+    draft = Score(notes=[Note(1, marks=("dyn.mf", "bow.down")), Note(2), Note(3), Note(4)])
+    exported = draft.to_jianpu()
+    words = exported.splitlines()[-1].split()
+    reordered = exported.replace(" ".join(words[1:3]), " ".join(reversed(words[1:3])))
+    assert reordered != exported and migrate.same_music_text(reordered, exported)
+    project = Project(draft, mode="source", source=reordered)
+    assert MainWindow.prepare_visual_project(project).mode == "visual"
+
+
 def test_invalid_reset_does_not_cancel_render_or_change_state(window):
     original = window.project.snapshot()
     cancel = threading.Event()
@@ -172,6 +211,53 @@ def test_legacy_recovery_archives_original_bytes_before_new_autosave(window):
     assert load_project(window.recovery_path) == window.project
     window.reset(Project())
     assert backups[0].read_bytes() == data
+
+
+@pytest.mark.parametrize("kind", ["v2", "v1"])
+def test_accepted_recovery_stays_on_disk_until_saved_or_discarded(window, tmp_path, monkeypatch, kind):
+    """Review P0.3: accepting recovery must not delete the only on-disk copy."""
+    if kind == "v1":
+        from pathlib import Path
+        window.recovery_path.write_bytes((Path(__file__).parent / "fixtures/v1/v1_marks.jps").read_bytes())
+    else:
+        save_project(window.recovery_path, Project(Score(title="未儲存", notes=[Note(2, duration=1)])))
+    data = window.recovery_path.read_bytes()
+    recovered = load_project(window.recovery_path)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window.restore_recovery()
+    assert window.dirty and window.project.score == MainWindow.prepare_visual_project(recovered).score
+    # A crash right now (before any autosave tick) must still find the work on disk.
+    assert window.recovery_path.read_bytes() == data
+    window.mutate(lambda project: setattr(project.score, "title", "復原後再改"))
+    window.write_recovery()
+    assert load_project(window.recovery_path) == window.project
+    # Saving makes the recovery copy unnecessary.
+    window.path = tmp_path / "已儲存.jps"
+    assert window.save()
+    assert not window.recovery_path.exists()
+
+
+def test_accepted_recovery_is_removed_when_explicitly_discarded(window, monkeypatch):
+    save_project(window.recovery_path, Project(Score(title="未儲存", notes=[Note(2, duration=1)])))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window.restore_recovery()
+    assert window.recovery_path.exists()
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Discard)
+    window.new_project()
+    assert not window.recovery_path.exists()
+
+
+def test_autosave_that_load_would_reject_keeps_the_previous_recovery(window, monkeypatch):
+    """Review P0.2: the autosave writer may never replace a readable copy with an unreadable one."""
+    from jianpu_studio import model
+    window.mutate(lambda project: setattr(project.score, "title", "第一版"))
+    window.write_recovery()
+    data = window.recovery_path.read_bytes()
+    window.mutate(lambda project: project.score.notes.extend([Note(3, duration=1)] * 50))
+    monkeypatch.setattr(model, "MAX_FILE_BYTES", len(data) + 100)
+    window.write_recovery()
+    assert window.recovery_path.read_bytes() == data
+    assert "自動復原暫存失敗" in window.statusBar().currentMessage()
 
 
 @pytest.mark.parametrize("corrupt", [False, True])

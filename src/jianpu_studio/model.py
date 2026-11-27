@@ -565,14 +565,52 @@ def atomic_write(path: Path, text: str | bytes) -> None:
         Path(name).unlink(missing_ok=True)
 
 
+def project_text(project: Project) -> str:
+    """The saved form: readable JSON with one note per line (keeps large scores well under the cap)."""
+    data = project.to_dict()
+    notes = []
+    for index, part in enumerate(data["score"]["parts"]):
+        notes.append(part["notes"])
+        part["notes"] = f"\x00notes {index}\x00"       # a string a valid project can never contain
+    text = json.dumps(data, ensure_ascii=False, indent=2)
+    for index, part_notes in enumerate(notes):
+        lines = ",\n".join(" " * 10 + json.dumps(n, ensure_ascii=False, separators=(", ", ": ")) for n in part_notes)
+        body = "[\n" + lines + "\n" + " " * 8 + "]" if part_notes else "[]"
+        text = text.replace(json.dumps(f"\x00notes {index}\x00"), body, 1)
+    return text + "\n"
+
+
+def parse_project_text(data: bytes | str) -> Project:
+    """The one check every saved project passes: Open, recovery and Save (before writing) use it."""
+    size = len(data.encode("utf-8") if isinstance(data, str) else data)
+    if size > MAX_FILE_BYTES:
+        raise ValueError(tr("專案檔太大（上限 4 MB）。"))
+    if isinstance(data, bytes):
+        data = data.decode("utf-8-sig")
+    try:
+        raw = json.loads(data)
+    except json.JSONDecodeError as exc:
+        raise ValueError(tr("專案資料不完整或欄位格式錯誤。")) from exc
+    return Project.from_dict(raw)
+
+
 def save_project(path: Path, project: Project) -> None:
-    atomic_write(path, json.dumps(project.to_dict(), ensure_ascii=False, indent=2) + "\n")
+    """Write only what ``load_project`` accepts back unchanged; otherwise keep the old file."""
+    text = project_text(project)
+    try:
+        reloaded = parse_project_text(text)
+    except ValueError as exc:
+        raise ValueError(tr("這份樂譜無法安全儲存，原檔未被覆蓋：{detail}").format(detail=exc)) from exc
+    if reloaded.to_dict() != project.to_dict():
+        raise ValueError(tr("這份樂譜無法安全儲存，原檔未被覆蓋：{detail}").format(
+            detail=tr("專案資料不完整或欄位格式錯誤。")))
+    atomic_write(path, text)
 
 
 def load_project(path: Path) -> Project:
     if path.stat().st_size > MAX_FILE_BYTES:
         raise ValueError(tr("專案檔太大（上限 4 MB）。"))
-    return Project.from_dict(json.loads(path.read_text(encoding="utf-8-sig")))
+    return parse_project_text(path.read_bytes())
 
 
 def demo_project() -> Project:
