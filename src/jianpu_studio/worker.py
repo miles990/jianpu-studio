@@ -263,7 +263,7 @@ def header_line(ly: str) -> str:
     tempo = _TEMPO.search(ly)
     text = _HEAD_TEXT.search(ly)
     words = text[1] if text else ""
-    ly = _HEAD_TEXT.sub("", ly)
+    ly = _HEAD_TEXT.sub("", ly, count=1)          # only the first note's text moves
     key = _KEY_MARK.search(ly)
     if key is None:
         return ly

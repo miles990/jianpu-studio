@@ -104,9 +104,11 @@ _SPACE_WIDTH = {"\u3000": 4, "\u2001": 4, "\u2003": 4, "\u2000": 2, "\u2002": 2,
 def note_text(text: str) -> str:
     """Text above a note inside ``^"..."``: every character jianpu-ly or LilyPond would read as
     syntax (quotes, backslash, braces, $, #, % which starts a comment) becomes a lookalike,
-    and every non-ASCII space becomes ASCII spaces (see ``_SPACE_WIDTH``)."""
+    and every non-ASCII space becomes ASCII spaces (see ``_SPACE_WIDTH``). The invisible word
+    joiner U+2060 is dropped: it is the worker's header marker (``worker.HEAD_TEXT``), and user
+    text must never pose as it."""
     text = "".join(" " * _SPACE_WIDTH.get(c, 1) if c.isspace() else _SAFE.get(c, c)
-                   for c in upstream_normalized(text))
+                   for c in upstream_normalized(text).replace("\u2060", ""))
     return _RESERVED.sub("\u200b", text)
 
 

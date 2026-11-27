@@ -57,3 +57,33 @@ def test_a_draft_pdf_prints_every_ending_bracket(name, tmp_path, lilypond):  # n
     printed = [t for kind, t, *_ in svg_items(lilypond, result.lilypond) if kind == "text"]
     for label in labels:
         assert label in printed, (name, label, printed)
+
+
+# ---------------------------------------------------------------- 15. header marker
+def test_user_text_cannot_pose_as_the_header_marker():
+    from jianpu_studio.export import note_text
+    from jianpu_studio.worker import HEAD_TEXT
+    assert HEAD_TEXT not in note_text(HEAD_TEXT + "第2小節" + HEAD_TEXT)
+    for first in ("中速", "主音"):
+        score = bars(n=3, parts=1)
+        notes = score.parts[0].notes
+        notes[0] = replace(notes[0], text=first)
+        notes[1] = replace(notes[1], text=HEAD_TEXT + "第2小節")
+        text = score.to_jianpu()
+        assert text.count(HEAD_TEXT) == (first == "中速"), text
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("first", ["中速", "主音"])
+def test_a_word_joiner_in_note_text_keeps_the_text_on_its_note(first, tmp_path, lilypond):  # noqa: F811
+    score = bars(n=3, parts=1)
+    notes = score.parts[0].notes
+    notes[0] = replace(notes[0], text=first)
+    notes[1] = replace(notes[1], text="⁠第2小節")
+    result = render(Project(score).notation(), tmp_path.resolve(), lilypond, create_pdf=True)
+    assert no_warnings(result) == []
+    ly = result.lilypond.read_text(encoding="utf-8")
+    meter = re.findall(r"^meter = .*", ly, flags=re.M)
+    assert meter and all("第2小節" not in m and ("中速" in m) == (first == "中速") for m in meter)
+    printed = [t for kind, t, *_ in svg_items(lilypond, result.lilypond) if kind == "text"]
+    assert any("第2小節" in t for t in printed), printed
