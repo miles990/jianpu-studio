@@ -383,69 +383,81 @@ class EditActions(NotationActions):
                 raise ValueError(tr("改成 {meter} 拍後小節線會移到別的位置，{where}的音會跨過小節線，所以沒有修改。"
                                     "請先調整這些音的時值，或新增一份樂譜。").format(meter=project.score.meter, where=problem))
         if was_whole and values["meter"] != score.meter and any(p.notes for p in score.parts):
+            # Written music: every meter change goes through the re-barring question, which
+            # shows (and applies in the same undo step) the split notes and the rests that
+            # complete the last bar; a change that only redraws the bar lines needs no question.
             trial = score.copy()
             for name, value in values.items():
                 setattr(trial, name, value)
             if trial.pickup and trial.pickup not in pickup_choices(trial.bar_ticks):
                 trial.pickup = 0
-            if crossing(trial) is not None:
-                self.move_bar_lines(values=values, meter=trial.meter, pickup=trial.pickup,
-                                    label=tr("改成 {meter} 拍").format(meter=trial.meter))
-                return
+            self.move_bar_lines(values=values, meter=trial.meter, pickup=trial.pickup,
+                                label=tr("改成 {meter} 拍").format(meter=trial.meter))
+            return
         self.mutate(update)
 
     def move_bar_lines(self, *, meter, pickup, label, values=None) -> bool:
         """A pickup or meter that moves the bar lines of written music: an empty (all-rest) score
-        is simply redrawn; otherwise the user chooses how, after seeing what changes (one undo step)."""
+        is simply redrawn, and so is music whose notes all fit the new bars; otherwise the user
+        chooses how, after seeing what each way changes (one undo step)."""
         from . import rebar
         from .rhythm_edit import Choice, RhythmRefused
         score = self.project.score
-        options = {}
-        if rebar.rests_only(score):
-            options["rests"] = rebar.rebar_rests(score, meter=meter, pickup=pickup)
+        options = rebar.options(score, meter=meter, pickup=pickup)
+        usable = {key: (lab, result, view) for key, lab, result, view in options
+                  if result is not None and view.problem is None}
+        if "rests" in usable:
             key = "rests"
+        elif "rebar" in usable and usable["rebar"][2].trivial:
+            key = "rebar"
         else:
-            from .model import Score
-            old_first, new_bar = score.first_bar_ticks, Score(meter=meter).bar_ticks
-            new_first = pickup or new_bar
-            choices, lines = [], []
-            if meter == score.meter:
-                pad = (new_first - old_first) % new_bar
-                cut = old_first - new_first
-                if 0 < cut and rebar.leading_rest_ticks(score) >= cut:
-                    options["trim"] = rebar.trim_to_pickup(score, pickup)
-                    choices.append(Choice("trim", tr("刪去曲首 {beats} 拍休止符（其餘小節不動）").format(beats=_beats(cut))))
-                if pad:
-                    options["pad"] = rebar.pad_first_bar(score, pad)
-                    choices.append(Choice("pad", tr("在曲首補上 {beats} 拍休止符（其餘小節不動）").format(beats=_beats(pad))))
-            try:
-                options["rebar"] = rebar.rebar(score, meter=meter, pickup=pickup)
-                choices.append(Choice("rebar", tr("整首重新分小節")))
-                lines.append(rebar.describe(score, options["rebar"], tr("整首重新分小節")))
-            except ValueError as exc:
-                lines.append(tr("不能整首重新分小節：{reason}").format(reason=exc))
-            if not choices:
+            if not usable:
+                lines = [self._bar_line_reason(key, lab, view) for key, lab, _, view in options]
                 self.error(tr("無法移動小節線"), tr("{label}會移動小節線。").format(label=label) + " ".join(lines))
                 self.sync()
                 return False
-            message = tr("{label}會移動後面所有的小節線，有音會跨過新的小節線。請選擇做法：").format(label=label)
-            refused = RhythmRefused(message + "\n\n" + "\n".join(lines), choices=tuple(choices), title=tr("移動小節線"))
-            key = self.choose_rhythm_option(refused)
-            if key not in options:
+
+            def build():
+                current = rebar.options(score, meter=meter, pickup=pickup)       # labels in the current language
+                crossing = any(view.split for _, _, result, view in current if result is not None)
+                message = (tr("{label}會移動後面所有的小節線，有音會跨過新的小節線。請選擇做法：") if crossing
+                           else tr("{label}會移動後面所有的小節線。請選擇做法：")).format(label=label)
+                choices, lines, losses = [], [], {}
+                for key, lab, result, view in current:
+                    if result is not None and view.problem is None:
+                        choices.append(Choice(key, lab))
+                        lines.append(rebar.describe(score, view, lab))
+                        losses[key] = view.lost
+                    else:
+                        lines.append(self._bar_line_reason(key, lab, view))
+                refused = RhythmRefused(message + "\n\n" + "\n".join(lines), choices=tuple(choices),
+                                        title=tr("移動小節線"))
+                refused.losses = losses
+                refused.rebuild = build
+                return refused
+            key = self.choose_rhythm_option(build())
+            if key not in usable:
                 self.sync()
                 return False
-        result = options[key]
+        _, result, view = usable[key]
 
         def update(project):
             if values:
                 for name, value in values.items():
                     setattr(project.score, name, value)
             result.apply(project.score, meter=meter, pickup=pickup)
-        if self.mutate(update):
+        if self.mutate(update, declared=view.lost):
             self.toast.show_text(tr("已移動小節線；可用復原還原。"), self.undo)
             return True
         self.sync()
         return False
+
+    @staticmethod
+    def _bar_line_reason(key, label, view):
+        reason = view if isinstance(view, str) else view.problem
+        if key == "rebar":
+            return tr("不能整首重新分小節：{reason}").format(reason=reason)
+        return tr("不能{choice}：{reason}").format(choice=label, reason=reason)
 
     def change_pickup(self, *_):
         if self.loading:
@@ -456,9 +468,7 @@ class EditActions(NotationActions):
 
         from .notation_rules import crossing
         was_whole = crossing(self.project.score) is None
-        trial = self.project.score.copy()
-        trial.pickup = ticks
-        if was_whole and any(p.notes for p in trial.parts) and crossing(trial) is not None:
+        if was_whole and any(p.notes for p in self.project.score.parts):
             label = tr("設定 {beats} 拍弱起").format(beats=_beats(ticks)) if ticks else tr("取消弱起")
             self.move_bar_lines(meter=self.project.score.meter, pickup=ticks, label=label)
             return

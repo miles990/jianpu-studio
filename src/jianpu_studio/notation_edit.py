@@ -320,6 +320,8 @@ def _bar_targets(score: Score, target: Target, symbol) -> tuple[list[int], str]:
 
 def _bar_has(score: Score, bar: int, symbol_id: str) -> bool:
     ranges = score.part_bars(0)
+    if not 0 <= bar < len(ranges):
+        return False            # a bar the canvas shows but part 1 does not have (yet)
     start, end = ranges[bar]
     notes = score.parts[0].notes
     edge = notes[start].bar_start if symbols.SYMBOLS[symbol_id].bar_edge == "start" else notes[end - 1].bar_end
