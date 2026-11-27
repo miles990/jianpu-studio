@@ -697,8 +697,10 @@ def test_lines_are_planned_even_and_the_coda_starts_a_line():
     assert planned_lines(duet()) == [3, 3]
     fixed = twinkle(bars=8)
     fixed.bars_per_line = 3                                  # the user's own setting is kept exactly
-    assert "\\break" in fixed.to_jianpu() and fixed.to_jianpu().count("\\break") == 2
+    assert fixed.to_jianpu().count("\\break") == 2 == Project(fixed).notation().count("\\break")
     assert planned_lines(fixed) == [3, 3, 2]
+    # the planned breaks are part of what is engraved, not of the score's own text
+    assert "\\break" not in eight.to_jianpu() and Project(eight).notation().count("\\break") == 1
     # denser music gets fewer bars per line, never a line planned wider than the paper
     from jianpu_studio.notation_rules import bar_items
     dense = Score(notes=[Note(1 + k % 7, duration=16) for k in range(16 * 6)], staff_size=24)

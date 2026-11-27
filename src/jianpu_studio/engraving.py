@@ -314,10 +314,11 @@ def line_capacity(score) -> float:
     return 0.96 * ((_PAPER_MM.get(score.paper_size, 210.0) - 20.0) / space_mm - 4.5 - names)
 
 
-def line_breaks(score, items) -> set[int]:
+def line_breaks(score, items, plan: bool = True) -> set[int]:
     """Bars after which the print starts a new line.
 
-    With a fixed bars-per-line setting, exactly that (a pickup bar is extra on the first line).
+    With a fixed bars-per-line setting, exactly that (a pickup bar is extra on the first line);
+    without one, and without ``plan``, none.
     Otherwise the lines are made even: LilyPond alone fills each line and leaves the rest --
     six bars and then two for an eight-bar tune. The piece is cut into as few lines as its
     estimated natural width needs, of about equal width (LilyPond would rather start another
@@ -328,6 +329,8 @@ def line_breaks(score, items) -> set[int]:
     if score.bars_per_line:
         return {bar for bar in range(bars)
                 if bar + 1 - pickup > 0 and (bar + 1 - pickup) % score.bars_per_line == 0}
+    if not plan:
+        return set()
     widths = bar_widths(score)
     capacity = line_capacity(score)
     coda = coda_start(items)

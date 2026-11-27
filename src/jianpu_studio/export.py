@@ -311,9 +311,10 @@ def implicit_repeat_start(items) -> bool:
     return False
 
 
-def to_jianpu(score, draft: bool = False) -> str:
+def to_jianpu(score, draft: bool = False, layout: bool = False) -> str:
     """Export a validated score (``Score.to_jianpu`` checks it first); ``draft`` prints an
-    unfinished repeat/jump structure as plain signs."""
+    unfinished repeat/jump structure as plain signs; ``layout`` adds the planned line breaks
+    (even lines, the coda on a new line) when the score has no fixed bars-per-line."""
     from .notation_rules import normalized_parts
     parts = normalized_parts(score)
     lines = [f"title={literal(score.title)}", f"composer={literal(score.composer)}", "NoIndent"]
@@ -328,7 +329,7 @@ def to_jianpu(score, draft: bool = False) -> str:
     has_jump = any(item in symbols.JUMPS for _, ends in items for item in ends)
     implicit = implicit_repeat_start(items) and not draft
     repeat_ends, lone = repeat_end_bars(items), lone_first_endings(items)
-    breaks = line_breaks(score, items)
+    breaks = line_breaks(score, items, plan=layout)
     open_before, is_open = [], False          # a draft ending bracket still open at each bar's start
     for starts, ends in items:
         open_before.append(is_open)

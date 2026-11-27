@@ -478,9 +478,11 @@ class Score:
             position += step
         return out
 
-    def to_jianpu(self, draft: bool = False) -> str:
+    def to_jianpu(self, draft: bool = False, layout: bool = False) -> str:
         """``draft``: an unfinished repeat/jump structure is printed as plain signs instead of
-        refusing (the user confirmed a draft print)."""
+        refusing (the user confirmed a draft print). ``layout``: with the line breaks planned
+        for the page (``Project.notation``); without, the text holds only what the user set, so
+        it stays comparable with a stored source."""
         self.validate()
         if not self.notes:
             raise ValueError(tr("請先加入音符。"))
@@ -489,7 +491,7 @@ class Score:
         if error := (self.edit_error() if draft else self.notation_error()):
             raise ValueError(error)
         from .export import to_jianpu
-        return to_jianpu(self, draft)
+        return to_jianpu(self, draft, layout)
 
     def to_dict(self) -> dict:
         from .notation_rules import normalized_parts
@@ -556,7 +558,7 @@ class Project:
         """jianpu-ly text for the engine; visual scores carry their print options in a comment."""
         if self.mode != "visual":
             return self.source
-        text = self.score.to_jianpu(draft)
+        text = self.score.to_jianpu(draft, layout=True)
         options = render_options(self.score)
         if draft:
             from .i18n import current_language
