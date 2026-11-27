@@ -287,6 +287,10 @@ class EditActions(NotationActions):
                     barlines.add(problem.bar)
         edit = self.current_edit_error()
         # Every problem is reachable with 「下一個問題」: the bar problems, then the located messages.
+        # Each entry keeps the problem whose one-click fix it offers (the last bar: the rests).
+        fill_problem = rhythm if not over and getattr(rhythm, "fix", None) == ("fill",) else None
+        sources = [fill_problem if row is None and bar == len(score.part_bars(p)) - 1 else None
+                   for p, bar, _, row in found]
         for message in (rhythm, edit, *structure):
             if not message or getattr(message, "fix", None) == ("fill",) or (message is rhythm and over):
                 continue
@@ -296,7 +300,13 @@ class EditActions(NotationActions):
             if bar is None and row is not None and part < len(score.parts):
                 bar = next((k for k, (a, b) in enumerate(score.part_bars(part)) if a <= row < b), None)
             found.append((part, bar, str(message), row))
-        self.problem_list = found
+            sources.append(message)
+        shown = getattr(self, "problem_shown", None)
+        self.problem_cursor = found.index(shown) if shown in found else -1
+        if self.problem_cursor < 0:
+            self.problem_shown = None
+        self.problem_list, self.problem_sources = found, sources
+        self._problem_context = (rhythm, notation, over)
         self.notes.set_problems(problems, bars_flagged, barlines)
         if error or found:
             first = found[0] if found else None
@@ -317,21 +327,36 @@ class EditActions(NotationActions):
         self.rhythm_label.style().unpolish(self.rhythm_label)
         self.rhythm_label.style().polish(self.rhythm_label)
         self.problem_button.setVisible(bool(error or found))
-        fix = getattr(notation, "fix", None) if notation else None
-        if rhythm is not None and not over:
-            fix = getattr(rhythm, "fix", None) or fix
-        fill = not over and ((bool(found) and any(row is None and bar == len(score.part_bars(p)) - 1
-                                                  for p, bar, _, row in found)) or (fix and fix[0] == "fill"))
-        if not fill and fix and fix[0] == "add":
+        self._sync_fix_button()
+
+    def shown_problem(self):
+        """The problem whose fix the status bar offers: the one 「下一個問題」 last showed, else
+        the first one (the last bar's rests before a sign problem)."""
+        sources = getattr(self, "problem_sources", [])
+        cursor = getattr(self, "problem_cursor", -1)
+        if 0 <= cursor < len(sources):
+            return sources[cursor]
+        rhythm, notation, over = getattr(self, "_problem_context", (None, None, False))
+        if rhythm is not None and not over and getattr(rhythm, "fix", None):
+            return rhythm
+        return notation
+
+    def _sync_fix_button(self):
+        score = self.project.score
+        problem = self.shown_problem()
+        fix = getattr(problem, "fix", None) if problem else None
+        if fix and fix[0] == "add":
             name = symbols.SYMBOLS[fix[2]].display_name
             self.fill_button.setText(tr("加上「{name}」").format(name=name))
             self.fill_button.setToolTip(tr("把「{name}」加在{bar}（可復原）：{problem}").format(
-                name=name, bar=bar_label(score, fix[1]), problem=error))
+                name=name, bar=bar_label(score, fix[1]), problem=problem))
+        elif fix and fix[0] != "fill":
+            self.fill_button.setText(tr("移除孤立記號"))
+            self.fill_button.setToolTip(tr("移除這個沒有另一端的記號（可復原）：{problem}").format(problem=problem))
         else:
-            self.fill_button.setText(tr("補齊休止符") if fill or not fix else tr("移除孤立記號"))
-            self.fill_button.setToolTip(tr("把最後一小節補滿休止符") if fill or not fix else
-                                        tr("移除這個沒有另一端的記號（可復原）：{problem}").format(problem=error))
-        self.fill_button.setVisible(bool(fill or fix))
+            self.fill_button.setText(tr("補齊休止符"))
+            self.fill_button.setToolTip(tr("把最後一小節補滿休止符"))
+        self.fill_button.setVisible(bool(fix))
 
     def capture_fields(self, *_):
         if self.loading or (self.task and self.task_blocks_edit):
@@ -1289,7 +1314,9 @@ class EditActions(NotationActions):
                 self.goto_place(getattr(message, "part", 0), getattr(message, "row", None), getattr(message, "bar", None))
             return
         self.problem_cursor = (getattr(self, "problem_cursor", -1) + 1) % len(problems)
+        self.problem_shown = problems[self.problem_cursor]
         part, bar, text, row = problems[self.problem_cursor]
+        self._sync_fix_button()          # the fix offered is the fix of the problem shown
         if row is not None or bar is None:
             self.goto_place(part, row, bar)
             self.statusBar().showMessage(text, 10000)
@@ -1316,53 +1343,47 @@ class EditActions(NotationActions):
         self.notes.setFocus()
 
     def fix_problem(self):
-        """The one-click fix of the current problem: fill the last bar, or remove an orphan mark."""
+        """The one-click fix of the problem shown (``shown_problem``): fill the last bar, add the
+        missing counterpart of a sign, or remove an orphan mark. Only fixes that create no new
+        problem are offered (``notation_rules.fix_is_safe``)."""
         from .notation_rules import crossing
         score = self.project.score
-        rhythm = score.rhythm_error()
-        problem = rhythm or self.current_notation_error()
+        problem = self.shown_problem()
         fix = getattr(problem, "fix", None) if problem else None
-        if rhythm is not None and crossing(score) is not None:
-            # A note across a bar line: rests cannot fix it, but an orphan mark elsewhere can go.
-            notation = self.current_notation_error()
-            fix = getattr(notation, "fix", None) if notation else None
-            if not fix or fix[0] == "fill":
+        if not fix:
+            rhythm = score.rhythm_error()
+            if rhythm is not None and crossing(score) is not None:
+                # A note across a bar line: rests cannot fix it.
                 self.goto_place(rhythm.part, rhythm.row)
                 self.statusBar().showMessage(str(rhythm), 10000)
                 self.toast.show_text("⚠ " + str(rhythm))
-                return
-            problem = notation
-        if fix and fix[0] == "add":
+            elif problem:
+                self.goto_place(getattr(problem, "part", 0), getattr(problem, "row", None),
+                                getattr(problem, "bar", None))
+                self.statusBar().showMessage(str(problem), 10000)
+            return
+        part, row = problem.part, problem.row
+
+        def update(project):
+            notation_edit.apply_fix(project.score, fix, part, row)
+        if fix[0] == "fill":
+            if self.mutate(update):
+                self.toast.show_text(tr("已補齊休止符。"), self.undo)
+            return
+        if fix[0] == "add":
             bar, item = fix[1], fix[2]
 
-            def add(project):
-                notation_edit.set_bar_item(project.score, bar, item)
-            if self.mutate(add):
+            def replaced(item_):
+                return item_.part == 0 and item_.kind == "bar_end" and item_.ident in notation_edit.BAR_STYLE_SLOT
+            if self.mutate(update, explicit=replaced):
                 self.toast.show_text(tr("已在{bar}加上「{name}」，可用復原還原。").format(
                     bar=bar_label(self.project.score, bar), name=symbols.SYMBOLS[item].display_name), self.undo)
             return
-        if fix and fix[0] != "fill" and problem.row is not None:
-            part = problem.part
 
-            def update(project):
-                _remove_orphan(project.score, part, problem.row, fix)
-                # Removing one end can leave its partner alone (a glissando to a far note, an
-                # overlapping line): that partner goes in the same step, in the same part.
-                for _ in range(4):
-                    again = project.score.notation_error()
-                    nxt = getattr(again, "fix", None) if again else None
-                    if not _same_line_fix(again, nxt, part, fix):
-                        break
-                    _remove_orphan(project.score, part, again.row, nxt)
-
-            def explicit(item):
-                return item.part == part and item.kind in ("tie", *edit_guard.LINE_KINDS, *edit_guard.BAR_KINDS)
-            if self.mutate(update, explicit=explicit):
-                self.toast.show_text(tr("已移除孤立的記號，可用復原還原。"), self.undo)
-            return
-        if any(p.notes for p in score.parts):
-            if self.mutate(lambda p: p.score.fill_last_bar()):
-                self.toast.show_text(tr("已補齊休止符。"), self.undo)
+        def explicit(item):
+            return item.part == part and item.kind in ("tie", *edit_guard.LINE_KINDS, *edit_guard.BAR_KINDS)
+        if self.mutate(update, explicit=explicit):
+            self.toast.show_text(tr("已移除孤立的記號，可用復原還原。"), self.undo)
 
     def toggle_auto(self, checked):
         if checked:
@@ -1865,22 +1886,6 @@ class EditActions(NotationActions):
         from .engine import app_root
         path = app_root() / "examples" / "duet.jps"
         self.open_file(path=path)
-
-
-def _remove_orphan(score, part, row, fix):
-    name, item = fix
-    notes = score.parts[part].notes
-    note = notes[row]
-    if name == "tie":
-        notes[row] = replace(note, tie=False)
-    else:
-        notes[row] = replace(note, **{name: tuple(i for i in getattr(note, name) if i != item)})
-
-
-def _same_line_fix(problem, fix, part, first) -> bool:
-    lines = ("spans_start", "spans_end")
-    return bool(fix and problem.part == part and problem.row is not None and fix[0] in lines
-                and first[0] in lines and symbols.SYMBOLS[fix[1]].family == symbols.SYMBOLS[first[1]].family)
 
 
 def _beats(ticks):

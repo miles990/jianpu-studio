@@ -6,6 +6,7 @@ the editor can keep an unfinished score and show what is missing.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from fractions import Fraction
 
@@ -13,6 +14,7 @@ from . import symbols
 from .i18n import N_, tr
 
 TICKS_PER_QUARTER = 48
+_ORDINALS = {1: N_("一"), 2: N_("二"), 3: N_("三"), 4: N_("四")}  # catalog sources; show tr(value)
 
 
 def _beats(ticks: int) -> Fraction:
@@ -30,12 +32,16 @@ def _part_label(score, index: int) -> str:
 class Problem(str):
     """A message that also knows where the problem is (part, note row and/or bar) and, when
     there is one, a one-click fix: ``("fill",)`` completes the last bar, ``(field, item)``
-    removes that orphan item from the note ``row``."""
+    removes that orphan item from the note ``row``, ``("add", bar, item)`` adds a bar item.
+
+    A fix is offered only when applying it removes this problem without creating another
+    (``fix_is_safe``); ``anchor`` names the sign an ``"add"`` fix would complete."""
 
     def __new__(cls, text, part=0, row=None, bar=None, fix=None):
         obj = str.__new__(cls, text)
         obj.part, obj.row, obj.bar, obj.fix = part, row, bar, fix
         obj.incomplete = obj.structure = False
+        obj.anchor = None
         return obj
 
 
@@ -115,6 +121,13 @@ def crossing(score) -> Problem | None:
 
 
 def rhythm_error(score) -> str | None:
+    problem = _rhythm_error(score)
+    if problem is not None and problem.fix and not _RAW[0] and not fix_is_safe(score, problem):
+        problem.fix = None
+    return problem
+
+
+def _rhythm_error(score) -> str | None:
     totals = []
     for index, part in enumerate(score.parts):
         position = 0
@@ -236,7 +249,7 @@ def _structure(score):
         raise LocatedError(str(first), first.row, first.bar, first.fix)
 
 
-def _problem(score, text, bar, edge=None, item=None, fix=None, incomplete=False) -> Problem:
+def _problem(score, text, bar, edge=None, item=None, fix=None, incomplete=False, anchor=None) -> Problem:
     ranges = score.part_bars(0)
     row = None if bar is None or not ranges else (
         ranges[bar][0] if edge == "bar_start" else ranges[bar][1] - 1)
@@ -245,6 +258,7 @@ def _problem(score, text, bar, edge=None, item=None, fix=None, incomplete=False)
     problem = Problem(text, 0, row, bar, fix)
     problem.incomplete = incomplete
     problem.structure = True
+    problem.anchor = anchor
     return problem
 
 
@@ -255,7 +269,14 @@ def structure_problems(score) -> list[Problem]:
     score: these are listed (and drawn next to the sign) but never refuse an edit. Export and
     playback of the structure need it complete (``notation_error``). ``incomplete`` problems
     name the next step ("尚未完成：還需要 …"); a fix ``("add", bar, item)`` adds the missing
-    counterpart where its place is unambiguous, ``(edge, item)`` removes an orphan."""
+    counterpart where its place is unambiguous, ``(edge, item)`` removes an orphan; a fix is
+    kept only when applying it creates no other problem (``fix_is_safe``)."""
+    out = _structure_problems(score)
+    _verify_fixes(score, out)
+    return out
+
+
+def _structure_problems(score) -> list[Problem]:
     items = bar_items(score)
     out: list[Problem] = []
     if not items:
@@ -271,27 +292,54 @@ def structure_problems(score) -> list[Problem]:
 
     for bar, (starts, ends) in enumerate(items):
         label = bar_label(score, bar)
-        if "bar.repeat_start" in starts or (bar and "bar.repeat_both" in items[bar - 1][1]):
-            if open_repeat is not None or volta_open:
-                add(tr("{bar}的反覆起點和前一段反覆重疊；反覆不能巢狀。").format(bar=label), bar,
-                    "bar_start", "bar.repeat_start" if "bar.repeat_start" in starts else None)
-            open_repeat = bar
         voltas = [s for s in starts if s.startswith("volta.") and s[6:].isdigit()]
+        both = bool(bar) and "bar.repeat_both" in items[bar - 1][1]
+        if "bar.repeat_start" in starts or both:
+            if voltas and open_repeat is None and not volta_open:
+                # ‖: on the first bar of an ending: the endings belong to the repeat before, so
+                # a repeat cannot also start here (export and preview would disagree).
+                text = tr("{bar}是結尾段的第一小節，不能同時是反覆的開頭；反覆起 ‖: 要放在反覆段落的第一小節。")
+                if "bar.repeat_start" in starts:
+                    add(text.format(bar=label), bar, "bar_start", "bar.repeat_start")
+                else:
+                    add(text.format(bar=label), bar, "bar_start",
+                        fix=("add", bar - 1, "bar.repeat_end"))     # the :‖: becomes a plain :‖
+            else:
+                if open_repeat is not None or volta_open:
+                    add(tr("{bar}的反覆起點和前一段反覆重疊；反覆不能巢狀。").format(bar=label), bar,
+                        "bar_start", "bar.repeat_start" if "bar.repeat_start" in starts else None)
+                open_repeat = bar
         if "volta.final" in starts and not voltas:
-            add(tr("{bar}的「最後結尾（結）」須和結尾編號一起使用。").format(bar=label), bar, "bar_start", "volta.final")
+            add(tr("尚未完成：{bar}有「最後結尾（結）」，還需要這個結尾的編號（例如第二結尾）。").format(bar=label),
+                bar, "bar_start", incomplete=True)
         for volta in voltas:
             number = int(volta[6:])
-            if number == 1:
-                if last_repeat_end != bar - 1 or volta_open:
+            if number == 1 or not volta_open:
+                if number > 1:
+                    # A later ending added first: stored, and the earlier ones are the next step.
+                    add(tr("尚未完成：{bar}的第{n}結尾前面還需要第{m}結尾（結尾編號從第一結尾依序排列）。").format(
+                        bar=label, n=tr(_ORDINALS[number]), m=tr(_ORDINALS[number - 1])), bar, "bar_start",
+                        incomplete=True)
+                    if last_repeat_end == bar - 1:
+                        region_start = regions.pop()[0]
+                    else:
+                        region_start = bar if open_repeat is None else open_repeat
+                    open_repeat = None
+                elif last_repeat_end != bar - 1 or volta_open:
                     fix = ("add", bar - 1, "bar.repeat_end") if bar > 0 and not volta_open else None
                     add(tr("尚未完成：{bar}的第一結尾前面還需要反覆止 :‖（加在前一小節結尾）。").format(bar=label),
-                        bar, "bar_start", fix=fix, incomplete=True)
+                        bar, "bar_start", fix=fix, incomplete=True, anchor=("bar_start", "volta.1"))
                     region_start = bar if open_repeat is None else open_repeat
                     open_repeat = None
                 else:
                     region_start = regions.pop()[0]
-                volta_open, expected = True, 2
-            elif not volta_open or number != expected:
+                volta_open, expected = True, number + 1
+            elif number > expected:
+                add(tr("尚未完成：{bar}的第{n}結尾前面還需要第{m}結尾（結尾編號從第一結尾依序排列）。").format(
+                    bar=label, n=tr(_ORDINALS[number]), m=tr(_ORDINALS[expected])), bar, "bar_start",
+                    incomplete=True)
+                expected = number + 1
+            elif number != expected:
                 add(tr("{bar}的結尾編號不連續；請依序設定第一結尾、第二結尾…").format(bar=label), bar)
             else:
                 expected += 1
@@ -369,7 +417,8 @@ def _navigation(items, regions, score) -> list[Problem]:
         else:
             fix = ("add", last, "nav.ds") if tocoda is None and last >= segno else None
             add(tr("尚未完成：{bar}有 Segno，還需要 D.S.（演奏到那裡跳回 Segno；通常加在最後一小節結尾）。").format(
-                bar=bar_label(score, segno)), segno, "bar_start", fix=fix, incomplete=True)
+                bar=bar_label(score, segno)), segno, "bar_start", fix=fix, incomplete=True,
+                anchor=("bar_start", "nav.segno"))
     if ds is not None and segno is None:
         add(tr("尚未完成：{bar}的 D.S. 還需要 Segno：請點要跳回的那一小節，加「Segno 記號」。").format(
             bar=bar_label(score, ds)), ds, "bar_end", incomplete=True)
@@ -429,6 +478,83 @@ def edit_error(score) -> str | None:
 def notation_error(score, structure: bool = True) -> str | None:
     """The first relational problem as a ``Problem`` (a str that knows its part, row, bar and fix);
     with ``structure`` also the repeat/ending/jump structure, which export and playback need."""
+    problem = _notation_error(score, structure)
+    if (problem is not None and problem.fix and not problem.structure and not _RAW[0]
+            and not fix_is_safe(score, problem)):
+        problem.fix = None          # structure problems were checked by structure_problems
+    return problem
+
+
+# ---------------------------------------------------------------- one-click fixes
+_RAW = [0]      # > 0 while a fix is being tried: report the raw fixes, do not verify again
+
+
+class raw:
+    """Within this block the rules report fixes without trying them (no recursion)."""
+
+    def __enter__(self):
+        _RAW[0] += 1
+
+    def __exit__(self, *_):
+        _RAW[0] -= 1
+
+
+def _state(score):
+    with raw():
+        rhythm, edit = _rhythm_error(score), _notation_error(score, structure=False)
+        structure = Counter((str(p), p.bar) for p in structure_problems(score))
+    return (str(rhythm) if rhythm else None), (str(edit) if edit else None), structure
+
+
+def fix_is_safe(score, problem, before=None) -> bool:
+    """Does the one-click fix of ``problem`` remove it without creating any other problem?
+
+    The fix is applied to a copy exactly as the button applies it (``notation_edit.apply_fix``)
+    and every rule runs again. Structure problems are all listed, so none may appear; the
+    rhythm and edit rules name only their first problem, so after fixing that one the next
+    one of the same kind may show (it was there before), but no other kind may change."""
+    from .notation_edit import apply_fix
+    if not problem.fix:
+        return False
+    before = before or _state(score)
+    trial = score.copy()
+    with raw():
+        try:
+            apply_fix(trial, problem.fix, problem.part, problem.row)
+            trial.validate()
+        except (ValueError, TypeError, IndexError, KeyError):
+            return False
+    rhythm, edit, structure = _state(trial)
+    old_rhythm, old_edit, old_structure = before
+    kind = "rhythm" if problem.fix == ("fill",) else "structure" if problem.structure else "edit"
+    if structure - old_structure:
+        return False
+    if kind == "structure" and structure[(str(problem), problem.bar)] >= old_structure[(str(problem), problem.bar)]:
+        return False
+    if rhythm is not None and (rhythm == str(problem) or (kind != "rhythm" and rhythm != old_rhythm)):
+        return False
+    if edit is not None and (edit == str(problem) or (kind != "edit" and edit != old_edit)):
+        return False
+    return True
+
+
+def _verify_fixes(score, problems) -> None:
+    """Withdraw every fix that is not safe (``fix_is_safe``), and every "add" whose anchor sign
+    another problem says must be removed (completing it would only add a second orphan)."""
+    if _RAW[0] or not any(p.fix for p in problems):
+        return
+    before = _state(score)
+    removals = {(q.row, q.fix) for q in problems if q.fix and q.fix[0] in ("bar_start", "bar_end")}
+    for problem in problems:
+        if not problem.fix:
+            continue
+        if problem.fix[0] == "add" and problem.anchor and (problem.row, problem.anchor) in removals:
+            problem.fix = None
+        elif not fix_is_safe(score, problem, before):
+            problem.fix = None
+
+
+def _notation_error(score, structure: bool = True) -> str | None:
     from .model import tuplet_ranges
     index = 0
     try:

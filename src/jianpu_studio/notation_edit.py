@@ -144,6 +144,61 @@ def set_bar_item(score: Score, bar: int, symbol_id: str, present: bool = True) -
     notes[row] = replace(notes[row], **{name: symbols.sort_ids([*items, symbol_id]) if present else items})
 
 
+# ---------------------------------------------------------------- one-click fixes
+def apply_fix(score: Score, fix: tuple, part: int = 0, row: int | None = None) -> None:
+    """Apply a problem's one-click fix (``notation_rules.Problem.fix``) to ``score`` in place.
+
+    The status-bar button and ``notation_rules.fix_is_safe`` both call this, so a fix is
+    checked exactly as it will be applied."""
+    from .notation_rules import raw
+    if fix == ("fill",):
+        # Rests complete the last bar; the signs on the old final bar line stay on it.
+        last = len(score.parts[0].notes) - 1
+        ends = score.parts[0].notes[last].bar_end if last >= 0 else ()
+        score.fill_last_bar()
+        notes = score.parts[0].notes
+        if ends and len(notes) - 1 != last:
+            notes[last] = replace(notes[last], bar_end=())
+            notes[-1] = replace(notes[-1], bar_end=symbols.sort_ids([*notes[-1].bar_end, *ends]))
+        return
+    if fix[0] == "add":
+        _, bar, item = fix
+        if item in BAR_STYLE_SLOT:
+            for other in BAR_STYLE_SLOT - {item}:
+                set_bar_item(score, bar, other, present=False)
+        set_bar_item(score, bar, item)
+        return
+    notes = score.parts[part].notes
+    if row is None or not 0 <= row < len(notes):
+        raise ValueError(tr("選取的小節不存在。"))
+    _remove_fix_item(score, part, row, fix)
+    # Removing one end can leave its partner alone (a glissando to a far note, an overlapping
+    # line): that partner goes in the same step, in the same part.
+    with raw():
+        for _ in range(4):
+            again = score.notation_error()
+            nxt = getattr(again, "fix", None) if again else None
+            if not _same_line_fix(again, nxt, part, fix):
+                break
+            _remove_fix_item(score, part, again.row, nxt)
+
+
+def _remove_fix_item(score: Score, part: int, row: int, fix: tuple) -> None:
+    name, item = fix
+    notes = score.parts[part].notes
+    note = notes[row]
+    if name == "tie":
+        notes[row] = replace(note, tie=False)
+    else:
+        notes[row] = replace(note, **{name: tuple(i for i in getattr(note, name) if i != item)})
+
+
+def _same_line_fix(problem, fix, part, first) -> bool:
+    lines = ("spans_start", "spans_end")
+    return bool(fix and problem.part == part and problem.row is not None and fix[0] in lines
+                and first[0] in lines and symbols.SYMBOLS[fix[1]].family == symbols.SYMBOLS[first[1]].family)
+
+
 # ---------------------------------------------------------------- parts
 def add_part(score: Score, name: str = "") -> int:
     """Append a part of rests with part 0's bars; returns its index."""
@@ -295,15 +350,17 @@ def _place_volta(score: Score, first: int, last: int, symbol_id: str) -> None:
     """Put a volta where the user sees it printed; keep the internal form of tech.md §1.5.
 
     The first ending's ``:‖`` prints at its end, but is stored at the end of the repeat body
-    (the bar before ``volta.1``); ``volta.end`` always closes the last ending.
+    (the bar before ``volta.1``); ``volta.end`` always closes the last ending. Endings and 結
+    may be added in any order: a later ending (or 結) added first is stored, and
+    ``notation_rules.structure_problems`` names the missing earlier ones.
     """
     if symbol_id == "volta.final":
-        group = next((g for g in _volta_groups(score) if first in g["starts"].values()), None)
-        if group is None or first != g_last_start(group):
-            raise ValueError(tr("「最後結尾（結）」要加在最後一個結尾的小節上：請先加上結尾編號。"))
         set_bar_item(score, first, "volta.final")
         return ""
     number = VOLTAS.index(symbol_id) + 1
+    # An ending already right after this one (added earlier) continues the group: no 房子結束 here.
+    joins = last + 1 < len(score.part_bars(0)) and any(
+        VOLTAS.index(item) + 1 > number for item in _bar_starts(score, last + 1) if item in VOLTAS)
     if number == 1:
         if first == 0:
             raise ValueError(tr("第一結尾前面要有反覆的小節：請把第一結尾加在第 2 小節以後。"))
@@ -320,23 +377,28 @@ def _place_volta(score: Score, first: int, last: int, symbol_id: str) -> None:
             set_bar_item(score, first - 1, "bar.repeat_end")
             notice = tr("已一併加上反覆止 :‖：第一結尾奏完回到反覆起 ‖:（沒有反覆起時回到曲首）。")
         set_bar_item(score, first, "volta.1")
-        set_bar_item(score, last, "volta.end")
+        if not joins:
+            set_bar_item(score, last, "volta.end")
         return notice
     group = next((g for g in _volta_groups(score) if g["starts"].get(number - 1) is not None
                   and g["starts"][number - 1] < first), None)
-    if group is None:
-        raise ValueError(tr("請先加第{n}結尾。").format(n=tr(_ORDINALS[number - 1])))
-    if group["end"] is not None and group["end"] != first - 1:
-        if group["end"] >= first:
-            raise ValueError(tr("第{n}結尾要放在前一個結尾之後的小節。").format(n=tr(_ORDINALS[number])))
-        raise ValueError(tr("第{n}結尾要緊接在前一個結尾後面。").format(n=tr(_ORDINALS[number])))
-    if group["end"] is not None:
-        set_bar_item(score, group["end"], "volta.end", present=False)
-    if group.get("final") is not None:
-        set_bar_item(score, group["final"], "volta.final", present=False)
+    if group is not None:
+        if group["end"] is not None and group["end"] != first - 1:
+            if group["end"] >= first:
+                raise ValueError(tr("第{n}結尾要放在前一個結尾之後的小節。").format(n=tr(_ORDINALS[number])))
+            raise ValueError(tr("第{n}結尾要緊接在前一個結尾後面。").format(n=tr(_ORDINALS[number])))
+        if group["end"] is not None:
+            set_bar_item(score, group["end"], "volta.end", present=False)
+        if group.get("final") is not None:
+            set_bar_item(score, group["final"], "volta.final", present=False)
     set_bar_item(score, first, symbol_id)
-    set_bar_item(score, last, "volta.end")
+    if not joins:
+        set_bar_item(score, last, "volta.end")
     return ""
+
+
+def _bar_starts(score: Score, bar: int) -> tuple[str, ...]:
+    return score.parts[0].notes[score.part_bars(0)[bar][0]].bar_start
 
 
 def g_last_start(group: dict) -> int:
@@ -360,7 +422,8 @@ def _remove_volta(score: Score, bar: int, symbol_id: str) -> None:
     if end is not None:
         set_bar_item(score, end, "volta.end", present=False)
     if number > 1:
-        set_bar_item(score, bar - 1, "volta.end")
+        if group["starts"].get(number - 1) is not None:
+            set_bar_item(score, bar - 1, "volta.end")   # the previous ending is the last one now
     elif end is not None and bar > 0:
         # Back to the printed form: the :‖ returns to the end of the former first ending.
         set_bar_item(score, bar - 1, "bar.repeat_end", present=False)
