@@ -15,7 +15,7 @@ from typing import Iterable, NamedTuple
 from . import symbols
 from .i18n import tr
 from .model import DURATIONS, Note, Score
-from .notation_rules import bar_map, span_pairs
+from .notation_rules import bar_items, span_pairs
 
 MAX_NOTES = 10000
 # A source identity is (copy generation, original note row). New rests/notes
@@ -114,7 +114,7 @@ def _refuse_pickup(score: Score, bars) -> None:
 
 
 def connections(score: Score, part: int) -> list[Connection]:
-    """Validated connections of one part: lines, ties and (part 0) repeats and navigation."""
+    """Validated note connections of one part (rows are note rows): lines and ties."""
     notes = score.parts[part].notes
     out = []
     for family, start, end, start_id in span_pairs(notes):
@@ -123,40 +123,50 @@ def connections(score: Score, part: int) -> list[Connection]:
     for row, note in enumerate(notes):
         if note.tie:
             out.append(Connection((row, row + 1), ((row, "tie", True),), True, False))
-    if part:
-        return out
-    _, ranges = bar_map(score)
-    group, navigation = [], []
-    for bar, (first, end) in enumerate(ranges):
-        last = end - 1
-        starts, ends = notes[first].bar_start, notes[last].bar_end
-        group += [(first, "bar_start", s) for s in starts if s in REPEAT_ITEMS]
-        navigation += [(first, "bar_start", s) for s in starts if s in NAVIGATION]
-        group += [(last, "bar_end", s) for s in ends if s in REPEAT_ITEMS]
-        navigation += [(last, "bar_end", s) for s in ends if s in NAVIGATION]
-        following = notes[ranges[bar + 1][0]].bar_start if bar + 1 < len(ranges) else ()
-        closes = "volta.end" in ends or ("bar.repeat_end" in ends and "volta.1" not in following)
+    return out
+
+
+# A both-ways repeat ``:‖:`` closes one repeat and opens the next. Each half is kept with its
+# own repeat (as a plain end / start) and joined again when both survive side by side.
+_BOTH_CLOSE, _BOTH_OPEN = "bar.repeat_both:close", "bar.repeat_both:open"
+
+
+def bar_connections(score: Score) -> list[Connection]:
+    """Paired bar items of part 0 (rows are *bar* indices): repeats with their endings, and
+    navigation. Bar items belong to bar lines, so they follow the bars, not the notes."""
+    items = bar_items(score)
+    out, group, navigation = [], [], []
+    for bar, (starts, ends) in enumerate(items):
+        if bar and "bar.repeat_both" in items[bar - 1][1]:
+            group.append((bar, "bar_start", _BOTH_OPEN))
+        group += [(bar, "bar_start", s) for s in starts if s in REPEAT_ITEMS]
+        navigation += [(bar, "bar_start", s) for s in starts if s in NAVIGATION]
+        group += [(bar, "bar_end", _BOTH_CLOSE if s == "bar.repeat_both" else s) for s in ends if s in REPEAT_ITEMS]
+        navigation += [(bar, "bar_end", s) for s in ends if s in NAVIGATION]
+        following = items[bar + 1][0] if bar + 1 < len(items) else ()
+        closes = "volta.end" in ends or (("bar.repeat_end" in ends or "bar.repeat_both" in ends)
+                                         and "volta.1" not in following)
         if group and closes:
-            out.append(Connection(tuple(sorted({row for row, _, _ in group})), tuple(group), True, False))
+            out.append(Connection(tuple(sorted({b for b, _, _ in group})), tuple(group), True, False))
             group = []
     # Segno/To Coda/D.S. belong together; D.C. and Fine stand alone (Fine becomes print-only).
     linked = [item for item in navigation if item[2] in ("nav.segno", "nav.tocoda", "nav.ds")]
     if linked:
-        out.append(Connection(tuple(sorted({row for row, _, _ in linked})), tuple(linked), False, True))
-    out += [Connection((row,), ((row, name, item),), False, True) for row, name, item in navigation
+        out.append(Connection(tuple(sorted({b for b, _, _ in linked})), tuple(linked), False, True))
+    out += [Connection((b,), ((b, name, item),), False, True) for b, name, item in navigation
             if item not in ("nav.segno", "nav.tocoda", "nav.ds")]
     return out
 
 
-def _strip(note: Note) -> tuple[Note, int]:
-    """Remove connection data; return the note and how many items were removed."""
-    removed = (int(note.tie) + len(note.spans_start) + len(note.spans_end)
-               + sum(s in PAIRED_BAR_ITEMS for s in note.bar_start + note.bar_end))
-    if not removed:
+def _strip(note: Note, *, bars: bool = False) -> tuple[Note, int]:
+    """Remove ties and line ends (and with ``bars`` every bar item); return the note and how
+    many ties and line ends were removed (bar items are counted by their callers)."""
+    removed = int(note.tie) + len(note.spans_start) + len(note.spans_end)
+    if not removed and not (bars and (note.bar_start or note.bar_end)):
         return note, 0
-    return replace(note, tie=False, spans_start=(), spans_end=(),
-                   bar_start=tuple(s for s in note.bar_start if s not in PAIRED_BAR_ITEMS),
-                   bar_end=tuple(s for s in note.bar_end if s not in PAIRED_BAR_ITEMS)), removed
+    if bars:
+        return replace(note, tie=False, spans_start=(), spans_end=(), bar_start=(), bar_end=()), removed
+    return replace(note, tie=False, spans_start=(), spans_end=()), removed
 
 
 def _restore(note: Note, name: str, item) -> Note:
@@ -165,7 +175,76 @@ def _restore(note: Note, name: str, item) -> Note:
     return replace(note, **{name: symbols.sort_ids([*getattr(note, name), item])})
 
 
-def _finish_part(score: Score, part: int, entries: list[Entry]) -> tuple[list[Note], int]:
+BarOrigin = tuple[int, int] | None
+
+
+def _restore_bars(score: Score, notes: list[Note], bar_origins: list[BarOrigin]) -> int:
+    """Put part 0's bar items back on the bars they belong to; return how many paired items of
+    the kept bars were lost (half pairs, navigation in copies).
+
+    ``bar_origins[j]`` names the original bar (copy generation, bar) that output bar ``j``
+    is, or None for a new bar. A bar keeps its bar lines when its contents are replaced
+    (fill, clear); paired items survive only when every bar of the pair survives in order
+    (repeats also need the bars between unchanged and contiguous).
+    """
+    ranges = replace(score, parts=[replace(score.parts[0], notes=notes)]).part_bars(0)
+    if len(ranges) != len(bar_origins):
+        raise AssertionError("measure edit lost track of its bars")
+    original = bar_items(score)
+    where = {origin: j for j, origin in enumerate(bar_origins) if origin is not None}
+
+    def put(j, name, item):
+        row = ranges[j][0] if name == "bar_start" else ranges[j][1] - 1
+        notes[row] = _restore(notes[row], name, item)
+        return row
+
+    for j, origin in enumerate(bar_origins):
+        if origin is not None:
+            starts, ends = original[origin[1]]
+            for item in starts:
+                if item not in PAIRED_BAR_ITEMS:
+                    put(j, "bar_start", item)
+            for item in ends:
+                if item not in PAIRED_BAR_ITEMS:
+                    put(j, "bar_end", item)
+    expected = sum(s in PAIRED_BAR_ITEMS for origin in bar_origins if origin is not None
+                   for s in original[origin[1]][0] + original[origin[1]][1])
+    preserved, halves = 0, {}
+    generations = sorted({origin[0] for origin in where})
+    for connection in bar_connections(score):
+        for generation in generations:
+            if generation and connection.navigation:
+                continue                        # copies never repeat D.S./D.C./Fine/Segno/To Coda
+            bars = [where.get((generation, bar)) for bar in connection.rows]
+            if None in bars or bars != sorted(bars):
+                continue
+            first, span = connection.rows[0], connection.rows[-1] - connection.rows[0]
+            if connection.strict and (bars[-1] - bars[0] != span or any(
+                    bar_origins[bars[0] + k] != (generation, first + k) for k in range(span + 1))):
+                continue
+            for bar, name, item in connection.items:
+                j = where[(generation, bar)]
+                if item == _BOTH_CLOSE:
+                    halves.setdefault((generation, bar), {})["close"] = put(j, name, "bar.repeat_end")
+                elif item == _BOTH_OPEN:
+                    halves.setdefault((generation, bar - 1), {})["open"] = put(j, name, "bar.repeat_start")
+                else:
+                    put(j, name, item)
+                    preserved += 1
+    for half in halves.values():
+        if "close" in half and "open" in half:
+            preserved += 1                      # both repeats survived
+            close, opened = half["close"], half["open"]
+            if opened == close + 1:             # still side by side: one :‖: again
+                notes[close] = replace(notes[close], bar_end=symbols.sort_ids(
+                    [s for s in notes[close].bar_end if s != "bar.repeat_end"] + ["bar.repeat_both"]))
+                notes[opened] = replace(notes[opened], bar_start=tuple(
+                    s for s in notes[opened].bar_start if s != "bar.repeat_start"))
+    return expected - preserved
+
+
+def _finish_part(score: Score, part: int, entries: list[Entry],
+                 bar_origins: list[BarOrigin] | None = None) -> tuple[list[Note], int]:
     positions, groups, run_starts = {}, set(), []
     for row, (_, origin) in enumerate(entries):
         if origin is not None:
@@ -175,16 +254,15 @@ def _finish_part(score: Score, part: int, entries: list[Entry]) -> tuple[list[No
         consecutive = (origin is not None and previous is not None
                        and origin == (previous[0], previous[1]+1))
         run_starts.append(run_starts[-1] if consecutive else row)
+    bars = part == 0 and bar_origins is not None
     notes, removed = [], 0
     for note, _ in entries:
-        note, count = _strip(note)
+        note, count = _strip(note, bars=bars)
         notes.append(note)
         removed += count
     preserved = 0
     for connection in connections(score, part):
         for group in groups:
-            if group and connection.navigation:
-                continue                        # copies never repeat D.S./D.C./Fine/Segno/To Coda
             rows = [positions.get((group, row)) for row in connection.rows]
             if None in rows or rows != sorted(rows):
                 continue
@@ -197,15 +275,18 @@ def _finish_part(score: Score, part: int, entries: list[Entry]) -> tuple[list[No
                 target = positions[(group, row)]
                 notes[target] = _restore(notes[target], name, item)
                 preserved += 1
+    if bars:
+        removed += _restore_bars(score, notes, bar_origins)
     return notes, removed - preserved
 
 
-def _finish(score: Score, entries: list[list[Entry]], selection=(), current=None) -> MeasureEdit:
+def _finish(score: Score, entries: list[list[Entry]], bar_origins: list[BarOrigin],
+            selection=(), current=None) -> MeasureEdit:
     if sum(map(len, entries)) > MAX_NOTES:
         raise ValueError(tr("音符太多（上限 10,000）；請減少新增或複製的小節數。"))
     parts, dropped = [], 0
     for index, part_entries in enumerate(entries):
-        notes, count = _finish_part(score, index, part_entries)
+        notes, count = _finish_part(score, index, part_entries, bar_origins)
         parts.append(notes)
         dropped += count
     result_score = replace(score, parts=[replace(p, notes=n) for p, n in zip(score.parts, parts)])
@@ -258,7 +339,8 @@ def insert_measures(score: Score, at_bar: int, count: int = 1) -> MeasureEdit:
         part_entries[position:position] = added
         if index == 0:
             selection = range(position, position + len(added))
-    return _finish(score, entries, selection)
+    kept = [(0, bar) for bar in range(bars)]
+    return _finish(score, entries, kept[:at_bar] + [None] * count + kept[at_bar:], selection)
 
 
 def delete_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
@@ -269,7 +351,7 @@ def delete_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
     removed = set(selected)
     kept = [[entry for bar, (start, end) in enumerate(part_ranges) if bar not in removed
              for entry in part_entries[start:end]] for part_ranges, part_entries in zip(ranges, entries)]
-    result = _finish(score, kept)
+    result = _finish(score, kept, [(0, bar) for bar in range(len(ranges[0])) if bar not in removed])
     remaining = replace(score, parts=[replace(p, notes=n) for p, n in zip(score.parts, result.part_notes())]).part_bars(0)
     if remaining:
         start, end = remaining[min(selected[0], len(remaining)-1)]
@@ -293,7 +375,8 @@ def clear_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
             else:
                 result.extend(part_entries[start:end])
         out.append(result)
-    return _finish(score, out, selection)
+    # Clearing replaces a bar's contents; the bar and its bar lines (repeats, jumps) stay.
+    return _finish(score, out, [(0, bar) for bar in range(len(ranges[0]))], selection)
 
 
 def duplicate_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
@@ -318,7 +401,9 @@ def duplicate_measures(score: Score, bar_indices: Iterable[int]) -> MeasureEdit:
         part_entries[end:end] = copied
         if index == 0:
             selection = range(end, end+len(copied))
-    return _finish(score, entries, selection)
+    kept = [(0, bar) for bar in range(len(ranges[0]))]
+    after = selected[-1] + 1
+    return _finish(score, entries, kept[:after] + [(1, bar) for bar in selected] + kept[after:], selection)
 
 
 def _input_connections(note: Note) -> bool:
@@ -378,35 +463,88 @@ def replace_rest_input(score: Score, row: int, note: Note, part_index: int = 0) 
         slot = symbols.SYMBOLS[mark].slot
         if mark not in marks and not (slot and any(symbols.SYMBOLS[m].slot == slot for m in marks)):
             marks = symbols.sort_ids([*marks, mark])
-    note = replace(note, marks=marks, bar_start=previous.bar_start)
+    note = replace(note, marks=marks)
     single = end == row+1 and not remainder
-    unchanged = single and replace(note, bar_end=previous.bar_end) == replace(previous, spans_start=(), spans_end=())
+    unchanged = single and note == replace(previous, spans_start=(), spans_end=(), bar_start=(), bar_end=())
     # Entering the same rest is a no-op, including its existing bar repeat.
     # Connection flags are not input attributes and must not make it an edit.
     if unchanged:
         note = previous
     origin = part[row][1] if unchanged else None
-    replacement = [(note, origin)] + [(rest, None) for rest in remainder]
-    if not unchanged and notes[end - 1].bar_end:
-        last, last_origin = replacement[-1]
-        replacement[-1] = (replace(last, bar_end=notes[end - 1].bar_end), last_origin)
-    part[row:end] = replacement
-    return _finish(score, entries, (row,), row)
+    part[row:end] = [(note, origin)] + [(rest, None) for rest in remainder]
+    # The bars do not move: their bar lines, repeats and jumps stay where they are.
+    return _finish(score, entries, [(0, bar) for bar in range(len(ranges[0]))], (row,), row)
 
 
-def clean_pasted(notes: list[Note]) -> tuple[list[Note], int]:
+def _same_pitch(a: Note, b: Note) -> bool:
+    return (a.degree, a.octave, a.accidental.replace("n", "")) == (b.degree, b.octave, b.accidental.replace("n", ""))
+
+
+def clip_notes(score: Score, part: int, rows: Iterable[int]) -> list[Note]:
+    """The selected notes as they go to the clipboard, judged against the score they come from.
+
+    The clipboard holds a flat list, so only what is complete *inside the selection* is kept:
+    a line or tie whose notes are all selected and contiguous, and (part 1) the bar items of
+    fully selected bars -- a repeat or ending group only when all of its bars are selected.
+    Navigation (Segno, To Coda, D.S., D.C., Fine) is never copied: it may appear once.
+    """
+    notes = score.parts[part].notes
+    rows = sorted({r for r in rows if 0 <= r < len(notes)})
+    index = {row: i for i, row in enumerate(rows)}
+    out = [_strip(notes[r], bars=True)[0] for r in rows]
+    for family, start, end, start_id in span_pairs(notes):
+        if all(r in index for r in range(start, end + 1)):
+            end_id = next(s for s in notes[end].spans_end if symbols.SYMBOLS[s].family == family)
+            out[index[start]] = _restore(out[index[start]], "spans_start", start_id)
+            out[index[end]] = _restore(out[index[end]], "spans_end", end_id)
+    for row in rows:
+        if notes[row].tie and row + 1 in index:
+            out[index[row]] = replace(out[index[row]], tie=True)
+    if part == 0 and not score.notation_error():
+        ranges = score.part_bars(0)
+        items = bar_items(score)
+        whole = {bar for bar, (a, b) in enumerate(ranges) if all(r in index for r in range(a, b))}
+        def put(bar, name, item):
+            row = ranges[bar][0] if name == "bar_start" else ranges[bar][1] - 1
+            out[index[row]] = _restore(out[index[row]], name, item)
+        for bar in sorted(whole):
+            starts, ends = items[bar]
+            for item in starts:
+                if item not in PAIRED_BAR_ITEMS:
+                    put(bar, "bar_start", item)
+            for item in ends:
+                if item not in PAIRED_BAR_ITEMS:
+                    put(bar, "bar_end", item)
+        for connection in bar_connections(score):
+            if connection.navigation or not all(bar in whole for bar in range(connection.rows[0], connection.rows[-1] + 1)):
+                continue
+            for bar, name, item in connection.items:
+                if item == _BOTH_CLOSE:
+                    put(bar, name, "bar.repeat_end")
+                elif item == _BOTH_OPEN:
+                    put(bar, name, "bar.repeat_start")
+                else:
+                    put(bar, name, item)
+    return out
+
+
+def clean_pasted(notes: list[Note], *, keep_bar_items: bool = False) -> tuple[list[Note], int]:
     """Pasted notes keep their marks and complete lines; half lines and bar items are removed.
 
-    Bar items belong to bar positions, which change on paste, so they are never pasted.
+    ``clip_notes`` already dropped what was incomplete in the copied selection; this re-checks
+    clipboard content on its own (e.g. from another window): lines pair by family inside the
+    pasted notes, and a tie needs the next pasted note at the same pitch -- it never joins a
+    note that happens to follow the paste position. Bar items belong to bar positions, so they
+    are kept only with ``keep_bar_items`` (the caller checks that they land on bar lines).
     Returns the cleaned notes and how many items were removed (for a notice).
     """
     cleaned, removed = [], 0
-    for note in notes:
-        stripped, count = _strip(note)
-        removed += count + len(note.bar_start) + len(note.bar_end) - sum(
-            s in PAIRED_BAR_ITEMS for s in note.bar_start + note.bar_end)
-        cleaned.append(replace(stripped, bar_start=(), bar_end=(), tie=note.tie))
-        removed -= int(note.tie)
+    for row, note in enumerate(notes):
+        stripped, count = _strip(note, bars=not keep_bar_items)
+        removed += count + (0 if keep_bar_items else len(note.bar_start) + len(note.bar_end))
+        tie = note.tie and row + 1 < len(notes) and _same_pitch(note, notes[row + 1])
+        cleaned.append(replace(stripped, tie=tie))
+        removed -= int(tie)
     open_lines = {}
     for row, note in enumerate(notes):
         for end_id in note.spans_end:

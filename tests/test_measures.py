@@ -147,12 +147,13 @@ def test_deleted_tie_cannot_reconnect_to_an_equal_pitch_new_neighbor():
     assert score.notes[3].tie
 
 
-@pytest.mark.parametrize("operation", [
-    lambda s: delete_measures(s, [1]),
-    lambda s: clear_measures(s, [1]),
-    lambda s: insert_measures(s, 1),
+@pytest.mark.parametrize("operation, repeat_kept", [
+    (lambda s: delete_measures(s, [1]), False),
+    # Clearing keeps the bar and its bar lines (review P1.2): the repeat around it stays.
+    (lambda s: clear_measures(s, [1]), True),
+    (lambda s: insert_measures(s, 1), False),
 ])
-def test_cut_spans_removed_as_pairs_but_unaffected_spans_preserved(operation):
+def test_cut_spans_removed_as_pairs_but_unaffected_spans_preserved(operation, repeat_kept):
     notes = [Note(1)] * 16
     notes[0] = replace(notes[0], slur_start=True, repeat_start=True)
     notes[11] = replace(notes[11], slur_end=True, repeat_end=True)
@@ -162,7 +163,7 @@ def test_cut_spans_removed_as_pairs_but_unaffected_spans_preserved(operation):
     result = operation(score)
     assert sum(n.slur_start for n in result.notes) == 1
     assert sum(n.slur_end for n in result.notes) == 1
-    assert not any(n.repeat_start or n.repeat_end for n in result.notes)
+    assert [i for i, n in enumerate(result.notes) if n.repeat_start or n.repeat_end] == ([0, 8] if repeat_kept else [])
     assert result.notes[-4].finger == 2
     assert result.notes[-4].bow == "downbow"
     assert result.notice
@@ -256,13 +257,15 @@ def test_rest_input_refuses_overwrite_or_unrepresentable_remainders(notes, repla
     assert score.notes == notes
 
 
-def test_rest_input_removes_affected_repeat_with_notice():
+def test_rest_input_keeps_the_repeat_of_its_bars():
+    """Review P1.2: filling a rest never moves a bar line, so the repeat around it stays."""
     score = Score(notes=[Note(0, duration=1, repeat_start=True), Note(0, duration=1, repeat_end=True),
                          Note(1, slur_start=True), Note(2), Note(3), Note(4, slur_end=True)])
     result = replace_rest_input(score, 0, Note(5))
-    assert not any(n.repeat_start or n.repeat_end for n in result.notes)
+    assert result.notes[0].repeat_start and result.notes[2].repeat_end
+    assert [i for i, n in enumerate(result.notes) if n.repeat_start or n.repeat_end] == [0, 2]
     assert result.notes[-4].slur_start and result.notes[-1].slur_end
-    assert result.notice
+    assert result.notice == ""
     assert applied(score, result).notation_error() is None
 
 

@@ -207,6 +207,44 @@ def test_whole_triplet_copy_paste_cut_and_undo_keep_complete_groups(notation_win
     assert window.project.score.notes == original
 
 
+def test_pasting_a_whole_repeated_bar_keeps_its_repeat_only_on_a_bar_line(notation_window, qtbot):
+    """Review P1.4: a complete copied repeat is pasted with it; off a bar line it is left out."""
+    from jianpu_studio.notation_rules import bar_items
+    window = notation_window
+    repeated = [Note(1, bar_start=("bar.repeat_start",)), Note(2), Note(3), Note(4, bar_end=("bar.repeat_end",))]
+    load_notes(window, repeated + [Note(5)] * 4)
+    window.notes.select_rows([0, 1, 2, 3])
+    qtbot.keyClick(window.notes, Qt.Key.Key_C, CTRL)
+    window.insert_position.setCurrentIndex(window.insert_position.findData("end"))
+    qtbot.keyClick(window.notes, Qt.Key.Key_V, CTRL)
+    score = window.project.score
+    assert bar_items(score)[2] == (("bar.repeat_start",), ("bar.repeat_end",))
+    assert score.notation_error() is None
+    # Pasted after the first note, the bar items would not sit on bar lines: they are left out.
+    window.notes.select_rows([0])
+    window.insert_position.setCurrentIndex(window.insert_position.findData("after"))
+    qtbot.keyClick(window.notes, Qt.Key.Key_V, CTRL)
+    score = window.project.score
+    assert score.notes[1:5] == [Note(1), Note(2), Note(3), Note(4)]
+    assert score.notation_error() is None
+    assert "移除 2" in window.statusBar().currentMessage()
+
+
+def test_copying_half_a_tie_or_the_outer_notes_of_two_slurs_pastes_no_connection(notation_window, qtbot):
+    window = notation_window
+    notes = [Note(1, tie=True), Note(1), Note(2, spans_start=("line.slur",)), Note(3, spans_end=("line.slur",)),
+             Note(4, spans_start=("line.slur",)), Note(5, spans_end=("line.slur",)), Note(1), Note(1)]
+    load_notes(window, notes)
+    window.notes.select_rows([0, 2, 5])
+    qtbot.keyClick(window.notes, Qt.Key.Key_C, CTRL)
+    window.notes.select_rows([5])
+    window.insert_position.setCurrentIndex(window.insert_position.findData("after"))
+    qtbot.keyClick(window.notes, Qt.Key.Key_V, CTRL)     # lands right before an existing 1
+    pasted = window.project.score.notes[6:9]
+    assert pasted == [Note(1), Note(2), Note(5)]
+    assert window.project.score.notation_error() is None
+
+
 def test_range_marks_and_fermata_remove_both_ends_without_changing_beats(notation_window, qtbot):
     window = notation_window
     load_notes(window, [Note(1)] * 8)

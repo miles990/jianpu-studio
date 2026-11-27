@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__, notation_edit, symbols
 from .i18n import N_, tr
-from .measures import clean_pasted
+from .measures import clean_pasted, clip_notes
 from .migrate import LEGACY_FIELDS
 from .model import DURATIONS, MAX_PARTS, Note, pickup_choices
 from .notation_actions import NotationActions
@@ -487,7 +487,7 @@ class EditActions(NotationActions):
     def copy_notes(self):
         if not self.require_complete_tuplets(self.notes.selected_rows()):
             return False
-        notes = [self.part_notes()[r] for r in self.notes.selected_rows()]
+        notes = clip_notes(self.project.score, self.part, self.notes.selected_rows())
         if not notes:
             return False
         mime = QMimeData()
@@ -511,12 +511,24 @@ class EditActions(NotationActions):
             notes = [Note.from_dict(item) if not set(item) & set(LEGACY_FIELDS) else Note(**item) for item in raw]
             for note in notes:
                 note.validate()
-            notes, removed = clean_pasted(notes)
         except (TypeError, ValueError, AttributeError) as exc:
             self.error(tr("無法貼上音符"), exc)
             return
-        self.insert_notes(notes)
-        if removed:
+        self.insert_clip(notes, notice=True)
+
+    def insert_clip(self, notes, *, notice=False):
+        """Insert copied notes: complete repeats and bar lines come along when whole bars land on
+        bar lines of the first part; otherwise bar items are left out (with a notice)."""
+        plain, removed = clean_pasted(notes)
+        chosen = plain
+        if self.part == 0 and any(n.bar_start or n.bar_end for n in notes):
+            with_bars, kept_removed = clean_pasted(notes, keep_bar_items=True)
+            trial = self.project.score.copy()
+            trial.parts[0].notes[self.insertion_index():self.insertion_index()] = with_bars
+            if trial.notation_error() is None:
+                chosen, removed = with_bars, kept_removed
+        self.insert_notes(chosen)
+        if removed and notice:
             self.statusBar().showMessage(tr("已貼上；移除 {count} 個不完整的連線或小節記號。").format(count=removed), 8000)
 
     def note_command(self, command):
@@ -556,7 +568,7 @@ class EditActions(NotationActions):
                 return
             if not self.require_complete_tuplets(self.notes.selected_rows()):
                 return
-            self.insert_notes([self.part_notes()[r] for r in self.notes.selected_rows()])
+            self.insert_clip(clip_notes(self.project.score, self.part, self.notes.selected_rows()))
         elif command == "clear":
             if self.palette.continuous:
                 self.set_continuous("")
