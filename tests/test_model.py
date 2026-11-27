@@ -157,6 +157,7 @@ def test_fill_after_dotted_32nd_is_exact_and_failure_does_not_mutate():
 def test_literal_metadata_cannot_become_source_lines():
     score = Score(title='曲名 {a} "b" \\ c %', notes=[Note(duration=1)])
     source = score.to_jianpu()
-    assert "title=曲名 ｛a｝ ' b'  / c ％" in source
+    # Lookalikes outside U+FF01–FF5E: the converter turns fullwidth ｛＂＼ back into syntax.
+    assert "title=曲名 ﹛a﹜ ”b” ﹨ c %" in source
     with pytest.raises(ValueError, match="單行"):
         replace(score, title="曲名\u2028LP: bad").validate()

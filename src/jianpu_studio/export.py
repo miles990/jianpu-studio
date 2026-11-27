@@ -16,9 +16,82 @@ HEADER_LIKE = re.compile(r"[A-Za-z]+=")     # upstream would swallow such a line
 JUMP_WORDS = {"nav.tocoda": "ToCoda", "nav.ds": "DS", "nav.dc": "DC"}
 
 
-def literal(text: str) -> str:
-    """Text fields are literal, never raw LilyPond/Scheme."""
-    return text.replace('"', "' ").replace("\\", "/").replace("%", "％").replace("{", "｛").replace("}", "｝")
+def upstream_normalized(text: str) -> str:
+    """What jianpu-ly makes of a line before parsing it (its ``fix_fullwidth``):
+    fullwidth ASCII forms U+FF01–FF5E become ASCII, U+201A a comma, U+FF61 a full stop."""
+    return text.translate(_FULLWIDTH)
+
+
+_FULLWIDTH = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)} | {0x201A: ",", 0xFF61: "."}
+# Lookalikes outside U+FF01–FF5E (so upstream leaves them alone); all are in Big5 and GB 18030.
+_SAFE = {'"': "”", "\\": "﹨", "{": "﹛", "}": "﹜", "$": "﹩", "%": "﹪", "#": "﹟"}
+_HEADER_SAFE = {k: v for k, v in _SAFE.items() if k in '"\\{}$'}
+# Words upstream finds anywhere in the input: part/score separators, MIDI-per-part and
+# Indonesian-notation switches, and the LP:/LPH: code markers ``validate_source`` refuses on
+# any line. A zero-width space keeps them from matching (it prints nothing).
+_RESERVED = re.compile(r"(?<=Next)(?=Part|Score)|(?<=Part)(?=Midi)|(?<=ang)(?=ka)|(?<=Indo)(?=nesian)"
+                       r"|(?<=LP)(?=H?:)")
+_OPEN_QUOTES = "‘“《"
+
+
+def _is_hanzi(c: str) -> bool:
+    return 0x3400 <= ord(c) < 0xA700        # upstream's test (H: lines)
+
+
+def _syllables(text: str) -> list[str]:
+    """Split an H: lyric line where upstream will (whitespace; a hanzi or opening quote after a
+    hanzi), keeping ``_`` joins (upstream removes them and keeps the hanzi on one note)."""
+    out, current, need = [], [], False
+    for c in text:
+        if c.isspace() or (need and (_is_hanzi(c) or c in _OPEN_QUOTES)):
+            if current:
+                out.append("".join(current))
+                current = []
+            if not c.isspace():
+                need = False
+            else:
+                continue
+        if _is_hanzi(c):
+            need = True
+        if c == "_":
+            need = False
+        current.append(c)
+    if current:
+        out.append("".join(current))
+    return out
+
+
+def _lyric_word(syllable: str) -> str:
+    """A syllable LilyPond reads as text. Digits end a lyric word (``春2`` would become the
+    syllable 春 and a duration 2) and ``* . = |`` start syntax, so such syllables are quoted;
+    the leading ``_`` (removed by upstream) keeps upstream from spacing inside the quotes."""
+    text = syllable.replace("_", "")
+    if not any(c.isdigit() for c in text) and not text.startswith(("*", ".", "=", "|")):
+        return syllable
+    hyphen = "-" if syllable.endswith("-") and syllable.strip("-") else ""
+    return '_"' + syllable[:len(syllable) - len(hyphen)] + '"' + hyphen
+
+
+def literal(text: str, *, lyric: bool = False) -> str:
+    """User text (title, composer, part name, lyrics) as literal text, never LilyPond/Scheme.
+
+    The text is first normalized the way upstream will (fullwidth ＂ would become a real
+    quote), then characters LilyPond or the converter treats as syntax are replaced by
+    lookalikes. Header values sit inside a LilyPond string, where only ``"`` and ``\\``
+    matter (plus what ``validate_source`` refuses: braces, ``$``, ``#(``). Lyrics are
+    lyric-mode words, where comments and Scheme start anywhere and digits are durations.
+    """
+    text = upstream_normalized(text)
+    if lyric:
+        text = "".join(_SAFE.get(c, c) for c in text)
+        syllables = _syllables(text)
+        words = [_lyric_word(s) for s in syllables]
+        if words != syllables:
+            text = " ".join(words)
+    else:
+        text = "".join(_HEADER_SAFE.get(c, c) for c in text)
+        text = re.sub(r"#(?=\s*[({])", "﹟", text)
+    return _RESERVED.sub("​", text)
 
 
 def grace_source(value: str) -> str:
@@ -180,7 +253,7 @@ def to_jianpu(score) -> str:
                     and bar + 1 - (1 if score.pickup else 0) > 0:
                 lines.append("\\break")
         if part.lyrics.strip():
-            lines.append("H: " + literal(part.lyrics))
+            lines.append("H: " + literal(part.lyrics, lyric=True))
     return "\n".join(lines) + "\n"
 
 

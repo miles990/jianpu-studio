@@ -157,8 +157,10 @@ def validate_source(source: str) -> None:
         raise ValueError(tr("樂譜是空白或超過 4 MB。"))
     # Single \\words only: the registry's export words and app prelude names (never MIDI twins).
     permitted = symbols.source_words()
+    from .export import upstream_normalized
     for line in source.splitlines():
-        line = line.split("%", 1)[0]
+        # Check what the converter will actually read: it turns fullwidth ＂＼｛ into ASCII first.
+        line = upstream_normalized(line).split("%", 1)[0]
         if re.search(r"\bLPH?:|#\s*[({]|\$|[\x00-\x08]", line):
             raise ValueError(tr("為安全起見，不支援內嵌 LilyPond／Scheme 程式碼（LP:、LPH:）。"))
         if re.match(r"\s*(slide|Fr)=", line):
