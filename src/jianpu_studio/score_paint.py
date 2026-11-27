@@ -340,11 +340,13 @@ class PaintMixin:
             p.setPen(c.ink)
             p.setFont(glyphs.font("cjk", 14 * s, self.score_model.score.print_variant))
             p.drawText(QRectF(cx - 20 * s, row.lyric_y - 10 * s, 40 * s, 20 * s), Qt.AlignmentFlag.AlignCenter, syllable)
-        if note.text and row.text_y:
-            # Free text above the note (the print writes ^"text" there, upright, left-aligned).
+        label = self.part_labels[part][r] if note.text and part < len(self.part_labels) else None
+        if label:
+            # Free text above the note (the print writes ^"text" there, upright, left-aligned);
+            # the layout chose its row so adjacent labels never overlap (score_layout._label_rows).
             p.setPen(c.ink)
-            p.setFont(glyphs.font("cjk", 13 * s, self.score_model.score.print_variant))
-            p.drawText(QPointF(cx - 7 * s, row.text_y + 5 * s), note.text)
+            p.setFont(self.label_font(self.score_model.score.print_variant))
+            p.drawText(label[0], note.text)
         if note.grace_before or note.grace_after:
             self._draw_graces(p, part, r, cy, c.ink)
 

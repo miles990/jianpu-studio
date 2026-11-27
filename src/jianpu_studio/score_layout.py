@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, QRect, Qt
-from PySide6.QtGui import QFont, QFontMetrics, QPainterPath
+from PySide6.QtGui import QFont, QFontMetrics, QFontMetricsF, QPainterPath
 
 from . import glyphs, symbols
 from .i18n import tr, ui_font_family
@@ -19,6 +19,8 @@ from .model import TICKS_PER_QUARTER
 GRACE_PATTERN = re.compile(r"([#b]?)([1-7])([,']{0,2})")
 PAPER_MAX = 1240
 DESK_MARGIN = 14
+LABEL_TIER = 18.0      # unscaled minimum height of one row of free text above the notes
+LABEL_GAP = 6.0       # unscaled room kept between two labels on one row
 
 
 def grace_tokens(text):
@@ -169,6 +171,7 @@ class LayoutMixin:
         self.systems = []
         self.rects = []
         self.part_rects = [[QRect() for _ in notes] for notes in part_notes]
+        self.part_labels = [[None] * len(notes) for notes in part_notes]          # (baseline point, width)
         self.part_onsets = [[(0, 0) for _ in notes] for notes in part_notes]     # (bar, offset in bar)
         self.part_lines = [[None] * len(notes) for notes in part_notes]          # system of each note
         from .engraving import shown_accidentals
@@ -192,6 +195,33 @@ class LayoutMixin:
             # the print does), so a short last line is not stretched and its slurs stay small.
             last_line = number == len(rows_of_bars) - 1
             extra = 0.0 if last_line else max(0.0, (available - base_total) / len(bars))
+            # Horizontal positions first: they do not depend on the vertical metrics, and the
+            # free-text labels need them to choose their rows.
+            bar_x, spans, x = {}, {}, float(x0)
+            for bar in bars:
+                w = bar_widths[bar] + extra
+                start_tick = 0 if bar == 0 else score.first_bar_ticks + (bar - 1) * score.bar_ticks
+                length = score.first_bar_ticks if bar == 0 else score.bar_ticks
+                segments = bar_grids[bar]
+                inner = w - 32 * s
+                total = sum(sw for _, sw in segments) or 1
+                xs, cx = {}, x + 16 * s
+                for tick, sw in segments:
+                    xs[tick] = cx
+                    cx += inner * sw / total
+                xs[length] = x + w - 16 * s
+                bar_x[bar] = (x, w, xs)
+                for p, ranges in enumerate(part_ranges):
+                    if bar >= len(ranges):
+                        continue
+                    for r in range(*ranges[bar]):
+                        offset = positions[p][r] - start_tick
+                        end = offset + part_notes[p][r].ticks
+                        left = xs.get(offset, x + 16 * s)
+                        right = xs.get(end) or self._x_at(xs, end, x + w - 16 * s)
+                        spans[p, r] = (bar, offset, left, right)
+                x += w
+            labels = self._label_rows(part_notes, spans, variant, paper_x + 8 * s, paper_x + paper_w - 8 * s)
             # Vertical metrics per part.
             volta = any(any(i.startswith("volta.") and i != "volta.end" for i in items[b][0]) for b in bars)
             nav = any(any(symbols.SYMBOLS[i].category == "navigation" for i in items[b][0] + items[b][1]) for b in bars)
@@ -203,7 +233,8 @@ class LayoutMixin:
             if nav and volta:
                 cursor += 16 * s
             for p in range(len(parts)):
-                above, below, lanes = self._row_metrics(p, bars, part_notes[p], part_ranges[p], variant)
+                tiers = 1 + max((t for (q, _), (t, _, _) in labels.items() if q == p), default=0)
+                above, below, lanes = self._row_metrics(p, bars, part_notes[p], part_ranges[p], variant, tiers)
                 row_top = cursor
                 baseline = row_top + above * s
                 row = Row(p, row_top, baseline, baseline + below * s)
@@ -218,21 +249,10 @@ class LayoutMixin:
                 cursor = row.bottom + (8 * s if p + 1 < len(parts) else 0)
             height = max(1, int(cursor - top + 6 * s))
             system = System(number, bars, QRect(x0, int(top), 1, height), rows, volta_y, nav_y)
-            x = float(x0)
             for bar in bars:
-                w = bar_widths[bar] + extra
+                x, w, xs = bar_x[bar]
                 frame = QRect(int(x), int(top), max(1, int(x + w) - int(x)), height)
                 self.bar_frames[bar] = frame
-                start_tick = 0 if bar == 0 else score.first_bar_ticks + (bar - 1) * score.bar_ticks
-                length = score.first_bar_ticks if bar == 0 else score.bar_ticks
-                segments = bar_grids[bar]
-                inner = w - 32 * s
-                total = sum(sw for _, sw in segments) or 1
-                xs, cx = {}, x + 16 * s
-                for tick, sw in segments:
-                    xs[tick] = cx
-                    cx += inner * sw / total
-                xs[length] = x + w - 16 * s
                 self.bar_onset_x[bar] = xs
                 for p, ranges in enumerate(part_ranges):
                     if bar >= len(ranges):
@@ -240,15 +260,17 @@ class LayoutMixin:
                     a, b = ranges[bar]
                     row_geom = rows[p]
                     for r in range(a, b):
-                        offset = positions[p][r] - start_tick
-                        end = offset + part_notes[p][r].ticks
-                        left = xs.get(offset, x + 16 * s)
-                        right = xs.get(end) or self._x_at(xs, end, x + w - 16 * s)
+                        _, offset, left, right = spans[p, r]
                         rect = QRect(int(left), int(row_geom.top + 18 * s), max(1, int(right - left)),
                                      max(1, int(row_geom.bottom - row_geom.top - 22 * s)))
                         self.part_rects[p][r] = rect
                         self.part_onsets[p][r] = (bar, offset)
                         self.part_lines[p][r] = number
+                        if (p, r) in labels:
+                            tier, label_x, label_w = labels[p, r]
+                            # Tier 0 sits on the text lane; further tiers stack upward.
+                            baseline_y = row_geom.text_y + (5 - self.label_step * tier) * s
+                            self.part_labels[p][r] = (QPointF(label_x, baseline_y), label_w)
                 if bar < len(part_ranges[active]):
                     a, b = part_ranges[active][bar]
                     self.bar_rects.append((frame, bar, list(range(a, b))))
@@ -304,7 +326,7 @@ class LayoutMixin:
                 out.append(((), ()))
         return out
 
-    def _row_metrics(self, part, bars, notes, ranges, variant):
+    def _row_metrics(self, part, bars, notes, ranges, variant, text_tiers=1):
         """(above, below, lanes) in unscaled px for one part in one system."""
         above_need = 34.0
         below_need = 24.0
@@ -383,8 +405,45 @@ class LayoutMixin:
         lanes["spans"] = spans
         if has_text:
             lanes["text_y"] = above + 10
-            above += 20
+            # Further rows of text stack upward, and the bar-number strip at the top of the row
+            # stays clear so a label running into the next bar never covers its number.
+            above += 20 + getattr(self, "label_step", LABEL_TIER) * (text_tiers - 1) + 16
         return above, below + 4, lanes
+
+    def label_font(self, variant):
+        """Font of the free text above notes (layout measures with the font paint uses)."""
+        return glyphs.font("cjk", 13 * self.scale, variant)
+
+    def _label_rows(self, part_notes, spans, variant, left_limit, right_limit):
+        """(part, row) -> (row of text, x, width) for the free text of one system.
+
+        A label starts just left of its note (as printed) and goes on the lowest row of text
+        where it clears the label before it; a long label on a crowded beat moves up a row
+        instead of spreading the notes, so note spacing never depends on the labels.
+        """
+        s = self.scale
+        metrics = QFontMetricsF(self.label_font(variant))
+        # One row of text is the font's full line height (CJK fonts differ by platform) plus air.
+        self.label_step = max(LABEL_TIER, metrics.height() / s + 2)
+        out, row_ends = {}, {}
+        for (p, r), (_, _, left, right) in sorted(spans.items()):
+            text = part_notes[p][r].text
+            if not text:
+                continue
+            graces = self.part_graces[p][r]
+            prefix = (14 * len(graces[0]) + 16) * s if graces[0] else 0
+            ornament = sum((14 * len(group) + 16) * s for group in graces if group)
+            main = max(1, max(1, int(right - left)) - ornament)      # as _center / _main_width
+            width = metrics.horizontalAdvance(text)
+            x = int(left) + prefix + min(main / 2, 17 * s) - 7 * s
+            x = max(left_limit, min(x, right_limit - width))         # keep it on the paper
+            ends = row_ends.setdefault(p, [])
+            tier = next((t for t, end in enumerate(ends) if x >= end + LABEL_GAP * s), len(ends))
+            if tier == len(ends):
+                ends.append(0.0)
+            ends[tier] = x + width
+            out[p, r] = (tier, x, width)
+        return out
 
     @staticmethod
     def _family_rows(notes):
