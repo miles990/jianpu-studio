@@ -156,6 +156,8 @@ def note_words(note, ctx: dict) -> list[str]:
                 w += ["\\bar", '".|:"']
         elif item == "volta.1":
             w += ["}", "A{"]
+            if ctx.get("lone_ending"):
+                w.append("\\jsVoltaFirst")     # LilyPond would label a single ending "1.2."
         elif item.startswith("volta.") and item[6:].isdigit():
             w.append("|")
         elif item == "volta.final":
@@ -243,7 +245,8 @@ def _draft_words(note, ctx) -> list[str]:
     pre = []
     for item in starts:
         if item == "bar.repeat_start":
-            pre += ["\\bar", '".|:"']
+            if not ctx.get("after_repeat_end"):      # else the previous bar wrote :‖: for both
+                pre += ["\\bar", '".|:"']
         elif (item in _DRAFT_VOLTA or item == "volta.final" and not any(v in starts for v in _DRAFT_VOLTA)) \
                 and first_part:
             # 結 alone (a loaded score may have it without a number) prints its own bracket
@@ -256,14 +259,17 @@ def _draft_words(note, ctx) -> list[str]:
             pre.append(reg[item].bar_word())
     plain = dict(ctx, draft=False, bar_start=(), bar_end=(), implicit_repeat=False)
     w = pre + note_words(note, plain)
+    # The :‖ goes where the canvas draws it (engraving.repeat_end_bars): a repeat end stored
+    # before a first ending prints at the end of the endings, never in front of the 「1.」.
+    repeat_end = ctx.get("draws_repeat_end")
+    if repeat_end:
+        w += ["\\bar", '":|.|:"' if "bar.repeat_start" in ctx.get("next_bar_start", ()) else '":|."']
     for item in ends:
         if item in symbols.LINE_STYLES and not (item == "bar.final" and ctx.get("last")):
-            if not {"bar.repeat_end", "bar.repeat_both"} & set(ends):
+            if not repeat_end:
                 w.append(reg[item].bar_word())
-        elif item == "bar.repeat_end":
-            w += ["\\bar", '":|."']
-        elif item == "bar.repeat_both":
-            w += ["\\bar", '":|.|:"']
+        elif item in ("bar.repeat_end", "bar.repeat_both"):
+            pass
         elif item == "volta.end" and first_part:
             w.append("\\jsDraftVoltaEnd")
         elif item in _DRAFT_END and first_part:
@@ -317,9 +323,11 @@ def to_jianpu(score, draft: bool = False) -> str:
         lines.append("OctavesBefore")
     if score.with_staff:
         lines.append("WithStaff")
-    items = effective_bar_items(score)
+    from .engraving import lone_first_endings, repeat_end_bars, without_redundant
+    items = without_redundant(effective_bar_items(score))
     has_jump = any(item in symbols.JUMPS for _, ends in items for item in ends)
     implicit = implicit_repeat_start(items) and not draft
+    repeat_ends, lone = repeat_end_bars(items), lone_first_endings(items)
     open_before, is_open = [], False          # a draft ending bracket still open at each bar's start
     for starts, ends in items:
         open_before.append(is_open)
@@ -344,6 +352,9 @@ def to_jianpu(score, draft: bool = False) -> str:
                        "implicit_repeat": implicit and bar == 0 and row == start,
                        "head_text": index == 0 and row == 0 and header_words(part.notes[row].text),
                        "draft": draft, "volta_open": draft and row == start and open_before[bar],
+                       "draws_repeat_end": row == end - 1 and bar in repeat_ends,
+                       "after_repeat_end": row == start and bar - 1 in repeat_ends,
+                       "lone_ending": row == start and bar in lone,
                        "volta_close": close_at_end and bar == len(ranges) - 1 and row == end - 1,
                        "bar_start": starts if row == start else (), "bar_end": ends if row == end - 1 else (),
                        "next_bar_start": next_starts if row == end - 1 else ()}

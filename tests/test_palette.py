@@ -351,11 +351,15 @@ def test_add_part_keeps_other_marks_and_is_undoable(window):
     assert len(window.project.score.parts) == 1
 
 
-def test_pickup_control_lists_only_legal_lengths(window):
+def test_pickup_control_lists_only_legal_lengths(window, monkeypatch):
     items = [window.pickup_field.itemData(i) for i in range(window.pickup_field.count())]
     assert items[0] == 0 and 48 in items and 192 not in items          # 4/4: shorter than a bar
     window.reset(Project(Score(notes=[Note(5)] + [Note(1)] * 4 + [Note(1), Note(1), Note(1)])))
+    # round 8: a pickup on written music asks first, even when no note has to change
+    asked = []
+    monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: asked.append(refused) or "rebar")
     window.pickup_field.setCurrentIndex(window.pickup_field.findData(48))
+    assert len(asked) == 1
     assert window.project.score.pickup == 48
     assert window.project.score.rhythm_error() is None
     window.undo()

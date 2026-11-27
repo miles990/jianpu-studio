@@ -201,7 +201,13 @@ class LayoutMixin:
         self.line_spans, self.line_baselines, self.line_dynamic_offsets = [], [], []
         self.bar_onset_x = {}
         items = self._bar_items(score, bar_count)
+        # What is drawn: a print-only sign that repeats an automatic one is not (engraving.py).
+        from .engraving import repeat_end_bars, without_redundant
+        items = without_redundant(items)
         self.bar_items_cache = items
+        self.repeat_ends = repeat_end_bars(items)
+        from .engraving import coda_start
+        coda_bar = coda_start(items)
         gap = max(4, int(18 * s))
         for number, bars in enumerate(rows_of_bars):
             base_total = sum(bar_widths[b] for b in bars)
@@ -244,7 +250,8 @@ class LayoutMixin:
             labels = self._label_rows(part_notes, spans, variant, paper_x + 8 * s, paper_x + paper_w - 8 * s)
             # Vertical metrics per part.
             volta = any(any(i.startswith("volta.") and i != "volta.end" for i in items[b][0]) for b in bars)
-            nav = any(any(symbols.SYMBOLS[i].category == "navigation" for i in items[b][0] + items[b][1]) for b in bars)
+            nav = any(any(symbols.SYMBOLS[i].category == "navigation" for i in items[b][0] + items[b][1]) for b in bars) \
+                or coda_bar in bars           # the automatic "⊕ Coda" label needs the same room
             top = y
             rows = {}
             cursor = y + (22 * s if volta else 0) + (18 * s if nav and not volta else 0)

@@ -171,6 +171,7 @@ class NoteList(LayoutMixin, PaintMixin, QAbstractItemView):
         self.line_hairpins, self.line_spans, self.line_baselines, self.line_dynamic_offsets = [], [], [], []
         self.part_ranges, self.part_graces, self.part_positions, self.note_graces = [], [], [], []
         self.bar_items_cache, self.bar_onset_x = [], {}
+        self.repeat_ends = set()
         self.header_rect, self.header_blocks = QRect(), []
         self.paper_rect = QRect()
         self.empty_bar_rect = QRect()

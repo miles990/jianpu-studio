@@ -191,9 +191,7 @@ class PaintMixin:
         # The first ending's :‖ prints at its end (the stored repeat end is the body's end).
         if "bar.repeat_both" in ends:
             return "repeat_both"
-        if "bar.repeat_end" in ends and not any(v in nxt for v in ("volta.1",)):
-            return "repeat_end"
-        if self._prints_repeat_end(bar):
+        if bar in self.repeat_ends:          # shared with the print and the draft (engraving.py)
             return "repeat_end"
         for style in ("final", "double", "dashed"):
             if f"bar.{style}" in ends:
@@ -202,14 +200,6 @@ class PaintMixin:
             return "final"
         from .engraving import end_barline
         return end_barline(self.bar_items_cache, bar, last) or "single"
-
-    def _prints_repeat_end(self, bar):
-        """True at the end of every ending except the last one of a volta group."""
-        items = self.bar_items_cache
-        if bar + 1 >= len(items):
-            return False
-        nxt = items[bar + 1][0]
-        return any(v in nxt for v in ("volta.2", "volta.3", "volta.4"))
 
     def _barline(self, p, style, x, top, bottom, rows, bar, end_bar):
         c = self.colors

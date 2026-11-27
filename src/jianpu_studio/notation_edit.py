@@ -637,6 +637,22 @@ def _check_marks(score: Score, trial: Score, target: Target, symbol) -> None:
                             n=row + 1))
 
 
+def _redundant_reason(score: Score, trial: Score, symbol_id: str) -> str:
+    """Why adding this print-only sign is refused: the bar already prints the same sign (the
+    automatic "⊕ Coda" at the coda's start, or the working sign of the same name)."""
+    from .engraving import redundant_signs
+    from .notation_rules import bar_items
+    before = redundant_signs(bar_items(score))
+    for (bar, sid), same in redundant_signs(bar_items(trial)).items():
+        if sid == symbol_id and (bar, sid) not in before:
+            if same == "coda":
+                return tr("{bar}開頭已經會自動印出「⊕ Coda」（尾聲從跳回記號的下一小節開始），不用再加 Coda 記號。").format(
+                    bar=_bar_label(score, bar))
+            return tr("{bar}已經有「{name}」，會印出同樣的記號，不用再加只印的這一個。").format(
+                bar=_bar_label(score, bar), name=symbols.SYMBOLS[same].display_name)
+    return ""
+
+
 def symbol_state(score: Score, target: Target, symbol_id: str, *, check: bool = True,
                  base_error=_UNCHECKED) -> SymbolState:
     """Can the palette apply ``symbol_id`` to ``target``, and what would a click do?
@@ -664,6 +680,8 @@ def symbol_state(score: Score, target: Target, symbol_id: str, *, check: bool = 
         trial = score.copy()
         try:
             _apply(trial, target, symbol_id, removes)
+            if symbol.storage == "bar" and not removes and (reason := _redundant_reason(score, trial, symbol_id)):
+                return SymbolState(False, reason, present, total)
             if symbol.storage == "marks":
                 _check_marks(score, trial, target, symbol)
             else:

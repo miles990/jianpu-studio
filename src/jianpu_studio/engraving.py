@@ -170,6 +170,75 @@ def coda_start(items) -> int | None:
     return None
 
 
+# A print-only sign that repeats what a working sign already prints at the same bar edge.
+_SAME_PRINT = {"nav.segno_sign": "nav.segno", "nav.fine_text": "nav.fine", "nav.tocoda_text": "nav.tocoda",
+               "nav.ds_text": "nav.ds", "nav.dscoda_text": "nav.ds", "nav.dc_text": "nav.dc",
+               "nav.dcfine_text": "nav.dc"}
+_VOLTA_STARTS = ("volta.1", "volta.2", "volta.3", "volta.4")
+
+
+def redundant_signs(items) -> dict[tuple[int, str], str]:
+    """(bar, print-only sign) -> what already prints the same thing there.
+
+    The coda's first bar is labelled "⊕ Coda" automatically, so a Coda sign (僅符號) on that bar
+    would be a second ⊕ on top of it; a text-only D.S./D.C./Fine/To Coda or a sign-only Segno
+    beside the working sign of the same bar prints the same words twice. Neither the canvas
+    nor the print draws these (the stored sign stays in the file and can be removed)."""
+    out = {}
+    coda = coda_start(items)
+    for bar, (starts, ends) in enumerate(items):
+        if bar == coda and "nav.coda_sign" in starts:
+            out[bar, "nav.coda_sign"] = "coda"
+        for edge in (starts, ends):
+            for item in edge:
+                if _SAME_PRINT.get(item) in edge:
+                    out[bar, item] = _SAME_PRINT[item]
+    return out
+
+
+def without_redundant(items) -> list[tuple[tuple, tuple]]:
+    """``items`` without the signs ``redundant_signs`` names: what is actually drawn."""
+    hidden = redundant_signs(items)
+    if not hidden:
+        return list(items)
+    return [(tuple(s for s in starts if (bar, s) not in hidden), tuple(e for e in ends if (bar, e) not in hidden))
+            for bar, (starts, ends) in enumerate(items)]
+
+
+def lone_first_endings(items) -> dict[int, int]:
+    """start bar -> end bar of every first ending that is the only ending of its repeat (a
+    「1.」 with its 「房子結束」 and no 「2.」 after it). LilyPond prints such an ending with
+    the :‖ at its end, so the canvas draws it there too."""
+    out = {}
+    for bar, (starts, _) in enumerate(items):
+        if "volta.1" not in starts or not bar or not {"bar.repeat_end", "bar.repeat_both"} & set(items[bar - 1][1]):
+            continue
+        for end in range(bar, len(items)):
+            if end > bar and any(v in items[end][0] for v in _VOLTA_STARTS):
+                break
+            if "volta.end" in items[end][1]:
+                out[bar] = end
+                break
+    return out
+
+
+def repeat_end_bars(items) -> set[int]:
+    """Bars whose end bar line is drawn as :‖ -- on the canvas, in the print and in a draft.
+
+    A repeat end stored before a first ending marks where the repeated body ends; its :‖ is
+    drawn at the end of every ending but the last (and at the end of a first ending that has
+    no second one). Any other stored repeat end is drawn where it is."""
+    out = set()
+    for bar, (_, ends) in enumerate(items):
+        following = items[bar + 1][0] if bar + 1 < len(items) else ()
+        if {"bar.repeat_end", "bar.repeat_both"} & set(ends) and "volta.1" not in following:
+            out.add(bar)
+        if any(v in following for v in _VOLTA_STARTS[1:]):
+            out.add(bar)
+    out.update(lone_first_endings(items).values())
+    return out
+
+
 def end_barline(items, bar: int, last: bool) -> str:
     """Bar line style implied by navigation, as the print draws it: Fine ends with a final
     bar line, and the jump bar before a coda with a double bar line ("" = no change)."""

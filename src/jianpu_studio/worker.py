@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import symbols
 from .engine import validate_source
+from .i18n import LANGUAGES, N_, TRADITIONAL, catalog
 from .model import DIRECTIVE, atomic_write
 from .musicxml import read_xml
 from .vendor import jianpu_ly
@@ -70,7 +71,11 @@ def read_options(source: str) -> dict:
     for word in first[len(DIRECTIVE):].split():
         key, _, value = word.partition("=")
         options[key] = value or True
-    return {"variant": "sc" if options.get("print") == "sc" else "tc", "sloppy": options.get("sloppy-bars") is True}
+    out = {"variant": "sc" if options.get("print") == "sc" else "tc", "sloppy": options.get("sloppy-bars") is True}
+    if options.get("draft"):
+        # a draft print, with the interface language its 「草稿」 mark is written in
+        out["draft"] = options["draft"] if options["draft"] in LANGUAGES else TRADITIONAL
+    return out
 
 
 def part_count(source: str) -> int:
@@ -213,6 +218,17 @@ def midi_rewrite(ly: str) -> str:
 # ("D.S. al Coda", "D.C. al Fine"; LilyPond's default reads "D.S. al ⊕ e poi la Coda" on two
 # lines), "To Coda ⊕" at the jump-off and "⊕ Coda" where the coda starts, the key mark clear
 # of the tempo, dynamics that take horizontal room (no "mfsfz"), and a ragged last line.
+#
+# Where the signs sit, as on the canvas (checked by tests/test_screen_print_signs.py):
+# * D.S./D.C./Fine texts (JumpScript) above the staff -- above the top part of a duet -- ending
+#   at their bar line; LilyPond's default is below the bottom staff, where they ran into
+#   hairpin ends.
+# * "To Coda ⊕" (CodaMark) ends at its bar line instead of straddling it.
+# * The metre is in the header line (1=D 4/4 ...), as jianpu prints it: no stacked time
+#   signature on the number staff (a five-line staff printed with it keeps its own).
+# * Ornaments (tr, mordents, turns) are set at the size of the other signs above a number
+#   (the full-size tr was wider than its number and reached the bar line before its note);
+#   octave dots, bowings and fermatas keep their size.
 ENGRAVING = r"""
 #(define (js-jump-text context return-count marks)
    (let* ((start (car marks)) (end (cadr marks)) (next (caddr marks))
@@ -220,6 +236,15 @@ ENGRAVING = r"""
      (make-italic-markup (cond (next (string-append head " al Coda"))
                                (end (string-append head " al Fine"))
                                (else head)))))
+#(for-each
+  (lambda (name)
+    (for-each
+     (lambda (key)
+       (let ((entry (assoc key default-script-alist)))
+         (if (and entry (not (assq 'font-size (cdr entry))))
+             (set-cdr! entry (acons 'font-size -2 (cdr entry))))))
+     (list name (symbol->string name))))
+  '(trill prall mordent prallprall prallmordent upprall downprall turn reverseturn))
 #(define (js-coda-mark number context)
    (make-line-markup (list (make-italic-markup "To Coda") (make-coda-markup))))
 #(define (js-wrap-lines layout props text width)
@@ -256,6 +281,14 @@ ALIGN is the lines' alignment (-1 left, 0 centre, 1 right)."
     \omit MetronomeMark
     \override RehearsalMark.padding = #1.6
     \override JumpScript.font-size = #0
+    \override JumpScript.direction = #UP
+    \override JumpScript.padding = #1.2
+    \override CodaMark.self-alignment-X = #RIGHT
+    \override CodaMark.font-size = #0
+    \override CodaMark.padding = #1.2
+  }
+  \context { \RhythmicStaff
+    \omit TimeSignature
   }
   \context { \Voice
     \override DynamicText.extra-spacing-width = #'(-0.4 . 0.6)
@@ -288,37 +321,64 @@ def engraving_rewrite(ly: str) -> str:
     return ly.replace(_CODA_LABEL, '\\sectionLabel \\markup { \\musicglyph "scripts.coda" "Coda" }')
 
 
-def finish_output(ly: str, variant: str = "tc", parts: int = 1) -> str:
-    """tech.md §3.2 a–d, after ``adapt_output``."""
+# Printed on every page of a draft (an unfinished repeat/jump printed as plain signs), so the
+# paper cannot be taken for the finished score.
+DRAFT_MARK = N_("反覆／跳躍尚未完成：記號照印，但不反覆、不跳躍")
+DRAFT_WORD = N_("草稿")
+
+
+def draft_mark(ly: str, language: str = TRADITIONAL) -> str:
+    """Mark a draft print: a boxed 「草稿」 with the reason under the title, and 「草稿」 in the
+    foot of every page. The texts are app constants in the interface language."""
+    def text(source):
+        return source if language == TRADITIONAL else catalog().get(source, source)
+    line = ('subtitle = \\markup \\fontsize #-2 \\normal-text \\line { \\box \\pad-markup #0.3 "'
+            + text(DRAFT_WORD) + '" \\hspace #0.6 "' + text(DRAFT_MARK) + '" }\n')
+    ly = re.sub(r"\\header\{\n(?=meter = |title=|title = )", lambda m: m[0] + line, ly)
+    foot = '\\markup \\fill-line { \\null \\fontsize #-1 \\box \\pad-markup #0.3 "' + text(DRAFT_WORD) + '" }'
+    return ly + "\\paper { oddFooterMarkup = " + foot + " evenFooterMarkup = " + foot + " }\n"
+
+
+def finish_output(ly: str, variant: str = "tc", parts: int = 1, draft: str = "") -> str:
+    """tech.md §3.2 a–d, after ``adapt_output``; ``draft`` is the language of a draft's mark."""
     ly = insert_prelude(ly, variant, parts)
     index = ly.index("\\score {")
     ly = ly[:index] + ENGRAVING + ly[index:]
-    return midi_rewrite(fix_fine(attach_after_grace_text(engraving_rewrite(header_line(ly)))))
+    ly = midi_rewrite(fix_fine(attach_after_grace_text(engraving_rewrite(header_line(ly)))))
+    return draft_mark(ly, draft) if draft else ly
 
 
 _KEY_MARK = re.compile(r"\\mark \\markup\{1=([A-G])(\\flat|\\sharp)?\}")
 _TEMPO = re.compile(r"\\tempo 4=(\d+)")
+_TIME = re.compile(r"\\time (\d+/\d+)")
 HEAD_TEXT = "\u2060"          # export marks free text of the first note for the header line
 _HEAD_TEXT = re.compile(r'\s*\^"' + HEAD_TEXT + r'([^"]*)"')
 
 
 def header_line(ly: str) -> str:
-    """The line printed jianpu puts at the top left, under the title: 「1=♭B  中速 稍自由  ♩=72」.
+    """The line printed jianpu puts at the top left, under the title: 「1=♭B  2/4  中速 稍自由  ♩=72」.
 
     It becomes the header's ``meter`` line (left-aligned above the first system, so nothing of
     the first bar is crammed under it) instead of upstream's rehearsal mark. The key is written
-    with its accidental before the letter, the first note's free text (tempo words) joins the
-    line, and the metronome mark is part of it (MetronomeMark is omitted from the layout; the
-    \\tempo stays for MIDI)."""
+    with its accidental before the letter, the metre follows it (the number staff prints no
+    time signature), the first note's free text (tempo words) joins the line, and the metronome
+    mark is part of it (MetronomeMark is omitted from the layout; the \\tempo stays for MIDI)."""
     tempo = _TEMPO.search(ly)
-    text = _HEAD_TEXT.search(ly)
+    # Upstream echoes its input in a comment before the first score: the note's own text is the
+    # first one inside the score (removing the echo left the word printed twice).
+    start = max(ly.find("\\score {"), 0)
+    text = _HEAD_TEXT.search(ly, start)
     words = text[1] if text else ""
-    ly = _HEAD_TEXT.sub("", ly, count=1)          # only the first note's text moves
+    if text:
+        ly = ly[:text.start()] + ly[text.end():]          # only the first note's text moves
     key = _KEY_MARK.search(ly)
     if key is None:
         return ly
+    time = _TIME.search(ly, start)
     sign = {"\\flat": "\\flat", "\\sharp": "\\sharp"}.get(key[2] or "")
     parts = [f'\\concat {{ "1=" \\raise #0.75 \\fontsize #-3 {sign} "{key[1]}" }}' if sign else f'"1={key[1]}"']
+    if time:
+        parts.append(f'\\hspace #1.5 "{time[1]}"')
     if words:
         parts.append(f'\\hspace #2 "{words}"')
     if tempo:
@@ -353,7 +413,8 @@ def run(args: list[str]) -> int:
                 os.environ.pop("j2ly_sloppy_bars", None)
                 if previous is not None:
                     os.environ["j2ly_sloppy_bars"] = previous
-            result = finish_output(result, options.get("variant", "tc"), part_count(data))
+            result = finish_output(result, options.get("variant", "tc"), part_count(data),
+                                   options.get("draft", ""))
         elif operation == "import":
             result = jianpu_ly.xml2jianpu(read_xml(Path(source)))
         else:

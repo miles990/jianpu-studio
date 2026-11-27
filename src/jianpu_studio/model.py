@@ -558,6 +558,9 @@ class Project:
             return self.source
         text = self.score.to_jianpu(draft)
         options = render_options(self.score)
+        if draft:
+            from .i18n import current_language
+            options["draft"] = current_language()         # the page says 「草稿」 in this language
         return (directive(options) + text) if options else text
 
 

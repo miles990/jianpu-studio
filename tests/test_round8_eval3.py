@@ -216,3 +216,38 @@ def test_an_empty_score_takes_a_pickup_without_a_question(window, monkeypatch):
     monkeypatch.setattr(window, "choose_rhythm_option", lambda refused: pytest.fail("asked on an empty score"))
     set_pickup(window, 48)
     assert window.project.score.pickup == 48
+
+
+# ---------------------------------------------------------------- 5. one Coda sign
+def ds_al_coda(window):
+    """小星星 with Segno (bar 5), To Coda (bar 8) and D.S. (bar 10): the coda starts at bar 11."""
+    window.reset(demo_project())
+    for sid, bar in (("nav.ds", 9), ("nav.tocoda", 7), ("nav.segno", 4)):
+        window.notes.select_bars([bar])
+        window.palette_apply(sid)
+    assert window.project.score.notation_error() is None
+
+
+def test_a_coda_sign_on_the_automatic_coda_bar_is_refused_with_the_reason(window):
+    ds_al_coda(window)
+    window.notes.select_bars([10])
+    state = window.symbol_state("nav.coda_sign")
+    assert not state.available and "⊕ Coda" in state.reason and "第 11 小節" in state.reason
+    before = window.project.snapshot()
+    window.palette_apply("nav.coda_sign")
+    assert window.project == before                                     # nothing added
+    assert window.toast.isVisible() and "⊕ Coda" in window.toast.text.text()
+    # the same sign on another bar is still available (a second ending's coda, a rehearsal sign...)
+    window.notes.select_bars([11])
+    assert window.symbol_state("nav.coda_sign").available
+
+
+def test_a_print_only_twin_of_a_working_sign_is_refused(window):
+    ds_al_coda(window)
+    for sid, bar, name in (("nav.segno_sign", 4, "Segno"), ("nav.dscoda_text", 9, "D.S."), ("nav.ds_text", 9, "D.S."),
+                           ("nav.tocoda_text", 7, "To Coda")):
+        window.notes.select_bars([bar])
+        state = window.symbol_state(sid)
+        assert not state.available and name in state.reason, sid
+    window.notes.select_bars([2])                                        # a bar without the working sign
+    assert window.symbol_state("nav.tocoda_text").available

@@ -179,6 +179,9 @@ DRAFT_MACROS = {
     **{f"jsDraftVolta{name}Next": tuple(f"\\set Score.repeatCommands = #'((volta #f) (volta \"{label}\"))"
                                         for label in labels) for name, labels in _DRAFT_LABELS.items()},
     "jsDraftVoltaEnd": "\\set Score.repeatCommands = #'((volta #f))",
+    # A first ending with no second one: LilyPond labels the only alternative "1.2."; the user
+    # drew 「1.」 and the canvas shows 「1.」.
+    "jsVoltaFirst": "\\once \\override Score.VoltaBracket.text = \\markup \\volta-number \"1.\"",
 }
 
 
