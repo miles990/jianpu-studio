@@ -120,7 +120,12 @@ def fix_fine(ly: str) -> str:
     return ly
 
 
-_OTTAVA_MIDI = {"\\jsOttavaUp": "\\transpose c c' {", "\\jsOttavaDown": "\\transpose c c, {", "\\jsOttavaEnd": "}"}
+# 8va/8vb sound ±12 in MIDI. Upstream places the line words wherever the notes put them --
+# inside a \times or \afterGrace block when the line starts or ends there -- so the rewrite
+# must not open or close braces (that re-nests tuplets and grace blocks). \transposition is a
+# context setting: it changes the sounding pitch from that moment on without any nesting.
+_OTTAVA_MIDI = {"\\jsOttavaUp": "\\transposition c''", "\\jsOttavaDown": "\\transposition c",
+                "\\jsOttavaEnd": "\\transposition c'"}
 
 
 def midi_rewrite(ly: str) -> str:

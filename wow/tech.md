@@ -506,7 +506,7 @@ for 每個聲部 i:
 |---|---|---|
 | a | 在第一個 `\score {` 之前插入 **prelude**（§2 末尾全文，由登記表和 `print_variant` 產生） | 巨集只能由 app 定義，使用者原始碼只能**引用**名稱 |
 | b | `fix_fine`：每個 `\volta 2 \fine \volta 1` 後面插入 ` {`，並在所屬區塊的右大括號前插入 `} ` | P2 |
-| c | `midi_rewrite`：只處理 `% === BEGIN MIDI STAFF ===` 到 `% === END MIDI STAFF ===` 之間的文字：`\jsOttavaUp`→`\transpose c c' {`，`\jsOttavaDown`→`\transpose c c, {`，`\jsOttavaEnd`→`}`；`\js(Sf\|Fz\|Sfz\|Sfzz\|Rf\|Rfz\|Fp\|Sfp\|Sfpp)`→同名加 `Midi` | 8va 在 LilyPond 只影響記譜，不改發聲音高；突強類力度在 MIDI 只加力度值，不改後續音量 |
+| c | `midi_rewrite`：只處理 `% === BEGIN MIDI STAFF ===` 到 `% === END MIDI STAFF ===` 之間的文字：`\jsOttavaUp`→`\transposition c''`，`\jsOttavaDown`→`\transposition c`，`\jsOttavaEnd`→`\transposition c'`（不加大括號：上游可能把線條字放在三連音或後倚音的區塊裡）；`\js(Sf\|Fz\|Sfz\|Sfzz\|Rf\|Rfz\|Fp\|Sfp\|Sfpp)`→同名加 `Midi` | 8va 在 LilyPond 只影響記譜，不改發聲音高；突強類力度在 MIDI 只加力度值，不改後續音量 |
 | d | 多聲部時：prelude 加入 `\layout { \context { \Score systemStartDelimiter = #'SystemStartBrace \consists Span_bar_engraver \override SpanBar.bar-extent = #'(-2 . 2) } }` | 大括號加上貫通小節線。**不需要改寫 .ly 文字**（`--brace` 那種包 StaffGroup 的作法也能編譯，但左邊會多一條系統起始線，比較醜，不採用） |
 | e | 弱起而且最後一小節完整時：轉換子程序的環境變數設定 `j2ly_sloppy_bars=1`（例如 `engine.render(…, allow_full_final_bar=True)` 傳入 `worker_env`） | 上游規則 |
 

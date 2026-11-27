@@ -179,3 +179,81 @@ def test_after_grace_keeps_supported_slide_and_breath_marks(tmp_path, lilypond):
 def test_expression_whitelist_does_not_allow_arbitrary_commands(command):
     with pytest.raises(ValueError, match="不接受 LilyPond 指令"):
         validate_source("1=C 4/4 1 2 3 4 " + command)
+
+
+# ---------------------------------------------------------------- 8va/8vb MIDI × tuplets, graces, parts (review P1.5/P1.6)
+SEMITONES = (0, 0, 2, 4, 5, 7, 9, 11)
+
+
+def expected_main_notes(score, part=0):
+    """(quarter time, MIDI pitch) of every struck main note of a C-major score without repeats."""
+    from jianpu_studio.notation_rules import span_pairs
+    notes = score.parts[part].notes
+    shift = [0] * len(notes)
+    for family, start, end, start_id in span_pairs(notes):
+        if family == "ottava":
+            for row in range(start, end + 1):
+                shift[row] = 12 if start_id == "line.8va" else -12
+    out, tick = [], 0
+    for row, note in enumerate(notes):
+        if note.degree and not (row and notes[row - 1].tie):
+            pitch = 60 + SEMITONES[note.degree] + 12 * note.octave + {"#": 1, "b": -1}.get(note.accidental, 0)
+            out.append((Fraction(tick, 48), pitch + shift[row]))
+        tick += note.ticks
+    return out
+
+
+def _8va(note, edge, ident="line.8va"):
+    from dataclasses import replace
+    return replace(note, **{"spans_start" if edge == "start" else "spans_end": (ident,)})
+
+
+def triplet(degrees, duration=8):
+    return [Note(d, duration=duration, tuplet=3, tuplet_start=i == 0, tuplet_end=i == 2) for i, d in enumerate(degrees)]
+
+
+T, T16 = triplet((2, 3, 4)), triplet((1, 2, 3), 16)
+OTTAVA_CASES = {
+    # the review's cases
+    "ends inside a triplet": [_8va(Note(1), "start"), T[0], _8va(T[1], "end"), T[2], Note(5), Note(6)],
+    "starts after an after-grace": [Note(1, grace_after="2"), _8va(Note(2), "start"), _8va(Note(3), "end"), Note(4)],
+    # neighbours of the same class
+    "starts inside a triplet": [Note(1), T[0], _8va(T[1], "start"), T[2], _8va(Note(5), "end"), Note(6)],
+    "spans a whole triplet": [_8va(T[0], "start"), T[1], _8va(T[2], "end"), Note(4), Note(5), Note(6)],
+    "over an after-grace note": [_8va(Note(1), "start"), Note(2, grace_after="34"), _8va(Note(5), "end"), Note(6)],
+    "starts on a grace-before note": [Note(1), _8va(Note(2, grace_before="7,"), "start"), _8va(Note(3), "end"), Note(4)],
+    "across a bar with long notes": [Note(1, duration=2), _8va(Note(2), "start"), Note(3),
+                                     Note(4, duration=2), _8va(Note(5), "end"), Note(6)],
+    "on rests at both ends": [_8va(Note(0), "start"), Note(1), Note(2), _8va(Note(0), "end")],
+    "8vb: sixteenth triplet then tie": [_8va(T16[0], "start", "line.8vb"), *T16[1:], Note(4, duration=8),
+                                        Note(5, tie=True), _8va(Note(5), "end", "line.8vb"), Note(6)],
+}
+
+
+def _grace_count(score):
+    return sum(len([c for c in n.grace_before + n.grace_after if c.isdigit()]) for p in score.parts for n in p.notes)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("name", list(OTTAVA_CASES))
+def test_ottava_midi_keeps_rhythm_and_shifts_only_its_notes(tmp_path, lilypond, name):
+    score = Score(title="八度線", notes=list(OTTAVA_CASES[name]))
+    score.fill_last_bar()
+    assert score.rhythm_error() is None and score.notation_error() is None
+    result = render(score.to_jianpu(), (tmp_path / "八度").resolve(), lilypond)
+    assert_pdf_and_midi(result)
+    expected = expected_main_notes(score)
+    midi = midi_note_onsets(result.midi)
+    assert [event for event in midi if event in expected] == expected, midi
+    assert len(midi) == len(expected) + _grace_count(score), midi
+
+
+@pytest.mark.integration
+def test_ottava_in_the_second_part_shifts_only_that_part(tmp_path, lilypond):
+    from jianpu_studio.model import Part, Project
+    second = [Note(1), _8va(T[0], "start"), T[1], _8va(T[2], "end"), Note(5), Note(6)]
+    score = Score(parts=[Part("甲", [Note(5)] * 5), Part("乙", second)])
+    score.fill_last_bar()
+    result = render(Project(score).notation(), (tmp_path / "二聲部").resolve(), lilypond, create_pdf=False)
+    expected = sorted(expected_main_notes(score, 0) + expected_main_notes(score, 1))
+    assert midi_note_onsets(result.midi) == expected
