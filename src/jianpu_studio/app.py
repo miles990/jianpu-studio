@@ -944,20 +944,27 @@ class MainWindow(EditActions, QMainWindow):
     def draft_notation(self, manual):
         """A draft print of an unfinished repeat/jump: asked once per version when the user asked
         for output; the signs print as they stand and nothing repeats or jumps."""
-        problem = self.unfinished_structure()
-        if problem is None:
+        if self.unfinished_structure() is None or manual and not self.draft_confirmed():
             return None
-        if manual and getattr(self, "_draft_ok", None) != self.revision:
-            if not self.confirm_draft(problem):
-                self.goto_place(0, problem.row, problem.bar)
-                self.statusBar().showMessage(str(problem), 10000)
-                return None
-            self._draft_ok = self.revision
         self.statusBar().showMessage(tr("草稿：反覆／跳躍還沒完成，記號照樣印出，但不反覆、不跳躍（試聽與 MIDI 也是）。"), 10000)
         try:
             return self.project.notation(draft=True)
         except ValueError:
             return None
+
+    def draft_confirmed(self) -> bool:
+        """True unless this version is an unfinished structure the user has not accepted as a
+        draft; asks now. Every output (export, open PDF) passes here, so an automatic preview's
+        draft render can never be handed out unconfirmed."""
+        problem = self.unfinished_structure()
+        if problem is None or getattr(self, "_draft_ok", None) == self.revision:
+            return True
+        if not self.confirm_draft(problem):
+            self.goto_place(0, problem.row, problem.bar)
+            self.statusBar().showMessage(str(problem), 10000)
+            return False
+        self._draft_ok = self.revision
+        return True
 
     def confirm_draft(self, problem) -> bool:
         """Tests replace this method."""
@@ -1028,6 +1035,9 @@ class MainWindow(EditActions, QMainWindow):
                 source, content = self.recognized_xml, None
                 suffix, description = source.suffix, tr("MusicXML 辨識結果")
             else:
+                if not self.draft_confirmed():
+                    self.drop_pending_output()
+                    return
                 result = self.result
                 available = result is not None and self.rendered_revision == self.revision
                 if available:
@@ -1058,6 +1068,9 @@ class MainWindow(EditActions, QMainWindow):
 
     def open_pdf(self):
         self.capture_fields()
+        if not self.draft_confirmed():
+            self.drop_pending_output()
+            return
         result = self.result
         if not result or self.rendered_revision != self.revision or not result.pdf.is_file():
             self.output_request = ("open", "pdf")

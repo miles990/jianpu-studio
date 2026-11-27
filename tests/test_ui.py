@@ -306,3 +306,38 @@ def test_workspace_controls_reachable_at_supported_sizes(window, size):
         target = window.childAt(point)
         assert target is control or control.isAncestorOf(target), control
     assert window.notes.viewport().height() >= 100
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("output", ["export-pdf", "export-midi", "open-pdf"])
+def test_an_automatic_draft_preview_never_skips_the_draft_question(window, qtbot, monkeypatch, tmp_path, output):
+    """Review 3 #5: the live print preview renders an unfinished structure as a draft without
+    asking; a later export or open must still ask before handing that draft out."""
+    from PySide6.QtWidgets import QFileDialog
+
+    from jianpu_studio.engine import find_tool
+    if not find_tool("lilypond"):
+        pytest.skip("JIANPU_LILYPOND not configured")
+    notes = [Note(k % 7 + 1, duration=1) for k in range(3)]
+    notes[2] = replace(notes[2], bar_start=("nav.segno",))           # a Segno with no D.S.
+    window.reset(Project(Score(notes=notes)))
+    monkeypatch.setattr(window, "render_score", REAL_RENDER_SCORE.__get__(window, MainWindow))
+    asked = []
+    monkeypatch.setattr(window, "confirm_draft", lambda problem: asked.append(str(problem)) or False)
+    window.print_preview_active = True
+    window.render_score(manual=False)
+    qtbot.waitUntil(lambda: window.task is None, timeout=60000)
+    assert window.result is not None and window.rendered_revision == window.revision and asked == []
+    destination = tmp_path / "out.bin"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(destination), ""))
+    opened = []
+    monkeypatch.setattr(app_module.QDesktopServices, "openUrl", lambda url: opened.append(url) or True)
+    run = {"export-pdf": lambda: window.export("pdf"), "export-midi": lambda: window.export("midi"),
+           "open-pdf": window.open_pdf}[output]
+    run()
+    assert len(asked) == 1 and not destination.exists() and opened == []      # refused: nothing out
+    monkeypatch.setattr(window, "confirm_draft", lambda problem: asked.append(str(problem)) or True)
+    run()
+    assert len(asked) == 2 and (destination.exists() or opened)
+    run()
+    assert len(asked) == 2                                    # accepted once for this version
