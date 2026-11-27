@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPropertyAnimation, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPropertyAnimation, QRect, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -217,8 +217,8 @@ class Toast(QFrame):
         row = QHBoxLayout(self)
         row.setContentsMargins(14, 8, 8, 8)
         row.setSpacing(10)
-        self.text = label("", "toast_text")
-        row.addWidget(self.text)
+        self.text = label("", "toast_text", wrap=True)
+        row.addWidget(self.text, 1)
         self.undo = QPushButton(tr("復原 Ctrl+Z"))
         self.undo.setObjectName("toast_undo")
         row.addWidget(self.undo)
@@ -240,13 +240,13 @@ class Toast(QFrame):
         if not getattr(self, "_connected", False):
             self.undo.clicked.connect(self._undo_clicked)
             self._connected = True
-        self.adjustSize()
         self._place()
         self.fade.stop()
         self.effect.setOpacity(1.0)
         self.show()
         self.raise_()
-        self.timer.start()
+        # Long notices (a refusal with its suggested fix) stay long enough to be read.
+        self.timer.start(min(12000, 4000 + 60 * max(0, len(text) - 24)))
 
     def dismiss(self):
         """Hide at once: the notice is about something the score no longer is."""
@@ -260,10 +260,25 @@ class Toast(QFrame):
         self.hide()
 
     def _place(self):
-        size = self.sizeHint()
-        width = min(size.width(), self.host.width() - 24)
-        self.resize(width, size.height())
-        self.move((self.host.width() - width) // 2, self.host.height() - size.height() - 18)
+        """One line when the text fits the canvas width; otherwise wrapped onto as many lines as
+        it needs -- never cut off (the end of a refusal is the suggested fix)."""
+        margins = self.layout().contentsMargins()
+        chrome = margins.left() + margins.right()
+        if self.undo.isVisibleTo(self) or not self.undo.isHidden():
+            chrome += self.undo.sizeHint().width() + self.layout().spacing()
+        available = max(120, self.host.width() - 24 - chrome)
+        metrics = self.text.fontMetrics()
+        natural = max((metrics.horizontalAdvance(line) for line in self.text.text().split("\n")), default=0) + 4
+        text_width = min(natural, available)
+        wrapped = metrics.boundingRect(QRect(0, 0, text_width, 100000), int(Qt.TextFlag.TextWordWrap),
+                                       self.text.text())
+        text_height = max(metrics.height(), wrapped.height()) + 2
+        self.text.setFixedSize(text_width, text_height)
+        width = text_width + chrome
+        height = max(text_height, self.undo.sizeHint().height() if not self.undo.isHidden() else 0) \
+            + margins.top() + margins.bottom()
+        self.resize(width, height)
+        self.move((self.host.width() - width) // 2, max(4, self.host.height() - height - 18))
 
     def fade_out(self):
         if self.underMouse():

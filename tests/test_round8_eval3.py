@@ -137,3 +137,42 @@ def test_new_and_the_blank_template_give_the_same_score(window, qtbot):
     assert (window.project, window.input_mode.currentData(), window.notes.selected_rows()) == template
     qtbot.keyClick(window.notes, "5")                                     # typing fills the first bar
     assert window.project.score.notes[0] == Note(5) and len(window.project.score.part_bars(0)) == 8
+
+
+# ---------------------------------------------------------------- 6. the refusal toast wraps
+def toast_shows_all_of_its_text(window):
+    """The toast lies inside the canvas, and its label is tall enough for every wrapped line."""
+    from PySide6.QtCore import QRect
+    toast, label = window.toast, window.toast.text
+    assert toast.isVisible() and label.wordWrap()
+    assert window.notes.rect().contains(toast.geometry()), (toast.geometry(), window.notes.rect())
+    assert toast.rect().contains(label.geometry())
+    needed = label.fontMetrics().boundingRect(QRect(0, 0, label.width(), 100000),
+                                              int(Qt.TextFlag.TextWordWrap), label.text())
+    return needed.height() <= label.height() and needed.width() <= label.width()
+
+
+@pytest.mark.parametrize("size", [(960, 600), (1280, 800)])
+def test_a_long_refusal_is_wrapped_inside_the_window_with_its_suggestion_readable(window, qtbot, size):
+    window.resize(*size)
+    window.reset(demo_project())
+    mode(window, "insert")
+    window.notes.select_rows([9], 9)                     # a note in a full bar: inserting is refused
+    before = window.project.snapshot()
+    qtbot.keyClick(window.notes, "7")
+    assert window.project == before
+    text = window.toast.text.text()
+    assert text.startswith("⚠") and text.rstrip("。").endswith("改用「填寫」")       # the fix is the last clause
+    assert toast_shows_all_of_its_text(window)
+    if size[0] == 960:
+        assert window.toast.text.height() > 1.5 * window.toast.text.fontMetrics().height()    # really wrapped
+
+
+def test_a_short_notice_with_undo_stays_one_line(window):
+    window.resize(960, 600)
+    window.reset(demo_project())
+    window.toast.show_text("已加上「一指」。", window.undo)
+    QApplication.processEvents()
+    assert toast_shows_all_of_its_text(window) and window.toast.undo.isVisible()
+    assert window.toast.text.height() < 1.5 * window.toast.text.fontMetrics().height()
+    assert window.toast.rect().contains(window.toast.undo.geometry())
