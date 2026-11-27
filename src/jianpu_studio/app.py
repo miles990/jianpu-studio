@@ -569,6 +569,7 @@ class MainWindow(EditActions, QMainWindow):
             self.shortcuts_dialog.retranslate()
         self.sync()
         self.apply_responsive()
+        self.retranslate_choice()
         if message:
             self.statusBar().showMessage(i18n.convert(message, new, old), 5000)
         if self.project.score.print_variant != ("sc" if new == i18n.SIMPLIFIED else "tc") and any(

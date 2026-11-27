@@ -51,8 +51,8 @@ class NotationActions:
                     raise ValueError(tr("三連音內有連線或漸強弱端點，請先移除這些範圍記號再合併。"))
                 # Do not silently drop a separately marked inner note.
                 for note in (middle, last):
-                    if note.marks or note.grace_before or (note is middle and note.grace_after):
-                        raise ValueError(tr("組內後兩音有獨立演奏記號，請先移除這些記號再合併；合併會保留首音音高。"))
+                    if note.marks or note.text or note.grace_before or (note is middle and note.grace_after):
+                        raise ValueError(tr("組內後兩音有獨立的演奏記號或上方文字，請先移除再合併；合併會保留首音音高。"))
                 merged = replace(first, duration=first.duration // 2, tuplet=0, tuplet_start=False,
                                  tuplet_end=False, spans_end=last.spans_end, tie=last.tie,
                                  bar_end=last.bar_end, grace_after=last.grace_after)
@@ -72,6 +72,7 @@ class NotationActions:
                         original, duration=original.duration * 2, tuplet=3,
                         tuplet_start=part == 0, tuplet_end=part == 2,
                         marks=original.marks if part == 0 else (),
+                        text=original.text if part == 0 else "",
                         spans_start=original.spans_start if part == 0 else (),
                         spans_end=original.spans_end if part == 2 else (),
                         bar_start=original.bar_start if part == 0 else (),
@@ -86,7 +87,12 @@ class NotationActions:
                 project.score.parts[part_index].notes[start:end] = replacement
                 if error := project.score.notation_error():
                     raise ValueError(error)
-            if self.mutate(update, selection=range(start, start + len(replacement)), current=start):
+            merged_rows = set(range(start + 1, end)) if collapse else set()
+
+            def explicit(item):
+                return item.part == part_index and item.row in merged_rows and item.kind == "note"
+            if self.mutate(update, selection=range(start, start + len(replacement)), current=start,
+                          explicit=explicit):
                 self.input_mode.setCurrentIndex(self.input_mode.findData("edit"))
                 self.notes.setFocus()
                 self.statusBar().showMessage(tr("已合併為首音，總拍數不變。") if collapse else tr("已拆成三連音，總拍數不變；點選各音符即可修改音高。"), 8000)
@@ -174,7 +180,11 @@ class NotationActions:
             if any(action not in ("keep", "remove") for action in ranges.values()):
                 if error := project.score.notation_error():
                     raise ValueError(error)
-        return self.mutate(update)
+        def explicit(item):
+            # The dialog sets marks, lines and grace notes of the selected notes on purpose.
+            return item.part == part and item.kind in ("mark", "line_start", "line_end", "tie",
+                                                       "grace_before", "grace_after")
+        return self.mutate(update, explicit=explicit)
 
     def quick_notation(self, changes=None, ranges=None):
         if not self.notes.selected_rows():

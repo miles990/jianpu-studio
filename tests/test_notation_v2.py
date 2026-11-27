@@ -449,7 +449,12 @@ def test_measure_edit_with_multi_part_score_is_one_undo_step(qtbot, tmp_path, mo
     window.reset(duet())
     window.notes.select_bar(1)
     QApplication.processEvents()
+    # Deleting the first-ending bar breaks the repeat around it: the editor names the repeat
+    # and ending marks of the kept bars before removing them (review 2), and goes on when confirmed.
+    asked = []
+    window.choose_rhythm_option = lambda refused: asked.append(str(refused)) or "confirm"
     window.measure_action("delete")
+    assert len(asked) == 1 and "反覆起" in asked[0] and "房子結束" in asked[0]
     assert [len(window.project.score.part_bars(i)) for i in range(2)] == [5, 5]
     assert len(window.history) == 1
     window.undo()

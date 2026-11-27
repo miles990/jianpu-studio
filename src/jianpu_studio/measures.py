@@ -244,7 +244,7 @@ def _restore_bars(score: Score, notes: list[Note], bar_origins: list[BarOrigin])
 
 
 def _finish_part(score: Score, part: int, entries: list[Entry],
-                 bar_origins: list[BarOrigin] | None = None) -> tuple[list[Note], int]:
+                 bar_origins: list[BarOrigin] | None = None, loose_lines: bool = False) -> tuple[list[Note], int]:
     positions, groups, run_starts = {}, set(), []
     for row, (_, origin) in enumerate(entries):
         if origin is not None:
@@ -269,7 +269,8 @@ def _finish_part(score: Score, part: int, entries: list[Entry],
             first, last = rows[0], rows[-1]
             # Endpoint identities plus an unchanged contiguous span prevent a
             # deleted tie from accidentally joining a new, equal-pitch neighbor.
-            if connection.strict and (run_starts[last] > first or last - first != connection.rows[-1] - connection.rows[0]):
+            strict = connection.strict and not (loose_lines and connection.items[0][1] != "tie")
+            if strict and (run_starts[last] > first or last - first != connection.rows[-1] - connection.rows[0]):
                 continue
             for row, name, item in connection.items:
                 target = positions[(group, row)]
@@ -281,12 +282,12 @@ def _finish_part(score: Score, part: int, entries: list[Entry],
 
 
 def _finish(score: Score, entries: list[list[Entry]], bar_origins: list[BarOrigin],
-            selection=(), current=None) -> MeasureEdit:
+            selection=(), current=None, loose_lines=False) -> MeasureEdit:
     if sum(map(len, entries)) > MAX_NOTES:
         raise ValueError(tr("音符太多（上限 10,000）；請減少新增或複製的小節數。"))
     parts, dropped = [], 0
     for index, part_entries in enumerate(entries):
-        notes, count = _finish_part(score, index, part_entries, bar_origins)
+        notes, count = _finish_part(score, index, part_entries, bar_origins, loose_lines)
         parts.append(notes)
         dropped += count
     result_score = replace(score, parts=[replace(p, notes=n) for p, n in zip(score.parts, parts)])
@@ -463,17 +464,18 @@ def replace_rest_input(score: Score, row: int, note: Note, part_index: int = 0) 
         slot = symbols.SYMBOLS[mark].slot
         if mark not in marks and not (slot and any(symbols.SYMBOLS[m].slot == slot for m in marks)):
             marks = symbols.sort_ids([*marks, mark])
-    note = replace(note, marks=marks)
+    # Free text and the ends of lines (hairpins, 8va...) on the rest stay on the note that fills it.
+    note = replace(note, marks=marks, text=note.text or previous.text)
     single = end == row+1 and not remainder
     unchanged = single and note == replace(previous, spans_start=(), spans_end=(), bar_start=(), bar_end=())
     # Entering the same rest is a no-op, including its existing bar repeat.
     # Connection flags are not input attributes and must not make it an edit.
     if unchanged:
         note = previous
-    origin = part[row][1] if unchanged else None
-    part[row:end] = [(note, origin)] + [(rest, None) for rest in remainder]
-    # The bars do not move: their bar lines, repeats and jumps stay where they are.
-    return _finish(score, entries, [(0, bar) for bar in range(len(ranges[0]))], (row,), row)
+    part[row:end] = [(note, part[row][1])] + [(rest, None) for rest in remainder]
+    # The bars do not move: their bar lines, repeats and jumps stay where they are; lines through
+    # the filled rest keep both ends (only a tie needs its two notes side by side).
+    return _finish(score, entries, [(0, bar) for bar in range(len(ranges[0]))], (row,), row, loose_lines=True)
 
 
 def _same_pitch(a: Note, b: Note) -> bool:

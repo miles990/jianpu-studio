@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import __version__, i18n, notation_edit, symbols
+from . import __version__, edit_guard, i18n, notation_edit, symbols
 from .i18n import N_, tr
 from .measures import clean_pasted, clip_notes
 from .migrate import LEGACY_FIELDS
@@ -58,7 +58,10 @@ class EditActions(NotationActions):
         self.notes.set_score(project.score, min(part, len(project.score.parts) - 1))
         return rows, current
 
-    def mutate(self, operation, *, selection=None, current=None):
+    def mutate(self, operation, *, selection=None, current=None, explicit=None, declared=()):
+        """Apply ``operation`` to a copy as one undo step. Whatever the edit would remove beyond
+        ``explicit(item)`` (what the command removes on purpose) and ``declared`` (already
+        named in an earlier question) is named first, and the user can cancel."""
         if self.loading or (self.task and self.task_blocks_edit):
             return False
         before = self.snapshot()
@@ -72,11 +75,19 @@ class EditActions(NotationActions):
             if self.current_notation_error() is None:
                 if error := project.score.notation_error():
                     raise ValueError(error)
+            totals = [sum(n.ticks for n in p.notes) for p in self.project.score.parts]
+            after = [sum(n.ticks for n in p.notes) for p in project.score.parts]
+            if len(totals) == len(after) > 1 and len(set(totals)) == 1 and len(set(after)) > 1:
+                raise ValueError(tr("這項修改會讓各聲部的長度不同，所以沒有套用；請改在各聲部的同一位置操作。"))
+            lost = edit_guard.subtract(edit_guard.losses(self.project.score, project.score, explicit), declared)
         except (ValueError, TypeError) as exc:
             self.error(tr("無法套用這項修改"), exc)
             self.sync(selection=before[1], current=before[2])
             return False
         if project == self.project:
+            return False
+        if lost and not self.confirm_losses(self.project.score, lost):
+            self.sync(selection=before[1], current=before[2])
             return False
         self.history.append(before)
         del self.history[:-200]
@@ -220,28 +231,44 @@ class EditActions(NotationActions):
         for p, part in enumerate(score.parts):
             position = 0
             ranges = score.part_bars(p)
+            over = False
             for bar, (a, b) in enumerate(ranges):
                 length = sum(n.ticks for n in part.notes[a:b])
                 expected = score.first_bar_ticks if bar == 0 else score.bar_ticks
                 last = bar == len(ranges) - 1
                 if length > expected:
                     problems[(p, bar)] = tr("超拍")
+                    over = True
                 elif length < expected and not last:
                     problems[(p, bar)] = tr("少 {beats} 拍").format(beats=_beats(expected - length))
                 position += length
-            if part.notes:
+            if part.notes and not over:
+                # A note across a bar line is not 'missing beats': filling would not fix it.
                 target = score.final_bar_targets(position)[0]
                 if target != position and ranges:
                     problems[(p, len(ranges) - 1)] = tr("少 {beats} 拍").format(beats=_beats(target - position))
         for (p, bar), text in sorted(problems.items(), key=lambda item: (item[0][1], item[0][0])):
             bars_flagged.add(bar)
-            found.append((p, bar, text))
-        error = score.rhythm_error() or self.current_notation_error()
+            found.append((p, bar, text, None))
+        rhythm = score.rhythm_error()
+        notation = self.current_notation_error()
+        error = rhythm or notation
+        over = any(text == tr("超拍") for _, _, text, _ in found)
+        # Every problem is reachable with 「下一個問題」: the bar problems, then the located messages.
+        for message in (rhythm, notation):
+            if not message or getattr(message, "fix", None) == ("fill",) or (message is rhythm and over):
+                continue
+            part = getattr(message, "part", 0) or 0
+            row = getattr(message, "row", None)
+            bar = getattr(message, "bar", None)
+            if bar is None and row is not None and part < len(score.parts):
+                bar = next((k for k, (a, b) in enumerate(score.part_bars(part)) if a <= row < b), None)
+            found.append((part, bar, str(message), row))
         self.problem_list = found
         self.notes.set_problems(problems, bars_flagged, set())
         if error or found:
             first = found[0] if found else None
-            if first:
+            if first and first[3] is None:
                 name = score.parts[first[0]].name if len(score.parts) > 1 else ""
                 text = tr("⚠ {count} 個問題：第 {bar} 小節{part}{what}").format(
                     count=max(1, len(found)), bar=notation_edit.bar_number(score, first[1]),
@@ -258,8 +285,11 @@ class EditActions(NotationActions):
         self.rhythm_label.style().unpolish(self.rhythm_label)
         self.rhythm_label.style().polish(self.rhythm_label)
         self.problem_button.setVisible(bool(error or found))
-        fix = getattr(error, "fix", None) if error else None
-        fill = (bool(found) and any(bar == len(score.part_bars(p)) - 1 for p, bar, _ in found)) or (fix and fix[0] == "fill")
+        fix = getattr(notation, "fix", None) if notation else None
+        if rhythm is not None and not over:
+            fix = getattr(rhythm, "fix", None) or fix
+        fill = not over and ((bool(found) and any(row is None and bar == len(score.part_bars(p)) - 1
+                                                  for p, bar, _, row in found)) or (fix and fix[0] == "fill"))
         self.fill_button.setText(tr("補齊休止符") if fill or not fix else tr("移除孤立記號"))
         self.fill_button.setToolTip(tr("把最後一小節補滿休止符") if fill or not fix else
                                     tr("移除這個沒有另一端的記號（可復原）：{problem}").format(problem=error))
@@ -422,7 +452,7 @@ class EditActions(NotationActions):
                 notes = project.score.parts[part].notes
                 for row in rows:
                     notes[row] = self.replace_note(notes[row], {name: value})
-            self.mutate(update)
+            self.mutate(update, explicit=self.retyped(part, rows))
 
     # ---------------------------------------------------------------- local rhythm edits
     def choose_rhythm_option(self, refused):
@@ -430,15 +460,72 @@ class EditActions(NotationActions):
         Tests replace this method."""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Information)
-        box.setWindowTitle(tr("放不下這個時值"))
-        box.setText(str(refused))
         buttons = {}
         for choice in refused.choices:
             buttons[box.addButton(choice.label, QMessageBox.ButtonRole.AcceptRole)] = choice.key
         cancel = box.addButton(tr("取消"), QMessageBox.ButtonRole.RejectRole)
         box.setDefaultButton(cancel)
-        box.exec()
+        self._choice_box = (box, refused, buttons, cancel)
+        self._fill_choice_box(refused)
+        try:
+            box.exec()
+        finally:
+            self._choice_box = None
         return buttons.get(box.clickedButton())
+
+    def _fill_choice_box(self, refused):
+        box, _, buttons, cancel = self._choice_box
+        box.setWindowTitle(refused.title or tr("放不下這個時值"))
+        box.setText(str(refused))
+        labels = {c.key: c.label for c in refused.choices}
+        for button, key in buttons.items():
+            if key in labels:
+                button.setText(labels[key])
+        cancel.setText(tr("取消"))
+
+    def retranslate_choice(self):
+        """An open rhythm/removal question is rebuilt in the new language (its texts are composed
+        from several messages, so converting the shown text piece by piece is not enough)."""
+        if getattr(self, "_choice_box", None) is None:
+            return
+        refused = self._choice_box[1]
+        rebuild = getattr(refused, "rebuild", None)
+        self._fill_choice_box(rebuild() if rebuild else refused)
+
+    def confirm_losses(self, score, lost) -> bool:
+        """Name what an edit would remove (count, kind, 小節/拍) and let the user cancel."""
+        from .rhythm_edit import Choice, RhythmRefused
+
+        def build():
+            refused = RhythmRefused(edit_guard.message(score, lost), choices=(Choice("confirm", tr("移除並繼續")),),
+                                    title=tr("這項修改會移除記號"))
+            refused.losses = {"confirm": lost}
+            refused.rebuild = build
+            return refused
+        return self.choose_rhythm_option(build()) == "confirm"
+
+    def _trial(self, part, result):
+        score = self.project.score.copy()
+        score.parts[part].notes = list(result.notes)
+        for other, notes in (result.others or {}).items():
+            score.parts[other].notes = list(notes)
+        return score
+
+    def _describe_choices(self, refused, make, chosen, part):
+        """Add to the question what each choice would remove, so choosing it is the confirmation."""
+        from .rhythm_edit import RhythmRefused
+        text = str(refused).split("\n\n")[0]
+        for choice in refused.choices:
+            try:
+                result = make("+".join([*chosen, choice.key]))
+            except RhythmRefused:
+                continue
+            lost = edit_guard.losses(self.project.score, self._trial(part, result), result.explicit)
+            refused.losses[choice.key] = lost
+            if lost:
+                text += "\n\n" + tr("選「{choice}」會移除 {count} 項：{items}。").format(
+                    choice=choice.label, count=len(lost), items=edit_guard.describe(self.project.score, lost))
+        refused.args = (text,)
 
     def rhythm_refused(self, refused):
         """Say why, at the place: select the note and show the reason (no modal dialog)."""
@@ -453,15 +540,29 @@ class EditActions(NotationActions):
         if self.loading or (self.task and self.task_blocks_edit):
             return False
         from .rhythm_edit import RhythmRefused
-        choice = ""
-        while True:
+        part = self.part
+        chosen, declared, result = [], [], None
+        for _ in range(4):
             try:
-                result = make(choice)
+                result = make("+".join(chosen))
                 break
             except RhythmRefused as refused:
-                if refused.choices and not choice:
-                    choice = self.choose_rhythm_option(refused)
-                    if choice:
+                if any(c.key not in chosen for c in refused.choices):
+                    asked = list(chosen)
+                    self._describe_choices(refused, make, asked, part)
+
+                    def rebuild(asked=asked, refused=refused):
+                        try:
+                            make("+".join(asked))
+                        except RhythmRefused as again:
+                            self._describe_choices(again, make, asked, part)
+                            return again
+                        return refused
+                    refused.rebuild = rebuild
+                    key = self.choose_rhythm_option(refused)
+                    if key:
+                        chosen.append(key)
+                        declared += refused.losses.get(key, [])
                         continue
                     self.update_selection()          # the note bar shows the note's real value again
                     self.notes.setFocus()
@@ -469,7 +570,8 @@ class EditActions(NotationActions):
                 self.rhythm_refused(refused)
                 self.update_selection()
                 return False
-        part = self.part
+        if result is None:
+            return False
 
         def update(project):
             project.score.parts[part].notes = list(result.notes)
@@ -477,7 +579,8 @@ class EditActions(NotationActions):
                 project.score.parts[other].notes = list(notes)
         selection = None if keep_selection else result.selection
         current = None if keep_selection else result.current
-        if not self.mutate(update, selection=selection, current=current):
+        if not self.mutate(update, selection=selection, current=current, explicit=result.explicit,
+                           declared=declared):
             return False
         if result.notice:
             self.toast.show_text(result.notice, self.undo)
@@ -527,10 +630,10 @@ class EditActions(NotationActions):
 
     def insert_notes(self, notes):
         if not notes:
-            return
+            return False
         if sum(len(p.notes) for p in self.project.score.parts) + len(notes) > 10000:
             self.error(tr("無法新增"), tr("每份樂譜最多支援 10,000 個音符。"))
-            return
+            return False
         index = self.insertion_index()
         part = self.part
         from .rhythm_edit import insert_notes
@@ -545,6 +648,8 @@ class EditActions(NotationActions):
             return result
         if self.run_rhythm_edit(make):
             self.notes.scrollTo(self.notes.currentIndex())
+            return True
+        return False
 
     def input_pitch(self, degree):
         button = self.pitch_buttons[(1, 2, 3, 4, 5, 6, 7, 0).index(degree)]
@@ -614,8 +719,7 @@ class EditActions(NotationActions):
             trial.parts[0].notes[self.insertion_index():self.insertion_index()] = with_bars
             if trial.notation_error() is None:
                 chosen, removed = with_bars, kept_removed
-        self.insert_notes(chosen)
-        if removed and notice:
+        if self.insert_notes(chosen) and removed and notice:
             self.statusBar().showMessage(tr("已貼上；移除 {count} 個不完整的連線或小節記號。").format(count=removed), 8000)
 
     def note_command(self, command):
@@ -720,7 +824,8 @@ class EditActions(NotationActions):
         def update(project):
             notes = project.score.parts[part].notes
             notes[row] = replace(notes[row], text=value)
-        if self.mutate(update, selection=[row], current=row):
+        if self.mutate(update, selection=[row], current=row,
+                       explicit=lambda item: item.part == part and item.row == row and item.kind == "text"):
             self.toast.show_text(tr("已加上「{text}」。").format(text=value) if value else tr("已移除上方文字。"), self.undo)
             return True
         return False
@@ -786,13 +891,19 @@ class EditActions(NotationActions):
         out = [r for bar in bars if bar < len(ranges) for r in range(*ranges[bar])]
         return out, (out[0] if out else -1)
 
-    def apply_measure_edit(self, result, *, fill=False, rows_are_active=False):
+    @staticmethod
+    def retyped(part, rows):
+        """A note typed over (e.g. with 0) is replaced on purpose; its marks are not."""
+        rows = set(rows)
+        return lambda item: item.part == part and item.row in rows and item.kind == "note"
+
+    def apply_measure_edit(self, result, *, fill=False, rows_are_active=False, explicit=None):
         selection, current = result.selection, result.current
         if not rows_are_active:
             selection, current = self._part0_rows_to_active(result, list(selection))
         if fill and selection:
             selection, current = (selection[0],), selection[0]
-        changed = self.mutate(result.apply_to_project, selection=selection, current=current)
+        changed = self.mutate(result.apply_to_project, selection=selection, current=current, explicit=explicit)
         if not changed:
             if [list(n) for n in result.part_notes()] != [p.notes for p in self.project.score.parts][:len(result.part_notes())]:
                 return False
@@ -835,9 +946,20 @@ class EditActions(NotationActions):
             self.capture_fields()
             if action not in operations:
                 raise ValueError(tr("不支援的小節操作。"))
-            self.apply_measure_edit(operations[action](self.project.score, bars), fill=action == "clear")
+            self.apply_measure_edit(operations[action](self.project.score, bars), fill=action == "clear",
+                                    explicit=self.measure_explicit(action, bars))
         except ValueError as exc:
             self.error(tr("無法修改小節"), exc)
+
+    def measure_explicit(self, action, bars):
+        """What deleting or clearing bars removes on purpose: the content of those bars (clearing
+        keeps their bar lines, repeats and jumps)."""
+        score, chosen = self.project.score, set(bars)
+        if action == "delete":
+            return lambda item: score.bar_index(item.tick) in chosen
+        if action == "clear":
+            return lambda item: score.bar_index(item.tick) in chosen and item.kind not in edit_guard.BAR_KINDS
+        return None
 
     def inspector_measure_action(self, key):
         if key in ("before", "after"):
@@ -864,7 +986,7 @@ class EditActions(NotationActions):
                 written = project.score.parts[part].notes
                 for r in rows:
                     written[r] = self.replace_note(written[r], {"degree": degree})
-            if self.mutate(update) and max(rows) + 1 < len(self.part_notes()):
+            if self.mutate(update, explicit=self.retyped(part, rows)) and max(rows) + 1 < len(self.part_notes()):
                 self.notes.select_rows([max(rows) + 1], max(rows) + 1)
                 self.notes.scrollTo(self.notes.currentIndex())
             return
@@ -964,7 +1086,11 @@ class EditActions(NotationActions):
                 self.goto_place(getattr(message, "part", 0), getattr(message, "row", None), getattr(message, "bar", None))
             return
         self.problem_cursor = (getattr(self, "problem_cursor", -1) + 1) % len(problems)
-        part, bar, _ = problems[self.problem_cursor]
+        part, bar, text, row = problems[self.problem_cursor]
+        if row is not None or bar is None:
+            self.goto_place(part, row, bar)
+            self.statusBar().showMessage(text, 10000)
+            return
         self.switch_part(part)
         self.notes.select_bar(bar)
         self.notes.scrollTo(self.notes.currentIndex())
@@ -988,20 +1114,38 @@ class EditActions(NotationActions):
 
     def fix_problem(self):
         """The one-click fix of the current problem: fill the last bar, or remove an orphan mark."""
+        from .notation_rules import crossing
         score = self.project.score
-        problem = score.rhythm_error() or self.current_notation_error()
+        rhythm = score.rhythm_error()
+        problem = rhythm or self.current_notation_error()
         fix = getattr(problem, "fix", None) if problem else None
+        if rhythm is not None and crossing(score) is not None:
+            # A note across a bar line: rests cannot fix it, but an orphan mark elsewhere can go.
+            notation = self.current_notation_error()
+            fix = getattr(notation, "fix", None) if notation else None
+            if not fix or fix[0] == "fill":
+                self.goto_place(rhythm.part, rhythm.row)
+                self.statusBar().showMessage(str(rhythm), 10000)
+                self.toast.show_text("⚠ " + str(rhythm))
+                return
+            problem = notation
         if fix and fix[0] != "fill" and problem.row is not None:
-            part, row, (name, item) = problem.part, problem.row, fix
+            part = problem.part
 
             def update(project):
-                notes = project.score.parts[part].notes
-                note = notes[row]
-                if name == "tie":
-                    notes[row] = replace(note, tie=False)
-                else:
-                    notes[row] = replace(note, **{name: tuple(i for i in getattr(note, name) if i != item)})
-            if self.mutate(update):
+                _remove_orphan(project.score, part, problem.row, fix)
+                # Removing one end can leave its partner alone (a glissando to a far note, an
+                # overlapping line): that partner goes in the same step, in the same part.
+                for _ in range(4):
+                    again = project.score.notation_error()
+                    nxt = getattr(again, "fix", None) if again else None
+                    if not _same_line_fix(again, nxt, part, fix):
+                        break
+                    _remove_orphan(project.score, part, again.row, nxt)
+
+            def explicit(item):
+                return item.part == part and item.kind in ("tie", *edit_guard.LINE_KINDS, *edit_guard.BAR_KINDS)
+            if self.mutate(update, explicit=explicit):
                 self.toast.show_text(tr("已移除孤立的記號，可用復原還原。"), self.undo)
             return
         if any(p.notes for p in score.parts):
@@ -1184,7 +1328,7 @@ class EditActions(NotationActions):
 
         def update(project):
             notice["text"] = notation_edit.toggle_symbol(project.score, target, sid)
-        if not self.mutate(update, selection=target.rows):
+        if not self.mutate(update, selection=target.rows, explicit=self.symbol_explicit(sid)):
             return False
         if target.kind == "bars":
             self.notes.select_bars(list(target.bars))
@@ -1199,6 +1343,23 @@ class EditActions(NotationActions):
             self.toast.show_text(text, self.undo)
         self.palette.invalidate()
         return True
+
+    @staticmethod
+    def symbol_explicit(sid):
+        """Adding or removing a symbol replaces or removes symbols of its own kind (same slot,
+        same line family, bar items) on purpose; the detail strip names them beforehand."""
+        symbol = symbols.SYMBOLS[sid]
+
+        def explicit(item):
+            if symbol.storage == "marks":
+                return item.kind == "mark" and (item.ident == sid or bool(symbol.slot)
+                                                and symbols.SYMBOLS[item.ident].slot == symbol.slot)
+            if symbol.storage == "spans":
+                return item.kind in edit_guard.LINE_KINDS and item.ident == symbol.family
+            if symbol.storage == "tie":
+                return item.kind == "tie"
+            return item.kind in edit_guard.BAR_KINDS
+        return explicit
 
     def remove_mark(self, sid):
         """× on an inspector chip: remove the mark from the whole selection (one undo step)."""
@@ -1221,7 +1382,7 @@ class EditActions(NotationActions):
                 notation_edit.remove_lines(score, part, list(target.rows), symbol.family)
             else:
                 notation_edit.remove_symbol(score, part, list(target.rows), sid)
-        if self.mutate(update, selection=target.rows):
+        if self.mutate(update, selection=target.rows, explicit=self.symbol_explicit(sid)):
             if target.kind == "bars":
                 self.notes.select_bars(list(target.bars))
             elif target.kind == "barline":
@@ -1455,7 +1616,7 @@ class EditActions(NotationActions):
                 other = index - 1 if action == "up" else index + 1
                 parts[index], parts[other] = parts[other], parts[index]
                 target = other
-        if self.mutate(update, selection=[], current=-1):
+        if self.mutate(update, selection=[], current=-1, explicit=lambda item: action == "delete"):
             self.switch_part(target, row=None) if target != self.part else self.sync()
 
     def new_from_template(self, kind):
@@ -1480,6 +1641,22 @@ class EditActions(NotationActions):
         from .engine import app_root
         path = app_root() / "examples" / "duet.jps"
         self.open_file(path=path)
+
+
+def _remove_orphan(score, part, row, fix):
+    name, item = fix
+    notes = score.parts[part].notes
+    note = notes[row]
+    if name == "tie":
+        notes[row] = replace(note, tie=False)
+    else:
+        notes[row] = replace(note, **{name: tuple(i for i in getattr(note, name) if i != item)})
+
+
+def _same_line_fix(problem, fix, part, first) -> bool:
+    lines = ("spans_start", "spans_end")
+    return bool(fix and problem.part == part and problem.row is not None and fix[0] in lines
+                and first[0] in lines and symbols.SYMBOLS[fix[1]].family == symbols.SYMBOLS[first[1]].family)
 
 
 def _beats(ticks):
