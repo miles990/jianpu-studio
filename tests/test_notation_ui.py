@@ -168,12 +168,23 @@ def test_partial_triplet_operations_reject_without_data_or_inspector_drift(notat
     before, history_count = window.project.snapshot(), len(window.history)
     errors = []
     monkeypatch.setattr(window, "error", lambda title, error: errors.append(str(error)))
+    def explained():
+        # Each refused command must explain itself at the note: read and clear the feedback.
+        shown = window.statusBar().currentMessage() + window.toast.text.text()
+        window.statusBar().clearMessage()
+        window.toast.text.setText("")
+        return "三連音" in shown
+
+    window.statusBar().clearMessage()
+    window.toast.text.setText("")
     window.duration.setCurrentIndex(window.duration.findData(16))
     assert window.project == before
     assert window.duration.currentData() == 8
+    assert explained()
     window.dotted.setChecked(True)
     assert window.project == before
     assert not window.dotted.isChecked()
+    assert explained()
     QApplication.clipboard().setText("keep clipboard")
     for key, modifier in ((Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier),
                           (Qt.Key.Key_C, CTRL), (Qt.Key.Key_X, CTRL), (Qt.Key.Key_D, CTRL)):
@@ -184,8 +195,7 @@ def test_partial_triplet_operations_reject_without_data_or_inspector_drift(notat
     assert QApplication.clipboard().text() == "keep clipboard"
     # Round 4: the two duration refusals are shown at the note (status bar + notice), not as a
     # modal error; the four whole-group commands still explain with an error box.
-    assert len(errors) == 4
-    assert "三連音" in window.statusBar().currentMessage() or "三連音" in window.toast.text.text()
+    assert len(errors) == 4                   # (the two duration refusals were each checked above)
 
 
 def test_whole_triplet_copy_paste_cut_and_undo_keep_complete_groups(notation_window, qtbot):

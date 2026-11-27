@@ -135,7 +135,8 @@ def test_real_pdf_reads_the_same_jump_text_as_the_canvas(tmp_path, lilypond, mak
     text = " ".join(pdf_text(result.pdf).split())
     assert expected in text and "e poi" not in text
     if score.title == "DS":
-        assert "To Coda" in text and "Coda" in text.split("D.S. al Coda")[-1] + text
+        # To Coda, the jump's "D.S. al Coda" and the coda's own start label: three separate texts.
+        assert "To Coda" in text and text.count("Coda") - text.count("To Coda") - text.count("al Coda") >= 1
 
 
 def test_print_has_bar_numbers_only_at_line_starts_and_a_ragged_last_line(tmp_path, lilypond):
