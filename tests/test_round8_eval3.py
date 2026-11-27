@@ -350,3 +350,107 @@ def test_open_string_zero_on_another_pitch_is_applied_with_a_reminder(window):
     window.palette_apply("finger.0")
     assert "finger.0" in window.project.score.notes[0].marks
     assert not (window.toast.isVisible() and "空弦" in window.toast.text.text())
+
+
+# ---------------------------------------------------------------- P2: the palette
+def grid_cells(window):
+    grid = window.palette.grid
+    grid.relayout()
+    return [e for e in grid.entries if e.kind == "cell"]
+
+
+def test_jump_signs_come_first_and_print_only_texts_have_their_own_group(window):
+    from jianpu_studio import symbols
+    window.palette.set_instrument("erhu", save=False)
+    grid = window.palette.grid
+    grid.relayout()
+    section = [e for e in grid.entries if e.section == "navigation" and e.kind in ("subhead", "cell")]
+    kinds = [e.kind for e in section]
+    assert kinds[0] == "subhead" and kinds.count("subhead") == 2
+    second = kinds.index("subhead", 1)
+    working, printed = section[1:second], section[second + 1:]
+    assert [e.sid for e in working] == ["nav.segno", "nav.tocoda", "nav.ds", "nav.dc", "nav.fine"]
+    assert printed and all(symbols.SYMBOLS[e.sid].print_only for e in printed)
+    assert "會跳" in section[0].text and "不跳" in section[second].text
+    # the working group is laid out above the print-only one
+    assert max(e.rect.bottom() for e in working) < min(e.rect.top() for e in printed)
+    # a sub-head is not a cell: keyboard focus and clicks skip it
+    assert all(grid.entries[i].kind in ("cell", "chip") for i in grid.items())
+
+
+@pytest.mark.parametrize("language", ["zh_TW", "zh_CN"])
+def test_no_two_cells_of_the_erhu_palette_share_a_name(window, language):
+    from collections import Counter
+
+    from jianpu_studio import i18n
+    i18n.set_language(language)
+    try:
+        window.palette.set_instrument("erhu", save=False)
+        names = Counter(e.text for e in grid_cells(window))
+        assert [name for name, count in names.items() if count > 1] == []
+    finally:
+        i18n.set_language(i18n.TRADITIONAL)
+
+
+def test_the_category_highlight_follows_the_scroll_to_the_last_section(window):
+    window.resize(1280, 800)
+    QApplication.processEvents()
+    palette, grid = window.palette, window.palette.grid
+    grid.relayout()
+    bar = grid.verticalScrollBar()
+    assert bar.maximum() > 0
+
+    def highlighted():
+        return palette.categories.currentItem().data(Qt.ItemDataRole.UserRole)
+    seen = []
+    for value in range(0, bar.maximum() + 1, 10):
+        bar.setValue(value)
+        if not seen or seen[-1] != highlighted():
+            seen.append(highlighted())
+    bar.setValue(bar.maximum())
+    sections = [s for s in grid.sections if palette.section_ids(s) or s == "favorites"]
+    assert highlighted() == sections[-1]                          # it used to stop one or two short
+    assert seen == [s for s in sections if s in seen] and set(sections) - set(seen) <= {"recents"}
+    # the highlighted section is on screen at every position
+    for value in range(0, bar.maximum() + 1, 25):
+        bar.setValue(value)
+        head = grid.entries[grid.sections[highlighted()]].rect
+        following = [grid.entries[i].rect.top() for s, i in grid.sections.items() if grid.entries[i].rect.top() > head.top()]
+        end = min(following, default=grid.content_height)
+        assert head.top() < value + grid.viewport().height() and end > value, (value, highlighted())
+    # clicking a category near the end highlights it although it cannot reach the top
+    target = sections[-2]
+    item = next(palette.categories.item(row) for row in range(palette.categories.count())
+                if palette.categories.item(row).data(Qt.ItemDataRole.UserRole) == target)
+    palette._category_clicked(item)
+    assert highlighted() == target
+
+
+def test_a_short_window_shows_four_rows_of_cells_and_a_readable_reason(window):
+    window.resize(960, 600)
+    window.reset(demo_project())
+    QApplication.processEvents()
+    palette, grid, detail = window.palette, window.palette.grid, window.palette.detail
+    assert detail.short and detail.height() < 70                  # was about 120
+    grid.relayout()
+    # anywhere in the grid: at least four rows of cells fit the viewport
+    rows = sorted({round(e.rect.top()) for e in grid.entries if e.kind == "cell" and e.section == "technique"})
+    cell_height = next(e.rect.height() for e in grid.entries if e.kind == "cell")
+    assert len(rows) >= 4 and rows[3] + cell_height - rows[0] <= grid.viewport().height()
+    # a symbol that cannot be used: the reason is shown whole (the usage line gives way to it)
+    window.notes.select_rows([], -1)
+    palette.detail_sid = ""
+    grid.focus_index = next(i for i, e in enumerate(grid.entries) if e.sid == "orn.trill" and e.kind == "cell")
+    grid.setFocus()
+    grid.focusChanged.emit("orn.trill")
+    QApplication.processEvents()
+    assert detail.name.text().startswith("顫音") and detail.reason.isVisible() and not detail.usage_line.isVisible()
+    label = detail.reason
+    from PySide6.QtCore import QRect
+    needed = label.fontMetrics().boundingRect(QRect(0, 0, label.width(), 10000), int(Qt.TextFlag.TextWordWrap), label.text())
+    assert needed.height() <= label.height() + 1
+    assert detail.usage_line.toolTip() and label.toolTip() == label.text()
+    # a taller window keeps the full strip
+    window.resize(1280, 800)
+    QApplication.processEvents()
+    assert not detail.short and detail.usage.isVisible() and not detail.usage_line.isVisible()

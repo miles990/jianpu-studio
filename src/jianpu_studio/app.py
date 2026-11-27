@@ -505,6 +505,7 @@ class MainWindow(EditActions, QMainWindow):
         self.palette.grid.compact = narrow
         self.palette.grid.relayout()
         self.palette.detail.set_compact(narrow or height <= 700)
+        self.palette.detail.set_short(height <= 700)
         tight = width <= 1120
         self.extra_host.setVisible(not tight)
         self.add_bar_button.setVisible(not tight)

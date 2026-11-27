@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 from . import glyphs, icons, symbols, symbols_ui
 from .i18n import N_, tr
 from .symbols_ui import CATEGORY_ORDER, CATEGORY_SHORT
-from .widgets import label, tool
+from .widgets import ElidedLabel, label, tool
 
 PREVIEW_DIR = Path(__file__).parent / "assets" / "symbols"
 INSTRUMENT_NAMES = {"erhu": N_("二胡"), "guzheng": N_("古箏"), "pipa": N_("琵琶"), "dizi": N_("笛子"),
@@ -150,13 +150,20 @@ class SymbolGrid(QAbstractScrollArea):
                                               text=tr("右鍵點記號可加到常用")))
                 y += 36
                 continue
-            for index, sid in enumerate(ids):
-                col = index % cols
-                if col == 0 and index:
-                    y += cell_h + gap
-                rect = QRectF(pad + col * (cell_w + gap), y, cell_w, cell_h)
-                self.entries.append(Entry("cell", rect, sid, section, symbols_ui.short_name(symbols.SYMBOLS[sid])))
-            y += cell_h + 12
+            for subhead, group in pal.section_groups(section, ids):
+                if subhead:
+                    self.entries.append(Entry("subhead", QRectF(pad, y, width - 2 * pad, 18), section=section,
+                                              text=subhead))
+                    y += 20
+                for index, sid in enumerate(group):
+                    col = index % cols
+                    if col == 0 and index:
+                        y += cell_h + gap
+                    rect = QRectF(pad + col * (cell_w + gap), y, cell_w, cell_h)
+                    self.entries.append(Entry("cell", rect, sid, section,
+                                              symbols_ui.short_name(symbols.SYMBOLS[sid])))
+                y += cell_h + 8
+            y += 4
         self.content_height = y + 8
         self._finish()
 
@@ -165,8 +172,11 @@ class SymbolGrid(QAbstractScrollArea):
         bar.setPageStep(self.viewport().height())
         bar.setRange(0, max(0, int(self.content_height - self.viewport().height())))
         items = self.items()
-        if self.focus_index >= len(self.entries) or (self.focus_index >= 0 and self.entries[self.focus_index].kind == "head"):
+        if self.focus_index >= len(self.entries) or (self.focus_index >= 0
+                                                     and self.entries[self.focus_index].kind in ("head", "subhead")):
             self.focus_index = items[0] if items else -1
+        if self.mode == "grid" and (current := self.section_in_view()):
+            self.sectionChanged.emit(current)        # the highlight is right before any scrolling
         self.viewport().update()
 
     def items(self) -> list[int]:
@@ -191,15 +201,36 @@ class SymbolGrid(QAbstractScrollArea):
 
     def scroll_to_section(self, section):
         if section in self.sections:
-            self.verticalScrollBar().setValue(int(self.entries[self.sections[section]].rect.top()) - 4)
+            bar = self.verticalScrollBar()
+            target = max(0, min(bar.maximum(), int(self.entries[self.sections[section]].rect.top()) - 4))
+            # A section near the end cannot reach the top: it stays the highlighted one until
+            # the user scrolls again.
+            self._pinned = (section, target)
+            bar.setValue(target)
+            self.sectionChanged.emit(section)
+
+    def section_in_view(self, value=None) -> str:
+        """The section the highlight shows for a scroll position. The reading line moves from
+        the top of the viewport (scrolled to the top) to its bottom (scrolled to the end), so
+        every section gets its turn -- also the last ones, whose heads never reach the top."""
+        bar = self.verticalScrollBar()
+        value = bar.value() if value is None else value
+        pinned = getattr(self, "_pinned", None)
+        if pinned is not None and pinned[1] == value and pinned[0] in self.sections:
+            return pinned[0]
+        self._pinned = None
+        progress = value / bar.maximum() if bar.maximum() > 0 else 0.0
+        line = value + 30 + max(0, self.viewport().height() - 60) * progress
+        current = ""
+        for section, index in self.sections.items():
+            if self.entries[index].rect.top() <= line:
+                current = section
+        return current
 
     def _scrolled(self, value):
         if self.mode != "grid":
             return
-        current = None
-        for section, index in self.sections.items():
-            if self.entries[index].rect.top() <= value + 30:
-                current = section
+        current = self.section_in_view(value)
         if current:
             self.sectionChanged.emit(current)
         self.viewport().update()
@@ -219,7 +250,7 @@ class SymbolGrid(QAbstractScrollArea):
         for index, entry in enumerate(self.entries):
             if entry.rect.bottom() < top or entry.rect.top() > bottom:
                 continue
-            if entry.kind == "head":
+            if entry.kind in ("head", "subhead"):
                 self._paint_head(p, entry, c)
                 continue
             if entry.kind == "empty":
@@ -244,8 +275,8 @@ class SymbolGrid(QAbstractScrollArea):
 
     def _paint_head(self, p, entry, c):
         font = self.font()
-        font.setPixelSize(12)
-        font.setWeight(font.Weight.DemiBold)
+        font.setPixelSize(12 if entry.kind == "head" else 11)
+        font.setWeight(font.Weight.DemiBold if entry.kind == "head" else font.Weight.Normal)
         p.setFont(font)
         p.setPen(c.text2)
         p.drawText(entry.rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, entry.text)
@@ -720,6 +751,18 @@ class SymbolPalette(QWidget):
         return [s.id for s in self.visible_symbols()
                 if s.category == section and symbols_ui.group_matches(s, self.instrument)]
 
+    def section_groups(self, section, ids) -> list[tuple[str, list[str]]]:
+        """(sub-head, ids) groups of a section. 跳躍 separates the signs that make the music jump
+        from the texts and signs that are only printed, so the working ones are the obvious
+        choice; every other section is one group without a sub-head."""
+        if section != "navigation":
+            return [("", list(ids))]
+        working = [s for s in ids if not symbols.SYMBOLS[s].print_only]
+        printed = [s for s in ids if symbols.SYMBOLS[s].print_only]
+        if not working or not printed:
+            return [("", list(ids))]
+        return [(tr("會跳：試聽和印譜都照著跳"), working), (tr("只印出來，不跳"), printed)]
+
     def _visible(self, sid) -> bool:
         symbol = symbols.SYMBOLS.get(sid)
         return symbol is not None and (self.show_hidden or not symbol.hidden)
@@ -1020,10 +1063,17 @@ class DetailStrip(QFrame):
         layout.addLayout(left)
         right = QVBoxLayout()
         right.setSpacing(4)
+        self.head = QHBoxLayout()
+        self.head.setSpacing(6)
         self.name = label("", "detail_name", role="title")
-        right.addWidget(self.name)
+        self.head.addWidget(self.name, 1)
+        right.addLayout(self.head)
         self.usage = label("", "detail_usage", True)
         right.addWidget(self.usage)
+        self.usage_line = ElidedLabel()            # short windows: the usage on one line (full text in the tooltip)
+        self.usage_line.setObjectName("detail_usage")
+        self.usage_line.hide()
+        right.addWidget(self.usage_line)
         self.reason = label("", "detail_reason", True, "warn")
         self.reason.hide()
         right.addWidget(self.reason)
@@ -1041,17 +1091,35 @@ class DetailStrip(QFrame):
         self.favorite.clicked.connect(lambda: self.palette.toggle_favorite(self.palette.detail_sid)
                                       if self.palette.detail_sid else None)
         bottom.addWidget(self.favorite)
+        self.bottom = bottom
         right.addLayout(bottom)
         right.addStretch()
         layout.addLayout(right, 1)
         self.compact = False
+        self.short = False
+
+    def set_short(self, short: bool):
+        """Window height ≤ 700 px: the strip is the name (with the favourite star) and one line
+        of usage -- or the reason a symbol cannot be used, on up to two lines -- so the grid
+        above shows at least four rows of cells. Tooltips keep the whole text."""
+        if short == self.short:
+            return
+        self.short = short
+        self.bottom.removeWidget(self.favorite) if short else self.head.removeWidget(self.favorite)
+        (self.head if short else self.bottom).addWidget(self.favorite)
+        self.favorite.setFixedSize(22 if short else 26, 22 if short else 26)
+        self.layout().setContentsMargins(12, 5 if short else 10, 12, 5 if short else 10)
+        self.reason.setMaximumHeight(2 * self.reason.fontMetrics().lineSpacing() + 2 if short else 16777215)
+        self.effect.setVisible(not short)
+        self.setMinimumHeight(0 if short else 72 if self.compact else 104)
+        self.refresh()
 
     def set_compact(self, compact: bool):
         """≤ 1180 px: no preview picture (design §1.3)."""
         self.compact = compact
         self.preview.setVisible(not compact)
         self.caption.setVisible(not compact)
-        self.setMinimumHeight(72 if compact else 104)
+        self.setMinimumHeight(0 if self.short else 72 if compact else 104)
 
     def refresh(self):
         pal = self.palette
@@ -1059,7 +1127,7 @@ class DetailStrip(QFrame):
         pal.detail_sid = sid
         if not sid:
             self.name.setText(tr("記號說明"))
-            self.usage.setText(tr("滑鼠停在記號上會顯示用法；先在譜上點一個音符，再點記號加上。"))
+            self._set_usage(tr("滑鼠停在記號上會顯示用法；先在譜上點一個音符，再點記號加上。"), True)
             self.reason.hide()
             self.effect.setText("")
             self.preview.clear()
@@ -1069,10 +1137,11 @@ class DetailStrip(QFrame):
         symbol = symbols.SYMBOLS[sid]
         state = pal.state_of(sid)
         self.name.setText(symbol.display_name)
-        self.usage.setText(symbols_ui.usage(sid))
+        self._set_usage(symbols_ui.usage(sid), state.available)
         self.reason.setVisible(not state.available)
         if not state.available:
             self.reason.setText(state.reason)
+            self.reason.setToolTip(state.reason)
         effects = []
         self.mute.setVisible(symbols_ui.silent(symbol))
         if symbols_ui.silent(symbol):
@@ -1103,6 +1172,14 @@ class DetailStrip(QFrame):
         self.favorite.setToolTip(tr("移出常用") if starred else tr("加到常用（已滿 9 個：點了選一個取代）")
                                  if pal.favorites_full() else tr("加到常用"))
         self._set_preview(symbol)
+
+    def _set_usage(self, text, available):
+        """The usage paragraph; in a short window one elided line, and the reason replaces it."""
+        for widget in (self.usage, self.usage_line):
+            widget.setText(text)
+            widget.setToolTip(text)
+        self.usage.setVisible(not self.short)
+        self.usage_line.setVisible(self.short and available)
 
     def _set_preview(self, symbol):
         if self.compact:

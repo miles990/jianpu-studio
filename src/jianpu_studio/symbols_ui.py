@@ -309,8 +309,25 @@ def usage(symbol_id: str) -> str:
     return tr(text)
 
 
+# Cell labels of symbols whose plain name (without the remark in brackets) is another
+# symbol's too: the remark is what tells them apart, so it stays in the label.
+CELL_NAMES = {
+    "bow.down_hook": N_("京胡拉弓"), "bow.up_hook": N_("京胡推弓"),
+    "trem.1": N_("震音一條"), "trem.2": N_("震音二條"), "trem.3": N_("震音三條"), "trem.4": N_("震音四條"),
+    "arp.up": N_("琶音向上"), "arp.down": N_("琶音向下"),
+    "hairpin.cresc_text": N_("漸強 cresc."), "hairpin.dim_text": N_("漸弱 dim."),
+    "tempo.accel_span": N_("漸快延伸線"), "tempo.rit_span": N_("漸慢延伸線"),
+    "nav.coda_sign": N_("Coda 符號"), "nav.segno_sign": N_("Segno 符號"),
+    "nav.dc_text": N_("D.C. 文字"), "nav.ds_text": N_("D.S. 文字"), "nav.fine_text": N_("Fine 文字"),
+    "nav.tocoda_text": N_("To Coda 文字"),
+}
+
+
 def short_name(symbol) -> str:
-    """Cell label: the name without its parenthesised remark (至多約 6 個全形字，其餘以 … 省略)."""
+    """Cell label: the name without its parenthesised remark (至多約 6 個全形字，其餘以 … 省略);
+    twins get the label that tells them apart (``CELL_NAMES``)."""
+    if symbol.id in CELL_NAMES:
+        return tr(CELL_NAMES[symbol.id])
     name = symbol.display_name
     base = re.sub(r"（[^）]*）", "", name).strip()
     return base or name

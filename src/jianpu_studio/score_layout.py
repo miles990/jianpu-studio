@@ -522,6 +522,7 @@ class LayoutMixin:
         small = QFont(ui_font_family())
         small.setPixelSize(max(7, int(12 * s)))
         from .model import key_label
+
         # As the print (worker.header_line): key, metre, tempo words, ♩ = n, then the tuning.
         from .text_words import header_parts
         words, tunings = header_parts(self._header_text) or ([], [])
