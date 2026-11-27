@@ -242,7 +242,9 @@ def _draft_words(note, ctx) -> list[str]:
     for item in starts:
         if item == "bar.repeat_start":
             pre += ["\\bar", '".|:"']
-        elif item in _DRAFT_VOLTA and first_part:
+        elif (item in _DRAFT_VOLTA or item == "volta.final" and not any(v in starts for v in _DRAFT_VOLTA)) \
+                and first_part:
+            # 結 alone (a loaded score may have it without a number) prints its own bracket
             word = "\\jsDraftVoltaJie" if "volta.final" in starts else _DRAFT_VOLTA[item]
             pre.append(word + ("Next" if ctx.get("volta_open") else ""))
         elif item == "nav.segno" and first_part:
@@ -266,6 +268,8 @@ def _draft_words(note, ctx) -> list[str]:
             w.append(reg[_DRAFT_END[item]].bar_word())
         elif item not in _DRAFT_END and item != "volta.end" and first_part and reg[item].print_only:
             w.append(reg[item].bar_word())
+    if ctx.get("volta_close") and first_part:
+        w.append("\\jsDraftVoltaEnd")     # an ending left open closes with the score (else LilyPond drops it)
     return w
 
 
@@ -318,10 +322,11 @@ def to_jianpu(score, draft: bool = False) -> str:
     open_before, is_open = [], False          # a draft ending bracket still open at each bar's start
     for starts, ends in items:
         open_before.append(is_open)
-        if any(v in starts for v in _DRAFT_VOLTA):
+        if any(v in starts for v in (*_DRAFT_VOLTA, "volta.final")):
             is_open = True
         if "volta.end" in ends:
             is_open = False
+    close_at_end = draft and is_open
     for index, part in enumerate(parts):
         if index:
             lines.append("NextPart")
@@ -338,6 +343,7 @@ def to_jianpu(score, draft: bool = False) -> str:
                        "implicit_repeat": implicit and bar == 0 and row == start,
                        "head_text": index == 0 and row == 0 and header_words(part.notes[row].text),
                        "draft": draft, "volta_open": draft and row == start and open_before[bar],
+                       "volta_close": close_at_end and bar == len(ranges) - 1 and row == end - 1,
                        "bar_start": starts if row == start else (), "bar_end": ends if row == end - 1 else (),
                        "next_bar_start": next_starts if row == end - 1 else ()}
                 words += note_words(part.notes[row], ctx)
