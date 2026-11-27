@@ -454,6 +454,81 @@ def test_wording_is_true_on_every_platform():
     assert "Windows 的預設" not in texts and "Windows 內建音色" not in texts and "Alt+F4" not in texts
 
 
+def test_score_warning_follows_a_language_switch(window):
+    """Review P2.1: the cached notation error was shown in the old language until the next edit."""
+    window.reset(Project(Score(notes=[Note(1, duration=1, spans_start=("line.slur",))])))
+    assert "連弓線或反覆段落缺少終點" in window.rhythm_label.text()
+    window.change_language(i18n.SIMPLIFIED)
+    try:
+        assert "连弓线或反复段落缺少终点" in window.rhythm_label.text()
+        assert "連弓線" not in window.rhythm_label.toolTip()
+    finally:
+        window.change_language(i18n.TRADITIONAL)
+    assert "連弓線或反覆段落缺少終點" in window.rhythm_label.text()
+
+
+def _shortcut_texts(dialog):
+    tree = dialog.tree
+    out = [tree.headerItem().text(0), tree.headerItem().text(1), dialog.windowTitle(), dialog.filter.placeholderText()]
+    for i in range(tree.topLevelItemCount()):
+        top = tree.topLevelItem(i)
+        out.append(top.text(0))
+        out += [top.child(j).text(c) for j in range(top.childCount()) for c in (0, 1)]
+    return out
+
+
+def test_open_shortcut_reference_follows_a_language_switch(window):
+    """Review P2.3: tree rows, headers and the title kept the old language."""
+    window.show_help()
+    dialog = window.shortcuts_dialog
+    dialog.filter.setText("聲部")
+    traditional = _shortcut_texts(dialog)
+    window.change_language(i18n.SIMPLIFIED)
+    try:
+        simplified = _shortcut_texts(dialog)
+        assert simplified == [i18n.convert(text, i18n.SIMPLIFIED, i18n.TRADITIONAL) for text in traditional]
+        assert "快捷键一览" == dialog.windowTitle() and "功能" in simplified and "切换声部" in simplified
+        assert not set(simplified) & ({"切換聲部", "選取", "試聽與檔案"})
+        # the filter still applies after the switch: only rows about parts are visible
+        visible = [dialog.tree.topLevelItem(i).child(j).text(1) for i in range(dialog.tree.topLevelItemCount())
+                   for j in range(dialog.tree.topLevelItem(i).childCount())
+                   if not dialog.tree.topLevelItem(i).child(j).isHidden()]
+        assert visible == []          # "聲部" (Traditional) no longer matches Simplified rows
+        dialog.filter.setText("声部")
+        visible = [dialog.tree.topLevelItem(i).child(j).text(1) for i in range(dialog.tree.topLevelItemCount())
+                   for j in range(dialog.tree.topLevelItem(i).childCount())
+                   if not dialog.tree.topLevelItem(i).child(j).isHidden()]
+        assert visible == ["切换声部"]
+    finally:
+        window.change_language(i18n.TRADITIONAL)
+    assert _shortcut_texts(dialog)[:2] == ["按鍵", "功能"]
+    dialog.close()
+
+
+def test_mac_shortcut_text_round_trips_and_is_found_by_its_portable_spelling(window, monkeypatch):
+    """Review P2.3: ⌘＋点 (from Ctrl＋點) became Ctrl+＋点 and could not be searched or converted."""
+    monkeypatch.setattr(i18n.sys, "platform", "darwin")
+    for source in CATALOG:
+        if "Ctrl" in source:
+            shown = i18n.platform_keys(source)
+            assert i18n._portable_keys(shown) == source, source
+    shown = i18n.platform_keys("Ctrl＋點")
+    assert shown == "⌘＋點" and i18n.convert(shown, i18n.SIMPLIFIED, i18n.TRADITIONAL) == "⌘＋点"
+    assert i18n.convert("⌘＋点", i18n.TRADITIONAL, i18n.SIMPLIFIED) == "⌘＋點"
+    window.change_language(i18n.SIMPLIFIED)
+    try:
+        window.show_help()
+        dialog = window.shortcuts_dialog
+        dialog.filter.setText("Ctrl＋点")
+        visible = [dialog.tree.topLevelItem(i).child(j).text(0) for i in range(dialog.tree.topLevelItemCount())
+                   for j in range(dialog.tree.topLevelItem(i).childCount())
+                   if not dialog.tree.topLevelItem(i).child(j).isHidden()]
+        assert visible == ["⌘＋点"]
+        dialog.close()
+    finally:
+        window.change_language(i18n.TRADITIONAL)
+
+
 def test_quit_about_and_preferences_have_application_menu_roles(window):
     roles = {a.text(): a.menuRole() for a in window.findChildren(QAction)}
     assert roles["離開"] == QAction.MenuRole.QuitRole

@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import __version__, notation_edit, symbols
+from . import __version__, i18n, notation_edit, symbols
 from .i18n import N_, tr
 from .measures import clean_pasted, clip_notes
 from .migrate import LEGACY_FIELDS
@@ -87,12 +87,13 @@ class EditActions(NotationActions):
         return True
 
     def current_notation_error(self):
-        """notation_error() of the current project, computed once per project object."""
+        """notation_error() of the current project, computed once per project object and language."""
         cached = getattr(self, "_error_cache", None)
-        if cached is None or cached[0] is not self.project or cached[1] != self.revision:
-            cached = (self.project, self.revision, self.project.score.notation_error())
+        key = (self.project, self.revision, i18n.current_language())
+        if cached is None or cached[0] is not key[0] or cached[1:3] != key[1:]:
+            cached = (*key, self.project.score.notation_error())
             self._error_cache = cached
-        return cached[2]
+        return cached[3]
 
     def changed(self):
         self.revision += 1

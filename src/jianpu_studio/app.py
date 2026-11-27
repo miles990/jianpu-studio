@@ -476,7 +476,7 @@ class MainWindow(EditActions, QMainWindow):
         self.palette.retranslate()
         self.guide.retranslate()
         if self.shortcuts_dialog is not None:
-            i18n.translate_tree(self.shortcuts_dialog, new, old)
+            self.shortcuts_dialog.retranslate()
         self.sync()
         self.apply_responsive()
         if message:

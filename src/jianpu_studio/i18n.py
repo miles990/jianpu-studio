@@ -62,7 +62,9 @@ def _portable_keys(text: str) -> str:
     """Undo ``platform_keys`` so shown text can be matched against the catalog."""
     if "⌘" not in text:
         return text
-    return re.sub(r"⌘(?=\S)", "Ctrl+", text).replace("⌘", "Ctrl")
+    # platform_keys turned "Ctrl+X" into "⌘X" and a bare "Ctrl" (e.g. "Ctrl＋點", fullwidth
+    # plus) into "⌘": only a ⌘ followed by a key, not by a plus or a space, had a "+".
+    return re.sub(r"⌘(?=[^\s＋])", "Ctrl+", text).replace("⌘", "Ctrl")
 
 
 def tr(text: str) -> str:
