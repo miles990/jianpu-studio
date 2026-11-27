@@ -194,10 +194,13 @@ def v1_score_to_v2(raw: dict) -> dict:
 
 # ---------------------------------------------------------------- v1 export text
 _HEAD = re.compile(r"^[cqsd]?[#b]?[0-7][',]*\.?(?:///)?$")
+_REST = re.compile(r"^[cqsd]?0\.?$")
+# Lines holding user text (title, composer, part name, lyrics) rather than music words.
+_TEXT_LINE = re.compile(r"^(?:title=|composer=|instrument=|H:)")
 
 
 def _v1_to_v2_words(text: str) -> list[list[str]]:
-    """Apply the documented v1 -> v2 export differences to v1 text, one word list per line.
+    """Apply the documented older -> current export differences, one word list per line.
 
     * open string: upstream ``Fr=0`` (prints 宀) -> ``\\jsFingerZero`` (bold 0, JP-Word form)
     * ``\\sfz`` -> ``\\jsSfz`` (same print; MIDI accents one note instead of changing the level)
@@ -205,20 +208,62 @@ def _v1_to_v2_words(text: str) -> list[list[str]]:
     * ``\\tenuto`` -> ``\\jsTenuto`` (short thick bar, so it is not read as finger 一; same articulation)
     * ``slideUp`` / ``slideDown`` -> ``\\jsSlideUp slideUp`` / ``\\jsSlideDown slideDown`` (the app word
       redraws jianpu-ly's straight arrow as a small curved one; 下滑音 moves to the upper right)
+    * a long rest: ``0 - - -`` -> ``0 0 0 0`` (jianpu writes one 0 per beat; both are the same
+      quarter-beat rests to the converter)
+    * 0.4 development files: three-stroke tremolo ``1///`` -> ``1 \\jsTremThree`` and the return
+      slide ``slide=⌒`` -> ``\\jsSlideBackUp slideUp``
     """
     out = []
     renamed = {"Fr=0": "\\jsFingerZero", "\\sfz": "\\jsSfz", "\\tenuto": "\\jsTenuto"}
-    slides = {"slideUp": "\\jsSlideUp", "slideDown": "\\jsSlideDown"}
-    for index, line in enumerate(text.strip().splitlines()):
+    expanded = {"slideUp": ["\\jsSlideUp", "slideUp"], "slideDown": ["\\jsSlideDown", "slideDown"],
+                "slide=⌒": ["\\jsSlideBackUp", "slideUp"]}
+    rest = False
+    for line in text.strip().splitlines():
         words = []
         for w in line.split():
-            if w in slides:
-                words.append(slides[w])
+            if w in expanded:
+                words += expanded[w]
+                continue
+            if _HEAD.match(w):
+                rest = bool(_REST.match(w))
+                if w.endswith("///"):
+                    words += [w[:-3], "\\jsTremThree"]
+                    continue
+            elif w == "-" and rest:
+                w = "0"     # a dash continues the rest the last head started
             words.append(renamed.get(w, w))
         if words[:1] == ["R{"] and words[1:2] != ["\\bar"] and not any(_HEAD.match(w) for previous in out for w in previous):
             words[1:1] = ["\\bar", '".|:"']
         out.append(words)
     return out
+
+
+# Older exports replaced syntax characters with other lookalikes (``"`` -> ``' ``, ``\\`` -> ``/``,
+# ``{`` -> ``｛``) and kept fullwidth forms the converter itself turns into ASCII; the current
+# export normalizes those forms first and uses ``” ﹨ ﹛ ﹜ ﹩ ﹪ ﹟`` plus zero-width spaces.
+# Both spellings of the same text map to one form here; other characters must match exactly.
+_TEXT_FORMS = str.maketrans({"”": '"', "﹨": "/", "\\": "/", "﹛": "{", "﹜": "}", "﹩": "$", "﹪": "%",
+                             "﹟": "#", "​": None})
+_LYRIC_QUOTE = re.compile(r'_"([^"]*)"')
+
+
+def _text_form(line: str):
+    """Comparable form of a title/composer/instrument/lyric line (see ``_TEXT_FORMS``)."""
+    from .export import _syllables, upstream_normalized
+    lyric = line.startswith("H:")
+    if lyric:
+        # The current export quotes syllables with digits (``_"春2"``) and joins syllables with
+        # single spaces; the converter splits the same syllables either way.
+        line = _LYRIC_QUOTE.sub(r"\1", line[2:])
+    text = upstream_normalized(line).replace("' ", '"').translate(_TEXT_FORMS)
+    return _syllables(text) if lyric else text
+
+
+def _same_line(old: str, new: str, old_words: list[str], new_words: list[str]) -> bool:
+    kind = _TEXT_LINE.match(old)
+    if kind:
+        return new.startswith(kind.group()) and _text_form(old) == _text_form(new)
+    return _segments(old_words) == _segments(new_words)
 
 
 def _segments(words: list[str]) -> list[tuple[str, list[str]]]:
@@ -239,9 +284,11 @@ def same_music_text(v1_text: str, v2_text: str) -> bool:
     registry (e.g. ``\\mf \\downbow`` instead of ``\\downbow \\mf``); LilyPond output is
     the same. Such reordering never moves a word past a note head, so the words between
     two heads are compared as a multiset and the heads in order: a mark that moved to a
-    different note (``1 \\mf 2`` vs ``1 2 \\mf``) is a different piece of music.
+    different note (``1 \\mf 2`` vs ``1 2 \\mf``) is a different piece of music. Text lines
+    accept only the older lookalike spellings of the same characters (``_text_form``).
     """
-    old, new = _v1_to_v2_words(v1_text), [line.split() for line in v2_text.strip().splitlines()]
+    old_lines, new_lines = v1_text.strip().splitlines(), v2_text.strip().splitlines()
+    old, new = _v1_to_v2_words(v1_text), [line.split() for line in new_lines]
     if len(old) != len(new):
         return False
-    return all(_segments(a) == _segments(b) for a, b in zip(old, new))
+    return all(_same_line(*args) for args in zip(old_lines, new_lines, old, new))
