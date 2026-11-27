@@ -13,10 +13,9 @@ from collections import Counter
 from dataclasses import replace
 
 import pytest
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from jianpu_studio import notation_rules
+from jianpu_studio import notation_rules, storage
 from jianpu_studio.app import MainWindow
 from jianpu_studio.model import Note, Part, Project, Score, load_project, save_project
 from jianpu_studio.notation_edit import Target, apply_fix, set_bar_item, toggle_symbol
@@ -288,7 +287,7 @@ def window(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(MainWindow, "render_score", lambda *a, **k: None)
     errors = []
     monkeypatch.setattr(MainWindow, "error", lambda self, title, error: errors.append((title, str(error))))
-    QSettings("JianpuStudio", "JianpuStudio").remove("palette")
+    storage.open_settings().remove("palette")
     widget = MainWindow(recovery=False)
     widget.errors = errors
     widget.losses = []
