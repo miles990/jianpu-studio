@@ -208,6 +208,33 @@ ENGRAVING = r"""
                                (else head)))))
 #(define (js-coda-mark number context)
    (make-line-markup (list (make-italic-markup "To Coda") (make-coda-markup))))
+#(define (js-wrap-lines layout props text width)
+   "TEXT as lines no wider than WIDTH: broken after the last space that fits, or between two
+characters when none does (a title of Han characters or one long word)."
+   (let ((wide? (lambda (s) (> (interval-length (ly:stencil-extent (interpret-markup layout props s) X)) width)))
+         (trim (lambda (s) (string-trim-both s #\space))))
+     (let loop ((rest (trim text)) (lines '()))
+       (if (or (string-null? rest) (not (wide? rest)))
+           (reverse (if (string-null? rest) lines (cons rest lines)))
+           (let find ((n 1))
+             (if (and (< n (string-length rest)) (not (wide? (substring rest 0 (1+ n)))))
+                 (find (1+ n))
+                 (let* ((space (string-rindex rest #\space 0 (min (1+ n) (string-length rest))))
+                        (cut (if (and space (> space 0)) space n)))
+                   (loop (trim (substring rest cut)) (cons (trim (substring rest 0 cut)) lines)))))))))
+#(define-markup-command (js-wrapped layout props align share text) (number? number? string?)
+   "TEXT within SHARE of the page's line width, wrapped onto more lines; text that would need
+more than three lines is set smaller (down to half size) to keep the title block compact.
+ALIGN is the lines' alignment (-1 left, 0 centre, 1 right)."
+   (let* ((width (* share (ly:output-def-lookup layout 'line-width)))
+          (column (cond ((= align 0) make-center-column-markup) ((> align 0) make-right-column-markup)
+                        (else make-left-column-markup))))
+     (let try ((shrink 0))
+       (let* ((sized (prepend-alist-chain 'font-size (- (chain-assoc-get 'font-size props 0) shrink) props))
+              (lines (js-wrap-lines layout sized text width)))
+         (if (and (> (length lines) 3) (< shrink 6))
+             (try (+ shrink 1.5))
+             (interpret-markup layout sized (column lines)))))))
 \layout {
   \context { \Score
     dalSegnoTextFormatter = #js-jump-text
@@ -230,9 +257,18 @@ _BAR_EVERY = re.compile(r"\\set Score\.barNumberVisibility = #\(every-nth-bar-nu
 _CODA_LABEL = '\\sectionLabel "Coda"'
 
 
+_HEADER_FIELD = re.compile(r'^(title|composer)="([^"\n]*)"$', re.M)
+# (alignment, share of the line width): the title is centred on the whole line; the composer
+# is right-aligned in the right half (the title page's centre slot is the instrument's).
+_HEADER_ALIGN = {"title": "#0 #0.98", "composer": "#1 #0.48"}
+
+
 def engraving_rewrite(ly: str) -> str:
     """Bar numbers only at the start of a line (mid-line numbers read like stray notes in
-    jianpu) and the coda start labelled "⊕ Coda" (the canvas draws the same)."""
+    jianpu), the coda start labelled "⊕ Coda" (the canvas draws the same), and a title or
+    composer too long for one line wrapped onto more lines (LilyPond would run it off the page)."""
+    ly = _HEADER_FIELD.sub(lambda m: f'{m[1]} = \\markup \\js-wrapped {_HEADER_ALIGN[m[1]]} "{m[2]}"'
+                           if m[2] else m[0], ly)
     ly = _BAR_NUMBERS.sub(lambda m: "\\override Score.BarNumber.break-visibility = #begin-of-line-visible", ly)
     ly = _BAR_EVERY.sub(lambda m: "\\set Score.barNumberVisibility = #first-bar-number-invisible-and-no-parenthesized-bar-numbers", ly)
     return ly.replace(_CODA_LABEL, '\\sectionLabel \\markup { \\musicglyph "scripts.coda" "Coda" }')

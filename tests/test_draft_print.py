@@ -87,3 +87,49 @@ def test_a_word_joiner_in_note_text_keeps_the_text_on_its_note(first, tmp_path, 
     assert meter and all("第2小節" not in m and ("中速" in m) == (first == "中速") for m in meter)
     printed = [t for kind, t, *_ in svg_items(lilypond, result.lilypond) if kind == "text"]
     assert any("第2小節" in t for t in printed), printed
+
+
+# ---------------------------------------------------------------- 23. long header fields
+def edge_ink(path, page=0, band=8):
+    """Dark pixels within ``band`` points of the left/right page edge (text run off the page)."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtPdf import QPdfDocument
+    document = QPdfDocument(None)
+    document.load(str(path))
+    size = document.pagePointSize(page)
+    image = document.render(page, QSize(int(size.width()), int(size.height())))
+    document.close()
+    dark = 0
+    for y in range(image.height()):
+        for x in [*range(band), *range(image.width() - band, image.width())]:
+            colour = image.pixelColor(x, y)
+            dark += colour.alpha() > 128 and colour.green() < 128
+    return dark
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("draft", [False, True])
+def test_the_longest_title_and_composer_stay_on_the_page(draft, tmp_path, lilypond):  # noqa: F811
+    score = bars(n=8, parts=2, staff_size=30, paper_size="a4", with_staff=True)
+    score.title, score.composer = "W" * 200, "編曲 " + "文" * 100
+    score.validate()
+    if draft:
+        score.parts[0].notes[0] = replace(score.parts[0].notes[0], bar_start=("nav.segno",))
+    result = render(Project(score).notation(draft=draft), tmp_path.resolve(), lilypond, create_pdf=True,
+                    staff_size=30, paper_size="a4")
+    assert no_warnings(result) == []
+    assert pdf_text(result.pdf).count("W") == 200                   # every letter is printed ...
+    assert edge_ink(result.pdf) == 0                                # ... and nothing runs off the page
+    printed = [t for kind, t, *_ in svg_items(lilypond, result.lilypond) if kind == "text"]
+    assert sum(t.count("文") for t in printed) == 100 and any("編曲" in t for t in printed)
+
+
+@pytest.mark.integration
+def test_a_short_title_prints_on_one_line_at_its_size(tmp_path, lilypond):  # noqa: F811
+    score = bars(n=4, parts=1)
+    score.title, score.composer = "賽馬", "黃海懷 曲"
+    result = render(Project(score).notation(), tmp_path.resolve(), lilypond, create_pdf=True)
+    items = svg_items(lilypond, result.lilypond)
+    title = [item for item in items if item[0] == "text" and item[1] == "賽馬"]
+    composer = [item for item in items if item[0] == "text" and item[1] == "黃海懷 曲"]
+    assert len(title) == 1 and len(composer) == 1 and title[0][4] > composer[0][4]
