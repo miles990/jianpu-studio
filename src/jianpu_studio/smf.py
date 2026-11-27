@@ -26,10 +26,19 @@ class Track:
     name: str = ""
 
 
+MAX_VLQ = 0x0FFFFFFF        # the largest value a MIDI variable-length quantity holds (4 bytes)
+
+
 def _vlq(value: int) -> bytes:
+    """A variable-length quantity: at most four bytes, so the loop below runs at most four
+    times (a negative value would never shift down to zero: refused)."""
+    if type(value) is not int or not 0 <= value <= MAX_VLQ:
+        raise ValueError(f"MIDI delta time out of range: {value!r}")
     out = [value & 0x7F]
     value >>= 7
-    while value:
+    for _ in range(3):
+        if not value:
+            break
         out.append(0x80 | (value & 0x7F))
         value >>= 7
     return bytes(reversed(out))
@@ -39,11 +48,12 @@ def _chunk(kind: bytes, payload: bytes) -> bytes:
     return kind + struct.pack(">I", len(payload)) + payload
 
 
-def write(tracks: list[Track], *, division: int, tempo_us: int, numerator=4, denominator=4) -> bytes:
-    """Format-1 SMF: a tempo track, then one track per part."""
+def write(tracks: list[Track], *, division: int, tempo_us: int, numerator=4, denominator=4, length: int = 0) -> bytes:
+    """Format-1 SMF: a tempo track, then one track per part. Every track ends at ``length``
+    ticks or at its last event, whichever is later (trailing rests are part of the music)."""
     log2 = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}.get(denominator, 2)
     head = (b"\x00\xff\x51\x03" + tempo_us.to_bytes(3, "big")
-            + b"\x00\xff\x58\x04" + bytes([numerator, log2, 24, 8]) + b"\x00\xff\x2f\x00")
+            + b"\x00\xff\x58\x04" + bytes([numerator, log2, 24, 8]) + _vlq(max(0, length)) + b"\xff\x2f\x00")
     chunks = [_chunk(b"MTrk", head)]
     for track in tracks:
         channel = track.channel & 0x0F
@@ -61,7 +71,7 @@ def write(tracks: list[Track], *, division: int, tempo_us: int, numerator=4, den
         for tick, _, data in events:
             payload += _vlq(tick - last) + data
             last = tick
-        payload += b"\x00\xff\x2f\x00"
+        payload += _vlq(max(0, length - last)) + b"\xff\x2f\x00"
         chunks.append(_chunk(b"MTrk", bytes(payload)))
     header = _chunk(b"MThd", struct.pack(">HHH", 1, len(chunks), division))
     return header + b"".join(chunks)
@@ -132,7 +142,7 @@ def read(data: bytes) -> tuple[list[ReadNote], list[tuple[float, int, int, int]]
                 raw.append((index, start, tick, a, velocity))
             elif high == 0xB0:
                 controls.append((tick, index, a, b))
-    tempos.sort()
+    tempos.sort(key=lambda entry: entry[0])     # stable: a tempo at tick 0 replaces the default
 
     def seconds(tick):
         out, last_tick, last_tempo = 0.0, 0, 500000

@@ -1,0 +1,107 @@
+{
+  "format": "jianpu-studio",
+  "version": 2,
+  "mode": "visual",
+  "source": "",
+  "score": {
+    "title": "未命名樂曲",
+    "composer": "",
+    "key": "C",
+    "meter": "2/4",
+    "tempo": 96,
+    "with_staff": false,
+    "paper_size": "a4",
+    "staff_size": 20,
+    "bars_per_line": 0,
+    "pickup": 0,
+    "print_variant": "tc",
+    "parts": [
+      {
+        "name": "first",
+        "lyrics": "",
+        "notes": [
+          {"degree": 1, "spans_start": ["line.slur"], "bar_start": ["bar.repeat_start"], "text": "A"},
+          {"degree": 0},
+          {"degree": 2, "marks": ["art.staccato"], "text": "中速"},
+          {"degree": 3, "spans_end": ["line.slur"], "bar_end": ["bar.repeat_end"], "text": "D"},
+          {"degree": 0, "bar_start": ["volta.1"]},
+          {"degree": 0},
+          {"degree": 0},
+          {"degree": 0},
+          {"degree": 0, "duration": 1, "bar_start": ["volta.2"], "bar_end": ["volta.end"]},
+          {"degree": 0, "duration": 1, "bar_start": ["nav.segno"], "bar_end": ["nav.tocoda"]},
+          {"degree": 0, "duration": 1, "bar_end": ["nav.ds"]},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "dotted": true},
+          {"degree": 0},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 2, "marks": ["art.staccato"], "text": "中速"},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8}
+        ]
+      },
+      {
+        "name": "二胡二",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0, "duration": 1, "marks": ["dyn.p"]},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8}
+        ]
+      },
+      {
+        "name": "第 3 聲部",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8}
+        ]
+      },
+      {
+        "name": "第 4 聲部",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 1}
+        ]
+      }
+    ]
+  }
+}

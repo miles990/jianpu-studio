@@ -1082,6 +1082,8 @@ class MainWindow(EditActions, QMainWindow):
             return
         self.capture_fields()
         midi, order, note = self.preview_file()
+        if midi is None and note:
+            self.statusBar().showMessage(note, 8000)
         if midi is None and (not self.result or self.rendered_revision != self.revision):
             self.play_after_render = True
             self.update_transport()
@@ -1138,8 +1140,11 @@ class MainWindow(EditActions, QMainWindow):
                     pass
             path = folder / f"preview-{os.getpid()}-{self._preview_serial}.mid"
             path.write_bytes(data)
-        except (OSError, ValueError, KeyError, IndexError):
+        except OSError:
             return None, None, ""
+        except Exception as exc:     # noqa: BLE001 -- a preview bug must never block playback
+            # The engine's MIDI plays instead; say why (PreviewError names the note).
+            return None, None, tr("無法直接產生試聽（{reason}），改用排版引擎的 MIDI。").format(reason=exc)
         notice = "" if structured else tr("反覆或跳躍記號還沒完成，這次試聽依書寫順序播放（不反覆、不跳躍）。")
         return path, order, notice
 
@@ -1166,7 +1171,9 @@ class MainWindow(EditActions, QMainWindow):
             # Switching parts while playing: the same music, but this part's notes and rows.
             from .playmap import PlayMap
             try:
-                self.play_map = PlayMap(self.project.score, self.part)
+                # Keep the bar order actually playing (an unfinished structure plays as
+                # written; a later edit must not re-route the highlight mid-performance).
+                self.play_map = PlayMap(self.project.score, self.part, self.play_map.order)
             except Exception:
                 self.play_map = None
         onset = self.play_map.at(position) if self.play_map is not None else None

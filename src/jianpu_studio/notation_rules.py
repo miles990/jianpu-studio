@@ -587,6 +587,9 @@ def _notation_error(score, structure: bool = True) -> str | None:
                                   "" if notes[i+1].accidental == "n" else notes[i+1].accidental)):
                     return Problem(prefix + tr("{where}的延音線須接到下一個相同音高的音符。").format(where=where(i)),
                                    index, i, None, ("tie", True))
+            if (row := _grace_overflow(notes)) is not None:
+                return Problem(prefix + tr("{where}的倚音比前一個音還長：請減少倚音，或加長前一個音。").format(
+                    where=where(row)), index, row)
         index = 0
         if error := _bar_rules(score):
             return error
@@ -598,6 +601,23 @@ def _notation_error(score, structure: bool = True) -> str | None:
         return Problem(str(exc), index, exc.row, exc.bar, exc.fix)
     except ValueError as exc:
         return Problem(str(exc), index)
+    return None
+
+
+def _grace_overflow(notes) -> int | None:
+    """The first note whose grace notes take more time than the note just before it.
+
+    Grace notes sound before the beat, taking about 1/18 quarter each (2/3 of that in a
+    triplet) from the previous note. When that note is shorter, LilyPond pushes the rest of
+    the music later (or drops the note: "Going back in MIDI time"), so the export would not
+    play what is written. After a rest, or at the very start, the grace notes have room."""
+    for i in range(1, len(notes)):
+        note, previous = notes[i], notes[i - 1]
+        if note.grace_before and previous.degree:
+            count = sum(c.isdigit() for c in note.grace_before)
+            # count * (48/18) * (2/3 in a triplet) > previous.ticks, in whole numbers
+            if count * TICKS_PER_QUARTER * (2 if note.tuplet else 3) > previous.ticks * 54:
+                return i
     return None
 
 

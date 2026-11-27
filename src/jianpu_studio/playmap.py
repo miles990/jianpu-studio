@@ -117,17 +117,23 @@ class Onset:
 
 
 class PlayMap:
-    """Note onsets of one part in performance order."""
+    """Note onsets of one part in performance order.
+
+    ``order`` is the bar order actually played (``preview_midi.playing_order`` by default:
+    an unfinished structure plays as written). When the first note has grace notes before
+    it, the MIDI file starts with them (``lead_in``), so every time here is that much later."""
 
     def __init__(self, score, part: int = 0, order: list[int] | None = None):
         from .model import TICKS_PER_QUARTER
+        from .preview_midi import DIVISION, lead_in, playing_order
         self.part = part
         self.tempo = score.tempo
         self.ticks_per_quarter = TICKS_PER_QUARTER
         ranges = score.part_bars(part)
         notes = score.parts[part].notes
         lengths = [sum(n.ticks for n in score.parts[0].notes[a:b]) for a, b in score.part_bars(0)]
-        self.order = unfold_bars(score) if order is None else list(order)
+        self.order = playing_order(score)[0] if order is None else list(order)
+        self.lead_in = lead_in(score, self.order) / DIVISION * 60.0 / self.tempo
         self.onsets: list[Onset] = []
         self.bar_starts: list[tuple[int, int]] = []   # (tick, bar) per visit
         tick = 0
@@ -144,10 +150,11 @@ class PlayMap:
         self._ticks = [o.tick for o in self.onsets]
 
     def seconds(self, ticks: int) -> float:
-        return ticks / self.ticks_per_quarter * 60.0 / self.tempo
+        """Time in the MIDI file of a tick of the music."""
+        return self.lead_in + ticks / self.ticks_per_quarter * 60.0 / self.tempo
 
     def ticks(self, seconds: float) -> int:
-        return int(seconds * self.tempo / 60.0 * self.ticks_per_quarter)
+        return int((seconds - self.lead_in) * self.tempo / 60.0 * self.ticks_per_quarter)
 
     @property
     def total_seconds(self) -> float:
@@ -155,7 +162,7 @@ class PlayMap:
 
     def at(self, seconds: float) -> Onset | None:
         """The note sounding at ``seconds`` (None before the start or after the end)."""
-        if seconds < 0 or not self.onsets or seconds >= self.total_seconds:
+        if seconds < self.lead_in or not self.onsets or seconds >= self.total_seconds:
             return None
         index = bisect_right(self._ticks, self.ticks(seconds)) - 1
         return self.onsets[index] if index >= 0 else None
@@ -165,3 +172,4 @@ class PlayMap:
             if visited == bar:
                 return self.seconds(tick)
         return None
+

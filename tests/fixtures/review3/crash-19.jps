@@ -1,0 +1,79 @@
+{
+  "format": "jianpu-studio",
+  "version": 2,
+  "mode": "visual",
+  "source": "",
+  "score": {
+    "title": "未命名樂曲",
+    "composer": "",
+    "key": "C",
+    "meter": "2/2",
+    "tempo": 96,
+    "with_staff": false,
+    "paper_size": "a4",
+    "staff_size": 20,
+    "bars_per_line": 0,
+    "pickup": 18,
+    "print_variant": "tc",
+    "parts": [
+      {
+        "name": "first",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0},
+          {"degree": 0, "duration": 16, "dotted": true},
+          {"degree": 0, "duration": 2, "dotted": true},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 7, "dotted": true, "grace_after": "#4'5"},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8, "bar_end": ["nav.tocoda"]},
+          {"degree": 0, "duration": 1},
+          {"degree": 7, "dotted": true, "grace_after": "#4'5"},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 1}
+        ]
+      },
+      {
+        "name": "part 2",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0},
+          {"degree": 0, "duration": 16, "dotted": true},
+          {"degree": 0, "duration": 2, "dotted": true},
+          {"degree": 0, "duration": 2, "dotted": true},
+          {"degree": 0, "duration": 16},
+          {"degree": 0, "duration": 8, "dotted": true},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 2, "dotted": true},
+          {"degree": 0},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 16},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "duration": 16},
+          {"degree": 0, "duration": 2},
+          {"degree": 4, "duration": 1},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 1},
+          {"degree": 0, "duration": 16},
+          {"degree": 0, "dotted": true},
+          {"degree": 0, "duration": 16},
+          {"degree": 6, "duration": 2}
+        ]
+      }
+    ]
+  }
+}

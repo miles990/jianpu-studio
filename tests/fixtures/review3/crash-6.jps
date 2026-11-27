@@ -1,0 +1,79 @@
+{
+  "format": "jianpu-studio",
+  "version": 2,
+  "mode": "visual",
+  "source": "",
+  "score": {
+    "title": "未命名樂曲",
+    "composer": "",
+    "key": "C",
+    "meter": "4/4",
+    "tempo": 96,
+    "with_staff": false,
+    "paper_size": "a4",
+    "staff_size": 20,
+    "bars_per_line": 0,
+    "pickup": 9,
+    "print_variant": "tc",
+    "parts": [
+      {
+        "name": "first",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0, "duration": 2, "dotted": true, "bar_start": ["bar.repeat_start"]},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 32, "dotted": true},
+          {"degree": 0, "duration": 32},
+          {"degree": 0, "duration": 16, "dotted": true, "text": "深情地"},
+          {"degree": 1, "duration": 32, "dotted": true, "text": "A"},
+          {"degree": 0, "duration": 32, "dotted": true, "marks": ["dyn.pppp"], "text": "B"},
+          {"degree": 2, "duration": 32},
+          {"degree": 0, "duration": 8},
+          {"degree": 3, "duration": 2, "dotted": true, "bar_end": ["bar.repeat_end"]},
+          {"degree": 1, "duration": 1, "bar_start": ["volta.1"], "text": "C"},
+          {"degree": 5, "bar_start": ["volta.2"], "text": "H"},
+          {"degree": 0},
+          {"degree": 0},
+          {"degree": 6, "bar_end": ["volta.end"], "text": "I"},
+          {"degree": 0, "duration": 1},
+          {"degree": 0},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 32},
+          {"degree": 3, "duration": 2, "dotted": true},
+          {"degree": 0}
+        ]
+      },
+      {
+        "name": "part 2",
+        "lyrics": "",
+        "notes": [
+          {"degree": 0, "duration": 2, "dotted": true},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 32, "dotted": true},
+          {"degree": 0, "duration": 32},
+          {"degree": 6, "duration": 16, "dotted": true},
+          {"degree": 0, "duration": 2},
+          {"degree": 3, "duration": 2, "text": "P1"},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 32},
+          {"degree": 0},
+          {"degree": 0, "duration": 16, "dotted": true},
+          {"degree": 3, "duration": 2, "text": "P1"},
+          {"degree": 0, "duration": 2},
+          {"degree": 3, "duration": 2, "text": "P1"},
+          {"degree": 0, "duration": 1},
+          {"degree": 0},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 32},
+          {"degree": 0, "duration": 16, "dotted": true},
+          {"degree": 0, "duration": 2},
+          {"degree": 0, "duration": 8},
+          {"degree": 0, "duration": 32},
+          {"degree": 6, "grace_before": "#4'5", "grace_after": "34"}
+        ]
+      }
+    ]
+  }
+}

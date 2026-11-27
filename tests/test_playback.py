@@ -267,3 +267,35 @@ def test_real_macos_playback_advances_and_stops(tmp_path):
     finally:
         player.stop()
     assert not player.playing and backend.position() == 0.0
+
+
+def test_switching_parts_keeps_the_bar_order_that_is_playing(qtbot, tmp_path, monkeypatch):
+    """Review 3 #6: an unfinished structure plays as written, but the part switch rebuilt
+    the map with the unfolded repeat, so the highlight jumped back to bar 1."""
+    from types import SimpleNamespace
+
+    from jianpu_studio.app import MainWindow
+    from jianpu_studio.model import Note, Part, Project, Score
+    from jianpu_studio.playmap import PlayMap
+    from jianpu_studio.preview_midi import playing_order
+    monkeypatch.setattr(MainWindow, "render_score", lambda *a, **k: None)
+    window = MainWindow(recovery=False)
+    window.recovery_path = tmp_path / "recovery.jps"
+    window.autosave.stop()
+    qtbot.addWidget(window, before_close_func=lambda w: setattr(w, "dirty", False))
+    first = [Note(1, duration=1, bar_start=("bar.repeat_start",)), Note(2, duration=1, bar_end=("bar.repeat_end",)),
+             Note(3, duration=1, bar_start=("nav.segno",))]
+    score = Score(tempo=60, parts=[Part("一", first), Part("二", [Note(5, duration=1)] * 3)])
+    window.reset(Project(score))
+    order, structured = playing_order(window.project.score)
+    assert order == [0, 1, 2] and not structured
+    assert PlayMap(window.project.score).order == [0, 1, 2]       # the default map plays as written too
+    clock = SimpleNamespace(seconds=0.0)
+    window.player = SimpleNamespace(playing=True, position=lambda: clock.seconds, stop=lambda: None)
+    window.play_map = PlayMap(window.project.score, 0, order)
+    clock.seconds = 8.25
+    window.playback_tick()
+    assert window.notes.play_note == (0, 2)
+    window.switch_part(1)
+    window.playback_tick()
+    assert window.notes.play_note == (1, 2) and window.play_map.order == [0, 1, 2]
