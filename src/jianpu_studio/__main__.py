@@ -8,10 +8,11 @@ def main() -> int:
         from .worker import run
         return run(sys.argv[2:])
 
-    from PySide6.QtCore import QLockFile, QStandardPaths, QTimer
+    from PySide6.QtCore import QLockFile, QTimer
     from PySide6.QtGui import QFont, QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    from . import storage
     from .app import MainWindow
     from .engine import app_root
     from .i18n import tr
@@ -32,7 +33,7 @@ def main() -> int:
     icon = Path(__file__).parent / "assets/icon.png"
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
-    data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+    data_dir = storage.data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(data_dir / "session.lock"))
     if not lock.tryLock(100):

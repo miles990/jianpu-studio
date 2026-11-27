@@ -3,10 +3,9 @@ saved state after undo, recovery keeps its file, focus on the score, key labels,
 for an unfinished structure (with a one-click counterpart)."""
 
 import pytest
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from jianpu_studio import symbols_ui
+from jianpu_studio import storage, symbols_ui
 from jianpu_studio.app import MainWindow
 from jianpu_studio.model import Note, Project, Score, key_label, save_project
 from jianpu_studio.symbols_ui import MAX_FAVORITES, TEXT_PREFIX
@@ -17,7 +16,7 @@ def window(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(MainWindow, "render_score", lambda *a, **k: None)
     errors = []
     monkeypatch.setattr(MainWindow, "error", lambda self, title, error: errors.append((title, str(error))))
-    QSettings("JianpuStudio", "JianpuStudio").remove("palette")
+    storage.open_settings().remove("palette")
     widget = MainWindow(recovery=False)
     widget.errors = errors
     widget.recovery_path = tmp_path / "recovery.jps"

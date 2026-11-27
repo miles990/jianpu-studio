@@ -2,10 +2,10 @@
 import re
 
 import pytest
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QApplication
 
-from jianpu_studio import i18n, notation_edit, symbols, symbols_ui
+from jianpu_studio import i18n, notation_edit, storage, symbols, symbols_ui
 from jianpu_studio.app import MainWindow
 from jianpu_studio.model import Note, Part, Project, Score
 from jianpu_studio.notation_edit import Target
@@ -159,7 +159,7 @@ def window(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(MainWindow, "render_score", lambda *a, **k: None)
     errors = []
     monkeypatch.setattr(MainWindow, "error", lambda self, title, error: errors.append((title, str(error))))
-    QSettings("JianpuStudio", "JianpuStudio").remove("palette")
+    storage.open_settings().remove("palette")
     widget = MainWindow(recovery=False)
     widget.errors = errors
     widget.recovery_path = tmp_path / "recovery.jps"
@@ -243,7 +243,7 @@ def test_favourites_and_recents_persist(window, qtbot):
     window.palette.toggle_favorite("finger.3")          # the 9 defaults are full: make room
     window.palette.toggle_favorite("art.accent")
     assert window.palette.recents[0] == "erhu.vibrato"
-    settings = QSettings("JianpuStudio", "JianpuStudio")
+    settings = storage.open_settings()
     assert "art.accent" in settings.value("palette/favorites")
     second = MainWindow(recovery=False)
     qtbot.addWidget(second, before_close_func=lambda w: setattr(w, "dirty", False))

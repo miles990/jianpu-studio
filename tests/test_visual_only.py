@@ -4,10 +4,10 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QStandardPaths
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from jianpu_studio import app as app_module
+from jianpu_studio import storage
 from jianpu_studio.app import MainWindow
 from jianpu_studio.engine import Cancelled
 from jianpu_studio.model import Note, Project, Score, load_project, save_project
@@ -296,7 +296,7 @@ def test_launching_file_finishes_recovery_before_opening(window, qtbot, tmp_path
     requested = Project(Score(title="要求開啟", notes=[Note(2, duration=1)]))
     save_project(path, requested)
     original_file = path.read_bytes()
-    monkeypatch.setattr(QStandardPaths, "writableLocation", lambda location: str(tmp_path))
+    monkeypatch.setenv(storage.DATA_ENV, str(tmp_path))
     answers = []
     def question(parent, title, *args):
         answers.append(title)

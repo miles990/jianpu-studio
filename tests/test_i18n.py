@@ -5,7 +5,7 @@ import string
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QLocale, QSettings
+from PySide6.QtCore import QLocale
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from jianpu_studio import i18n
+from jianpu_studio import i18n, storage
 from jianpu_studio.app import MainWindow
 from jianpu_studio.i18n_zh_cn import CATALOG
 from jianpu_studio.model import Note, Project, Score
@@ -386,7 +386,7 @@ def test_dialogs_opened_after_the_switch_use_the_new_language(window, monkeypatc
 
 def test_language_is_remembered_and_applied_to_a_new_window(window, qtbot, tmp_path, monkeypatch):
     window.language_actions["zh_CN"].trigger()
-    assert QSettings("JianpuStudio", "JianpuStudio").value(i18n.SETTINGS_KEY) == "zh_CN"
+    assert storage.open_settings().value(i18n.SETTINGS_KEY) == "zh_CN"
     window.dirty = False
     window.close()
     i18n.set_language("zh_TW")                      # a fresh process starts in the source language
@@ -400,13 +400,13 @@ def test_language_is_remembered_and_applied_to_a_new_window(window, qtbot, tmp_p
 
 
 def test_first_launch_follows_the_system_language_without_saving_it(qtbot, monkeypatch):
-    QSettings("JianpuStudio", "JianpuStudio").remove(i18n.SETTINGS_KEY)
+    storage.open_settings().remove(i18n.SETTINGS_KEY)
     monkeypatch.setattr(i18n, "detect_language", lambda *a: "zh_CN")
     first = MainWindow(recovery=False)
     qtbot.addWidget(first, before_close_func=lambda w: setattr(w, "dirty", False))
     first.autosave.stop()
     assert i18n.current_language() == "zh_CN" and first.save_button.text() == "保存"
-    assert QSettings("JianpuStudio", "JianpuStudio").value(i18n.SETTINGS_KEY, "") == ""
+    assert storage.open_settings().value(i18n.SETTINGS_KEY, "") == ""
 
 
 def test_language_menu_names_each_language_in_its_own_script_with_a_checkmark(window):

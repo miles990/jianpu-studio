@@ -12,8 +12,6 @@ from PySide6.QtCore import (
     QBuffer,
     QIODevice,
     QPoint,
-    QSettings,
-    QStandardPaths,
     Qt,
     QThread,
     QTimer,
@@ -37,7 +35,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from . import __version__, i18n, icons, migrate, theme
+from . import __version__, i18n, icons, migrate, storage, theme
 from .editing import EditActions
 from .engine import Cancelled, find_tool, recognize, render
 from .i18n import tr
@@ -104,7 +102,7 @@ class MainWindow(EditActions, QMainWindow):
         super().__init__()
         self.setMinimumSize(960, 600)
         self.resize(1380, 850)
-        self.settings = QSettings("JianpuStudio", "JianpuStudio")
+        self.settings = storage.open_settings()
         i18n.init_language(self.settings)
         i18n.on_change(self.retranslate)
         self.theme = theme.ThemeManager(self.settings, self)
@@ -151,7 +149,7 @@ class MainWindow(EditActions, QMainWindow):
         self.pdf_buffer = None
         self.work = Path(self.temp.name)
         self.job_number = 0
-        self.data_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation))
+        self.data_dir = storage.data_dir()
         self.recovery_path = self.data_dir / "recovery.jps"
         self.recovery_protected = False
         self.autopreview = QTimer(self)

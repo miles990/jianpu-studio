@@ -13,6 +13,12 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from jianpu_studio.storage import isolate_for_script  # noqa: E402
+
+# A temporary settings file and data folder unless JIANPU_SETTINGS_DIR / JIANPU_DATA_DIR are set:
+# never the user's real settings, recent files or recovery copy.
+isolate_for_script()
+
 import PySide6  # noqa: E402
 from PySide6.QtCore import qVersion  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402

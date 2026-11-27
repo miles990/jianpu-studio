@@ -4,27 +4,21 @@ from __future__ import annotations
 import sys
 
 import pytest
-from PySide6.QtCore import QSettings, QStandardPaths
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-import jianpu_studio.app as app_module
-from jianpu_studio import i18n
+from jianpu_studio import i18n, storage
 from jianpu_studio.app import MainWindow
 from jianpu_studio.model import Note, Project, Score, demo_project, save_project
 
-SETTINGS_FILE = []
-
 
 def settings():
-    return QSettings(SETTINGS_FILE[0], QSettings.Format.IniFormat)
+    return storage.open_settings()
 
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path_factory, monkeypatch):
-    """QSettings("JianpuStudio", "JianpuStudio") is the native store on macOS even with an INI
-    default format, so these tests give the window its own INI file instead."""
-    SETTINGS_FILE[:] = [str(tmp_path_factory.mktemp("settings") / "JianpuStudio.ini")]
-    monkeypatch.setattr(app_module, "QSettings", lambda *args: settings())
+    """Each test here starts from its own empty settings file."""
+    monkeypatch.setenv(storage.SETTINGS_ENV, str(tmp_path_factory.mktemp("settings")))
     settings().setValue(i18n.SETTINGS_KEY, i18n.TRADITIONAL)
     yield
 
@@ -45,7 +39,7 @@ def window(qtbot, tmp_path, monkeypatch):
 
 
 def launch(qtbot, tmp_path, monkeypatch, **kwargs):
-    monkeypatch.setattr(QStandardPaths, "writableLocation", lambda location: str(tmp_path))
+    monkeypatch.setenv(storage.DATA_ENV, str(tmp_path))
     launched = MainWindow(recovery=True, **kwargs)
     launched.autosave.stop()
     qtbot.addWidget(launched, before_close_func=lambda w: setattr(w, "dirty", False))

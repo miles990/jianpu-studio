@@ -1,38 +1,91 @@
+import hashlib
+import os
+import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-import pytest
-from PySide6.QtCore import QSettings
+# Before anything imports Qt or the app: every settings object and the data folder (recovery,
+# print cache, preview MIDI) go to this session's temporary folder, never the user's real store.
+_SESSION_ROOT = Path(tempfile.mkdtemp(prefix="jianpu-test-store-")).resolve()
+os.environ["JIANPU_SETTINGS_DIR"] = str(_SESSION_ROOT / "settings")
+os.environ["JIANPU_DATA_DIR"] = str(_SESSION_ROOT / "data")
 
-from jianpu_studio import i18n
+import pytest  # noqa: E402
+from PySide6 import QtCore as _QtCore  # noqa: E402
 
-# The suite asserts Traditional texts: isolate settings and force zh_TW.
-_SETTINGS_DIR = tempfile.mkdtemp(prefix="jianpu-test-settings-")
-QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, _SETTINGS_DIR)
+from jianpu_studio import i18n, storage  # noqa: E402
+
+REAL_QSETTINGS = _QtCore.QSettings
 
 
-class _IsolatedSettings(QSettings):
-    """QSettings(organization, application) always uses the native store (the real macOS plist
-    or Windows registry), ignoring setDefaultFormat. The suite must never touch the user's
-    settings, so that form is redirected to the INI files above."""
+class _NoNativeSettings(REAL_QSETTINGS):
+    """Only QSettings(file_name, IniFormat) is allowed in tests. QSettings(organization,
+    application) always opens the native store (the real macOS plist or Windows registry) and
+    ignores setDefaultFormat/setPath; QSettings() and the scope forms reach the user's home too.
+    Tests read the app's settings through storage.open_settings()."""
 
     def __init__(self, *args, **kwargs):
-        if len(args) == 2 and all(isinstance(a, str) for a in args) and not kwargs:
-            super().__init__(QSettings.Format.IniFormat, QSettings.Scope.UserScope, *args)
-        else:
-            super().__init__(*args, **kwargs)
+        if not (len(args) >= 2 and isinstance(args[0], str) and args[1] == REAL_QSETTINGS.Format.IniFormat):
+            raise AssertionError(f"QSettings{args!r} would open the user's real settings; use storage.open_settings()")
+        super().__init__(*args, **kwargs)
 
 
-import PySide6.QtCore as _QtCore  # noqa: E402
+_QtCore.QSettings = _NoNativeSettings
 
-_QtCore.QSettings = _IsolatedSettings
-QSettings = _IsolatedSettings
+
+def _real_settings_snapshot():
+    """What the user's real settings store holds now, read without the test override, or None."""
+    try:
+        if sys.platform == "darwin":
+            # Read through cfprefsd so unflushed writes count, not just the plist file on disk.
+            out = subprocess.run(["defaults", "export", "com.jianpustudio.JianpuStudio", "-"],
+                                 capture_output=True, timeout=20)
+            return hashlib.sha256(out.stdout).hexdigest() if out.returncode == 0 else None
+        if sys.platform == "win32":
+            out = subprocess.run(["reg", "query", r"HKCU\Software\JianpuStudio\JianpuStudio", "/s"],
+                                 capture_output=True, timeout=20)
+            return hashlib.sha256(out.stdout).hexdigest() if out.returncode == 0 else None
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+        path = base / "JianpuStudio" / "JianpuStudio.conf"
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    except (OSError, subprocess.SubprocessError):
+        return "unreadable"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_settings_untouched():
+    """Fails the session if the user's real settings changed while it ran. A real Jianpu Studio
+    used at the same time on this machine also writes there; rerun if that was the cause."""
+    before = _real_settings_snapshot()
+    yield
+    after = _real_settings_snapshot()
+    assert after == before, "the test session changed the user's real Jianpu Studio settings"
+
+
+def _assert_store_is_isolated():
+    for location in (storage.open_settings().fileName(), storage.data_dir()):
+        assert Path(location).resolve().is_relative_to(_SESSION_ROOT), location
+
+
+@pytest.fixture(autouse=True)
+def _store_is_isolated():
+    _assert_store_is_isolated()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_teardown(item):
+    """Again after every fixture is torn down: a test may point the store at its own tmp_path
+    with monkeypatch.setenv, but must not leave it anywhere else."""
+    result = yield
+    _assert_store_is_isolated()
+    return result
 
 
 @pytest.fixture(autouse=True)
 def traditional_chinese_ui():
-    QSettings("JianpuStudio", "JianpuStudio").setValue(i18n.SETTINGS_KEY, i18n.TRADITIONAL)
+    # The suite asserts Traditional texts.
+    storage.open_settings().setValue(i18n.SETTINGS_KEY, i18n.TRADITIONAL)
     i18n.set_language(i18n.TRADITIONAL)
     yield
     i18n.set_language(i18n.TRADITIONAL)

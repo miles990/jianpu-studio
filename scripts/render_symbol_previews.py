@@ -26,6 +26,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from jianpu_studio.storage import isolate_for_script  # noqa: E402
+
+# A temporary settings file and data folder unless JIANPU_SETTINGS_DIR / JIANPU_DATA_DIR are set:
+# never the user's real settings, recent files or recovery copy.
+isolate_for_script()
+
 from PySide6.QtGui import QColor, QGuiApplication, QImage  # noqa: E402
 
 from jianpu_studio import symbols  # noqa: E402
