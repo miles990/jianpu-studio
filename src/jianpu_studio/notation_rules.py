@@ -587,8 +587,8 @@ def _notation_error(score, structure: bool = True) -> str | None:
                                   "" if notes[i+1].accidental == "n" else notes[i+1].accidental)):
                     return Problem(prefix + tr("{where}的延音線須接到下一個相同音高的音符。").format(where=where(i)),
                                    index, i, None, ("tie", True))
-            if (row := _after_grace_neighbour(notes)) is not None:
-                return Problem(prefix + tr("{where}緊接在後倚音之後，不能開始高／低八度線或加滑音記號；請改從下一個音開始，或移除前一個音的後倚音。").format(
+            if (row := _after_grace_neighbour(score, index)) is not None:
+                return Problem(prefix + tr("{where}緊接在後倚音和反覆、結尾或跳躍記號之後，不能開始高／低八度線；請改從下一個音開始，或移除前一個音的後倚音。").format(
                     where=where(row)), index, row)
             if (row := _grace_overflow(notes)) is not None:
                 return Problem(prefix + tr("{where}的倚音比前一個音還長：請減少倚音，或加長前一個音。").format(
@@ -607,16 +607,19 @@ def _notation_error(score, structure: bool = True) -> str | None:
     return None
 
 
-def _after_grace_neighbour(notes) -> int | None:
-    """The first note right after an after-grace note that starts an 8va/8vb line or has a
-    slide. jianpu-ly writes such a note's leading command inside the previous note's
-    after-grace block, so the octave shift (or slide) starts there -- and when an ending or
-    repeat boundary comes between them, the exported MIDI plays the wrong bars an octave off."""
+def _after_grace_neighbour(score, part: int) -> int | None:
+    """The first note that starts an 8va/8vb line right after an after-grace note, with a
+    repeat, ending or jump sign on the bar line between them. jianpu-ly writes the line's
+    start inside the previous note's after-grace block -- on the other side of that sign --
+    so the exported MIDI shifted the wrong bars by an octave (within a bar it is harmless)."""
+    notes = score.parts[part].notes
+    rows, ranges = bar_map(score, part)
+    items = bar_items(score)
     for i in range(1, len(notes)):
-        note = notes[i]
-        if notes[i - 1].grace_after and (
-                any(symbols.SYMBOLS[s].family == "ottava" for s in note.spans_start)
-                or any(symbols.SYMBOLS[m].slot == "slide" for m in note.marks)):
+        bar = rows[i]
+        if (notes[i - 1].grace_after and ranges[bar][0] == i and bar < len(items)
+                and any(symbols.SYMBOLS[s].family == "ottava" for s in notes[i].spans_start)
+                and set(items[bar][0] + items[bar - 1][1]) & set(symbols.STRUCTURE_BAR_ITEMS)):
             return i
     return None
 

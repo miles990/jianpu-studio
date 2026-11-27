@@ -295,16 +295,27 @@ def test_the_preview_joins_tied_crotchets_exactly_when_jianpu_ly_does(tmp_path, 
     assert joined == ("c'2" in staff), staff
 
 
-@pytest.mark.parametrize("change", [dict(spans_start=("line.8vb",)), dict(marks=("slide.up",))])
-def test_an_octave_line_or_slide_right_after_an_after_grace_is_a_located_problem(change):
-    """jianpu-ly writes the next note's leading command inside the after-grace block; across
-    an ending boundary the exported MIDI then played the repeat an octave low (found by the
-    equivalence sweep, seed 115607). Refused with its place instead."""
-    notes = [Note(1, duration=2, grace_after="5"), Note(2, **change), Note(3, spans_end=change.get("spans_start", ())), Note(4)]
-    problem = Score(notes=notes).edit_error()
-    assert problem is not None and "後倚音" in problem and problem.row == 1
-    later = [notes[0], Note(2), Note(2, **change), Note(3, spans_end=change.get("spans_start", ()))]
-    assert Score(notes=later).edit_error() is None
+@pytest.mark.parametrize("signs, refused", [
+    ([(0, "bar.repeat_start"), (0, "bar.repeat_end")], True),
+    ([(1, "nav.segno"), (3, "nav.ds")], True),
+    ([(0, "bar.double")], False),
+    ([], False),
+])
+def test_an_octave_line_right_after_an_after_grace_and_a_structure_sign_is_a_located_problem(signs, refused):
+    """jianpu-ly writes the next note's 8va/8vb start inside the after-grace block; across
+    an ending the exported MIDI then played the repeat an octave low (found by the
+    equivalence sweep, seed 115607). Refused with its place; otherwise it stays allowed."""
+    from jianpu_studio.notation_edit import set_bar_item
+    notes = [Note(1), Note(2), Note(3), Note(4, grace_after="5"), Note(2, spans_start=("line.8vb",)), Note(3),
+             Note(4, spans_end=("line.8vb",)), Note(5)] + [Note(1, duration=1)] * 2
+    score = Score(notes=notes)
+    for bar, sign in signs:
+        set_bar_item(score, bar, sign)
+    problem = score.edit_error()
+    if refused:
+        assert problem is not None and "後倚音" in problem and problem.row == 4, problem
+    else:
+        assert problem is None
 
 
 def _hairpins(start, chain, final, lengths):
