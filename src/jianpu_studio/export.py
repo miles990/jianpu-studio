@@ -297,8 +297,8 @@ def header_words(text: str) -> bool:
     """Text on the first note that prints in the header line (1=D 中速 稍自由 ♩=72): only
     when it is made only of whole tempo/expression words and tunings; any other label -- a bow
     section like 弓尖 included -- stays on its note."""
-    from .text_words import HEADER_PHRASES, phrases
-    return bool(phrases(text, HEADER_PHRASES))
+    from .text_words import header_parts
+    return header_parts(text) is not None
 
 
 def implicit_repeat_start(items) -> bool:
@@ -323,11 +323,12 @@ def to_jianpu(score, draft: bool = False) -> str:
         lines.append("OctavesBefore")
     if score.with_staff:
         lines.append("WithStaff")
-    from .engraving import lone_first_endings, repeat_end_bars, without_redundant
+    from .engraving import line_breaks, lone_first_endings, repeat_end_bars, without_redundant
     items = without_redundant(effective_bar_items(score))
     has_jump = any(item in symbols.JUMPS for _, ends in items for item in ends)
     implicit = implicit_repeat_start(items) and not draft
     repeat_ends, lone = repeat_end_bars(items), lone_first_endings(items)
+    breaks = line_breaks(score, items)
     open_before, is_open = [], False          # a draft ending bracket still open at each bar's start
     for starts, ends in items:
         open_before.append(is_open)
@@ -364,8 +365,7 @@ def to_jianpu(score, draft: bool = False) -> str:
                 lines[-1] += " " + text
             else:
                 lines.append(text)
-            if score.bars_per_line and index == 0 and (bar + 1 - (1 if score.pickup else 0)) % score.bars_per_line == 0 \
-                    and bar + 1 - (1 if score.pickup else 0) > 0:
+            if index == 0 and bar in breaks:
                 lines.append("\\break")
         if part.lyrics.strip():
             lines.append("H: " + literal(part.lyrics, lyric=True))

@@ -668,3 +668,69 @@ def test_the_coda_bar_shows_one_coda_sign_on_screen_and_on_paper(qtbot, tmp_path
     # the two ⊕ of the piece: one after "To Coda", one before "Coda"
     coda_glyphs = [i for i in printed.items if i.kind == "path" and i.cls in ("CodaMark", "SectionLabel")]
     assert len(coda_glyphs) == 2
+
+
+# ---------------------------------------------------------------- P2: a page that reads like a book
+def bars_per_system(printed):
+    out = []
+    for start, _ in printed.score.part_bars(0):
+        system = printed.system_of(printed.heads[0, start])
+        while len(out) <= system:
+            out.append(0)
+        out[system] += 1
+    return out
+
+
+def planned_lines(score):
+    from jianpu_studio.notation_rules import bar_items
+    breaks = sorted(engraving.line_breaks(score, bar_items(score)))
+    edges = [0, *[bar + 1 for bar in breaks if bar + 1 < len(score.part_bars(0))], len(score.part_bars(0))]
+    return [b - a for a, b in zip(edges, edges[1:])]
+
+
+def test_lines_are_planned_even_and_the_coda_starts_a_line():
+    eight = twinkle(bars=8)
+    eight.staff_size = 24
+    assert planned_lines(eight) == [4, 4]                    # LilyPond alone: six bars, then two
+    assert planned_lines(twinkle(bars=4)) == [4]             # a short tune stays on one line
+    assert planned_lines(etude()) == [5, 4, 2]               # pickup + 4, 4, and the coda on its own line
+    assert planned_lines(duet()) == [3, 3]
+    fixed = twinkle(bars=8)
+    fixed.bars_per_line = 3                                  # the user's own setting is kept exactly
+    assert "\\break" in fixed.to_jianpu() and fixed.to_jianpu().count("\\break") == 2
+    assert planned_lines(fixed) == [3, 3, 2]
+    # denser music gets fewer bars per line, never a line planned wider than the paper
+    from jianpu_studio.notation_rules import bar_items
+    dense = Score(notes=[Note(1 + k % 7, duration=16) for k in range(16 * 6)], staff_size=24)
+    widths, capacity = engraving.bar_widths(dense), engraving.line_capacity(dense)
+    lines = planned_lines(dense)
+    assert lines == [2, 2, 2] and all(2 * width <= capacity for width in widths)
+    assert engraving.line_breaks(dense, bar_items(dense)) == {1, 3}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("make", [lambda: twinkle(bars=8), etude, duet], ids=["eight bars", "etude", "duet"])
+def test_the_print_breaks_its_lines_where_they_were_planned(tmp_path, lilypond, make):
+    """LilyPond adds no break of its own inside a planned line (it would rather start a line
+    than squeeze one, so an estimate that was too small would show here)."""
+    score = make()
+    score.staff_size = 24
+    printed = Print(score, tmp_path, lilypond)
+    assert bars_per_system(printed) == planned_lines(score)
+    if make is etude:                                        # the coda bar starts its own line
+        coda = printed.heads[0, score.part_bars(0)[9][0]]
+        first_in_system = min((head for (part, _), head in printed.heads.items()
+                               if part == 0 and printed.system_of(head) == printed.system_of(coda)), key=lambda h: h.x)
+        assert first_in_system is coda
+
+
+@pytest.mark.integration
+def test_a_tuning_on_the_first_note_prints_in_the_header_line_after_the_tempo(tmp_path, lilypond):
+    score = flat_b_piece()
+    score.parts[0].notes[0] = replace(score.parts[0].notes[0], text="中速 37弦")
+    printed = Print(score, tmp_path, lilypond)
+    line = sorted((i for i in printed.items if i.kind == "text" and i.y < printed.rows[0] - 2
+                   and any(word in i.text for word in ("1=", "2/4", "中速", "= 72", "37弦"))), key=lambda i: i.x)
+    assert [i.text for i in line if i.text in ("2/4", "中速", "（37弦）")] == ["2/4", "中速", "（37弦）"]
+    assert len({round(i.y) for i in line}) == 1 and line[-1].text == "（37弦）"      # one line; the tuning last
+    assert not [i for i in printed.items if i.cls == "TextScript" and "37弦" in i.text]   # not above the note too

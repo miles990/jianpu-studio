@@ -250,6 +250,122 @@ def end_barline(items, bar: int, last: bool) -> str:
     return ""
 
 
+# ---------------------------------------------------------------- line breaks of the print
+# Natural widths in staff spaces, as LilyPond spaces the number staff (measured on real
+# output): a column of the piece's common shortest duration S (never longer than a dotted
+# eighth) takes 2.42, and every doubling of the duration adds 1.2. They only decide where
+# the lines break; LilyPond still spaces every line itself.
+_SHORTEST_SPACE, _SPACE_INCREMENT = 2.42, 1.2
+_BASE_SHORTEST = 36                       # ticks of a dotted eighth (LilyPond's base-shortest-duration)
+_BAR_OVERHEAD, _REPEAT_OVERHEAD = 1.07, 2.0
+_PAPER_MM = {"a4": 210.0, "letter": 215.9}
+
+
+def _columns(note) -> list[int]:
+    """Ticks of each printed column of a note: a half or longer is a number plus dashes (or
+    one 0 per beat), each a quarter wide."""
+    count = rest_beats(note) if note.degree == 0 else nominal_beats(note)
+    return [note.ticks // count] * count
+
+
+def bar_widths(score) -> list[float]:
+    """Estimated natural width of every bar (the widest part decides)."""
+    from collections import Counter
+    from math import log2
+    counts = Counter(ticks for part in score.parts for note in part.notes for ticks in _columns(note))
+    common = min((ticks for ticks, n in counts.items() if n == max(counts.values())), default=48)
+    shortest = min(common, _BASE_SHORTEST)
+    items = [(set(a), set(b)) for a, b in _raw_bar_items(score)]
+    widths: list[float] = []
+    for index, part in enumerate(score.parts):
+        sung = bool(part.lyrics.strip())
+        for bar, (start, end) in enumerate(score.part_bars(index)):
+            width = _BAR_OVERHEAD
+            if bar < len(items):
+                signs = items[bar][0] | items[bar][1]
+                width += _REPEAT_OVERHEAD * len({"bar.repeat_start", "bar.repeat_end", "bar.repeat_both"} & signs)
+                width += 0.5 * bool({"bar.double", "bar.final", "nav.fine", "nav.ds", "nav.dc"} & signs)
+                if bar + 1 < len(items) and "volta.2" in items[bar + 1][0]:
+                    width += _REPEAT_OVERHEAD           # the :‖ at the end of the first ending
+            for note in part.notes[start:end]:
+                for ticks in _columns(note):
+                    w = _SHORTEST_SPACE + _SPACE_INCREMENT * log2(ticks / shortest) if ticks > shortest else \
+                        _SHORTEST_SPACE * max(0.8, ticks / shortest)
+                    width += max(w, 3.2) if sung and note.degree else w
+                width += 0.8 * bool(_alteration(note)) + 1.0 * len(_GRACE.findall(note.grace_before + note.grace_after))
+                width += 0.6 * any(mark.startswith("dyn.") for mark in note.marks)
+            if bar < len(widths):
+                widths[bar] = max(widths[bar], width)
+            else:
+                widths.append(width)
+    return widths
+
+
+def _raw_bar_items(score):
+    from .notation_rules import bar_items
+    return bar_items(score)
+
+
+def line_capacity(score) -> float:
+    """Staff spaces of music one printed line holds (LilyPond's default 10 mm margins, the
+    lead-in before the first number, and the part names of a multi-part score)."""
+    space_mm = score.staff_size / 4 * 25.4 / 72
+    names = 9.0 if len(score.parts) > 1 and any(p.name for p in score.parts) else 0.0
+    return 0.96 * ((_PAPER_MM.get(score.paper_size, 210.0) - 20.0) / space_mm - 4.5 - names)
+
+
+def line_breaks(score, items) -> set[int]:
+    """Bars after which the print starts a new line.
+
+    With a fixed bars-per-line setting, exactly that (a pickup bar is extra on the first line).
+    Otherwise the lines are made even: LilyPond alone fills each line and leaves the rest --
+    six bars and then two for an eight-bar tune. The piece is cut into as few lines as its
+    estimated natural width needs, of about equal width (LilyPond would rather start another
+    line than squeeze one, so a line is never planned wider than it is); the coda starts on a
+    new line, as in print."""
+    bars = len(score.part_bars(0))
+    pickup = 1 if score.pickup else 0
+    if score.bars_per_line:
+        return {bar for bar in range(bars)
+                if bar + 1 - pickup > 0 and (bar + 1 - pickup) % score.bars_per_line == 0}
+    widths = bar_widths(score)
+    capacity = line_capacity(score)
+    coda = coda_start(items)
+    sections = [(0, coda), (coda, bars)] if coda else [(0, bars)]
+    out: set[int] = set()
+    for first, last in sections:
+        if first:
+            out.add(first - 1)
+        total = sum(widths[first:last])
+        lines = max(1, -(-total // capacity))
+        while lines < last - first:
+            cuts = _even_cuts(widths, first, last, int(lines))
+            edges = [first, *[c + 1 for c in cuts], last]
+            if all(sum(widths[a:b]) <= capacity or b - a == 1 for a, b in zip(edges, edges[1:])):
+                out.update(cuts)
+                break
+            lines += 1
+        else:
+            out.update(range(first, last - 1))          # one bar per line
+    return out
+
+
+def _even_cuts(widths, first: int, last: int, lines: int) -> list[int]:
+    """Bars after which to cut bars [first, last) into ``lines`` lines of about equal width."""
+    prefix = [0.0]
+    for width in widths[first:last]:
+        prefix.append(prefix[-1] + width)
+    total, count = prefix[-1], last - first
+    cuts, previous = [], 0
+    for line in range(1, lines):
+        target = total * line / lines
+        choices = range(previous + 1, count - (lines - line) + 1)
+        best = min(choices, key=lambda b: (abs(prefix[b] - target), b))
+        cuts.append(first + best - 1)
+        previous = best
+    return cuts
+
+
 def lyric_map(notes, lyrics: str) -> dict[int, str]:
     """row -> syllable, as LilyPond's \\lyricsto places them for jianpu-ly (checked with a real
     render): one syllable per sung note; rests, tied continuations and the notes after a slur's

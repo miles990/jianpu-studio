@@ -477,21 +477,27 @@ TEXT_PREFIX = "text.free:"
 MAX_TEXT = 20
 
 
-def text_suggestions(query: str, *, found: bool = True) -> list[str]:
+def text_suggestions(query: str, *, found: bool = True, key: str = "") -> list[str]:
     """Words to offer as 「加上文字「…」」 for a search: the ready-made words that match (in
-    the script the user typed), and the query itself when nothing else matched."""
+    the script the user typed), and the query itself when nothing else matched. With ``key``
+    (the score's 1=…), a search for a tuning offers that key's D–A tuning first."""
+    from .text_words import asks_for_tuning, key_tunings
     folded = fold(query).strip()
     if not folded:
         return []
     out = []
+    if key and asks_for_tuning(folded):
+        out += key_tunings(key)
     for tc, sc, keys in TEXT_WORDS:
         for word in (tc, sc):
-            if folded in fold(word) and word not in out:
-                out.append(word)
+            if folded in fold(word):
+                if word not in out:
+                    out.append(word)
                 break
         else:
-            if (re.fullmatch(r"[a-z0-9\s']+", folded) and any(k.startswith(folded.replace(" ", ""))
-                                                                for k in keys.split())) or folded in keys.split():
+            if ((re.fullmatch(r"[a-z0-9\s']+", folded) and any(k.startswith(folded.replace(" ", ""))
+                                                                 for k in keys.split())) or folded in keys.split()) \
+                    and tc not in out:
                 out.append(tc)
     exact = query.strip()
     if not out and not found and 0 < len(exact) <= MAX_TEXT and not any(c in exact for c in "\\{}\"$#%"):

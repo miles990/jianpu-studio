@@ -522,8 +522,11 @@ class LayoutMixin:
         small = QFont(ui_font_family())
         small.setPixelSize(max(7, int(12 * s)))
         from .model import key_label
-        words = self._header_text
-        meta = f"1 = {key_label(score.key)}    {score.meter}    " + (f"{words}    " if words else "") + f"♩ = {score.tempo}"
+        # As the print (worker.header_line): key, metre, tempo words, ♩ = n, then the tuning.
+        from .text_words import header_parts
+        words, tunings = header_parts(self._header_text) or ([], [])
+        meta = (f"1 = {key_label(score.key)}    {score.meter}    " + (" ".join(words) + "    " if words else "")
+                + f"♩ = {score.tempo}" + (f"    （{'、'.join(tunings)}）" if tunings else ""))
         line_top = y
         bottom = y + QFontMetrics(small).height()
         if score.composer:

@@ -586,6 +586,7 @@ class SymbolPalette(QWidget):
         self.detail_sid = ""
         self.show_hidden = False
         self.where = None                   # callable(sid) -> "會加在：…"
+        self.key = ""                       # the score's key: tuning suggestions follow it
         self._states: dict[str, object] = {}
         saved = str(settings.value("palette/instrument", "erhu"))
         self.instrument = saved if saved in INSTRUMENT_NAMES else "erhu"
@@ -775,7 +776,7 @@ class SymbolPalette(QWidget):
                                                include_hidden=self.show_hidden)] if text.strip() else []
         # Tempo/expression words, tunings and bow sections are text: offer 「加上文字「…」」
         # (first when the query is exactly such a word), and any query that finds nothing.
-        words = symbols_ui.text_suggestions(text, found=bool(ids))
+        words = symbols_ui.text_suggestions(text, found=bool(ids), key=self.key)
         rows = [symbols_ui.TEXT_PREFIX + w for w in words]
         exact = bool(words) and words[0] == text.strip()
         ids = rows + ids if exact or not ids else ids + rows

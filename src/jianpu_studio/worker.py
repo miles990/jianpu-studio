@@ -286,6 +286,8 @@ ALIGN is the lines' alignment (-1 left, 0 centre, 1 right)."
     \override CodaMark.self-alignment-X = #RIGHT
     \override CodaMark.font-size = #0
     \override CodaMark.padding = #1.2
+    \override SectionLabel.font-size = #0
+    \override SectionLabel.padding = #2
   }
   \context { \RhythmicStaff
     \omit TimeSignature
@@ -297,11 +299,17 @@ ALIGN is the lines' alignment (-1 left, 0 centre, 1 right)."
     \override Script.padding = #0.8
   }
 }
-\paper { ragged-last = ##t }
+\paper {
+  ragged-last = ##t
+  system-system-spacing.basic-distance = #15
+  system-system-spacing.padding = #3
+  markup-system-spacing.padding = #2
+}
 """
 _BAR_NUMBERS = re.compile(r"\\override Score\.BarNumber(?:\.| #')break-visibility = #center-visible")
 _BAR_EVERY = re.compile(r"\\set Score\.barNumberVisibility = #\(every-nth-bar-number-visible \d+\)")
 _CODA_LABEL = '\\sectionLabel "Coda"'
+_BAR_NUMBER_LOW = "\\override Score.BarNumber.Y-offset = -1"
 
 
 _HEADER_FIELD = re.compile(r'^(title|composer)="([^"\n]*)"$', re.M)
@@ -318,7 +326,7 @@ def engraving_rewrite(ly: str) -> str:
                            if m[2] else m[0], ly)
     ly = _BAR_NUMBERS.sub(lambda m: "\\override Score.BarNumber.break-visibility = #begin-of-line-visible", ly)
     ly = _BAR_EVERY.sub(lambda m: "\\set Score.barNumberVisibility = #first-bar-number-invisible-and-no-parenthesized-bar-numbers", ly)
-    return ly.replace(_CODA_LABEL, '\\sectionLabel \\markup { \\musicglyph "scripts.coda" "Coda" }')
+    return ly.replace(_CODA_LABEL, '\\sectionLabel \\markup { \\musicglyph "scripts.coda" \\italic "Coda" }')
 
 
 # Printed on every page of a draft (an unfinished repeat/jump printed as plain signs), so the
@@ -345,6 +353,10 @@ def finish_output(ly: str, variant: str = "tc", parts: int = 1, draft: str = "")
     index = ly.index("\\score {")
     ly = ly[:index] + ENGRAVING + ly[index:]
     ly = midi_rewrite(fix_fine(attach_after_grace_text(engraving_rewrite(header_line(ly)))))
+    if parts > 1:
+        # Upstream sets the line's bar number low at the left edge, where a multi-part score
+        # has its brace: set it above the brace instead.
+        ly = ly.replace(_BAR_NUMBER_LOW, "\\override Score.BarNumber.Y-offset = 3.2")
     return draft_mark(ly, draft) if draft else ly
 
 
@@ -379,11 +391,15 @@ def header_line(ly: str) -> str:
     parts = [f'\\concat {{ "1=" \\raise #0.75 \\fontsize #-3 {sign} "{key[1]}" }}' if sign else f'"1={key[1]}"']
     if time:
         parts.append(f'\\hspace #1.5 "{time[1]}"')
-    if words:
-        parts.append(f'\\hspace #2 "{words}"')
+    from .text_words import header_parts
+    tempo_words, tunings = header_parts(words) or ([words] if words else [], [])
+    if tempo_words:
+        parts.append(f'\\hspace #2 "{" ".join(tempo_words)}"')
     if tempo:
         parts.append('\\hspace #1.5 \\concat { \\fontsize #-2 \\general-align #Y #DOWN \\note {4} #1 '
                      f'" = {tempo[1]}" }}')
+    if tunings:
+        parts.append(f'\\hspace #1.5 "（{"、".join(tunings)}）"')
     line = "meter = \\markup { \\line { " + " ".join(parts) + " } }\n"
     ly = _KEY_MARK.sub("", ly)
     return re.sub(r"\\header\{\n(?=title=)", lambda m: m[0] + line, ly)
