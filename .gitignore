@@ -19,3 +19,4 @@ wow/brief.md
 .wow/
 # 第三方套件與建置產物不提交（F22；wow-preflight --staged 會擋）
 node_modules/
+.claude/worktrees/
